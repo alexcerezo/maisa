@@ -17,6 +17,33 @@ Que se puede responder con esto:
 * **Que cambio entre dos ejecuciones** -> ``diff`` compara dos logs y dice, por
   ``file_id``, que decision cambio y con que motivo (si esta en los datos).
 
+Vocabulario de eventos. Los cuatro tipos propios de esta traza:
+
+* ``lote`` -- cabecera: que se leyo, con que norma y con que config.
+* ``lectura`` -- un PDF leido: sha256, escalon, calidad y metodo.
+* ``decision`` -- el resultado y los hechos que lo sostienen.
+* ``fin`` -- cierre: contadores por resultado y por escalon.
+
+Y los once del vocabulario cerrado del motor Rust legado (``TRASPASO.md``
+3.7, ``docker/mongosh/02-schema-init.js``), con el valor exacto en
+MAYUSCULAS que el Rust escribe en ``eventos.tipo``:
+
+* ``OCR_OK`` / ``OCR_FAIL`` -- la lectura OCR salio bien o fallo de verdad
+  (``{"lines": [], "pages": 0}`` no es lo mismo que "el PDF no trae NIF").
+* ``ERP_CACHE_HIT`` / ``ERP_CACHE_MISS`` -- la consulta al ERP se sirvio de
+  cache o hubo que ir al servicio.
+* ``ERP_RETRY_ORA_00600`` -- reintento por error ORA del ERP, con backoff.
+* ``ERP_RETRY_SES_401`` -- sesion caducada: relogin y repetir la llamada.
+* ``ERP_RETRY_ERP_429`` -- el ERP pide esperar (limite de peticiones).
+* ``REVISION_ABIERTA`` / ``REVISION_RESUELTA`` -- ciclo de vida de una
+  revision humana.
+* ``DECISION_EMITIDA`` -- la decision se emitio, con la version de la norma.
+* ``EXPEDIENTE_ESTADO`` -- transicion de estado de un expediente.
+
+``TIPOS`` reune los quince y ``es_tipo_valido`` dice si un tipo esta dentro.
+El vocabulario es informativo: ``anota()`` no lo impone, porque hay trazas ya
+escritas y porque el formato en disco no puede cambiar.
+
 Nada de esto toca la entrega: el modulo es autonomo y solo se activa con
 ``--traza-hash`` en ``maisa.procesa`` (por defecto, apagado).
 """
@@ -45,6 +72,52 @@ TIPO_LOTE = "lote"
 TIPO_LECTURA = "lectura"
 TIPO_DECISION = "decision"
 TIPO_FIN = "fin"
+
+# Vocabulario cerrado del motor Rust legado (`TRASPASO.md` 3.7 y
+# `docker/mongosh/02-schema-init.js`): once tipos, con el valor exacto en
+# MAYUSCULAS que el Rust guarda en `eventos.tipo`. "No se inventa ninguno mas".
+TIPO_OCR_OK = "OCR_OK"
+TIPO_OCR_FAIL = "OCR_FAIL"
+TIPO_ERP_CACHE_HIT = "ERP_CACHE_HIT"
+TIPO_ERP_CACHE_MISS = "ERP_CACHE_MISS"
+TIPO_ERP_RETRY_ORA_00600 = "ERP_RETRY_ORA_00600"
+TIPO_ERP_RETRY_SES_401 = "ERP_RETRY_SES_401"
+TIPO_ERP_RETRY_ERP_429 = "ERP_RETRY_ERP_429"
+TIPO_REVISION_ABIERTA = "REVISION_ABIERTA"
+TIPO_REVISION_RESUELTA = "REVISION_RESUELTA"
+TIPO_DECISION_EMITIDA = "DECISION_EMITIDA"
+TIPO_EXPEDIENTE_ESTADO = "EXPEDIENTE_ESTADO"
+
+# Todos los tipos admitidos: los cuatro propios (minusculas) y los once del
+# vocabulario del Rust. Es solo una lista de nombres: no entra en el hash.
+TIPOS = (
+    TIPO_LOTE,
+    TIPO_LECTURA,
+    TIPO_DECISION,
+    TIPO_FIN,
+    TIPO_OCR_OK,
+    TIPO_OCR_FAIL,
+    TIPO_ERP_CACHE_HIT,
+    TIPO_ERP_CACHE_MISS,
+    TIPO_ERP_RETRY_ORA_00600,
+    TIPO_ERP_RETRY_SES_401,
+    TIPO_ERP_RETRY_ERP_429,
+    TIPO_REVISION_ABIERTA,
+    TIPO_REVISION_RESUELTA,
+    TIPO_DECISION_EMITIDA,
+    TIPO_EXPEDIENTE_ESTADO,
+)
+
+
+def es_tipo_valido(tipo: str) -> bool:
+    """``True`` si ``tipo`` esta en el vocabulario cerrado de ``TIPOS``.
+
+    Es una consulta, no una puerta: ``anota()`` sigue aceptando cualquier
+    ``tipo``, para no invalidar las trazas ya escritas ni el formato en disco.
+    Sirve para que quien anade eventos nuevos se quede dentro del vocabulario
+    en vez de inventarse uno.
+    """
+    return tipo in TIPOS
 
 
 class TrazaError(Exception):

@@ -1,7 +1,9 @@
 # Arranque de servicios — Maisa / Albertitos
 
 Runbook para levantar el sistema completo desde cero en esta máquina y dejarlo
-alcanzable por el resto del equipo. Está escrito para ejecutarse de arriba abajo, sin
+alcanzable **desde Internet** (la API en `http://82.70.78.22:8010`) y desde dentro de
+Docker. La LAN no es una vía de consumo: solo se usa el DNS interno de `albertitos_net`
+entre contenedores. Está escrito para ejecutarse de arriba abajo, sin
 preguntar nada: cada paso lleva el comando literal y el motivo por el que va ahí.
 
 Decisiones de arquitectura que sostienen este runbook: `maisa/docs/ADR-0001-middleware-bff.md`.
@@ -11,13 +13,17 @@ Detalle de la API: `maisa/api/README.md`. Detalle del OCR: `maisa/ocr_service/RE
 
 ## 1. Inventario y puertos
 
-| Servicio | Contenedor | Imagen | Red(es) | Publicado | Alcanzable desde la LAN |
+| Servicio | Contenedor | Imagen | Red(es) | Publicado | Alcanzable desde Internet |
 |---|---|---|---|---|---|
 | MongoDB 7 (replica set `rs0`, 1 nodo) | `albertitos-mongo` | `mongo:7.0` | `albertitos_net` | `127.0.0.1:27017->27017` | **NO** |
 | Inicializador del replica set | `albertitos-mongo-init` | `mongo:7.0` | `albertitos_net` | — | — |
-| OCR (FastAPI + RapidOCR) | `ocr-api` | `ocr-rapidocr-arm64:latest` | `albertitos_net` + red propia del OCR (§7.9) | `0.0.0.0:8866->8866` | Sí |
+| OCR (FastAPI + RapidOCR) | `ocr-api` | `ocr-rapidocr-arm64:latest` | `albertitos_net` + red propia del OCR (§7.9) | `0.0.0.0:8866->8866` | **NO** (el NSG no abre 8866) |
 | API/BFF (FastAPI) | `albertitos-api` | `albertitos-api:latest` | `albertitos_net` | `0.0.0.0:8010->8000` | **Sí — la puerta del sistema** |
 | ERP simulado (fuera de Docker) | — | proceso Python | — | `127.0.0.1:8009` | **NO** (solo loopback del host) |
+
+«Publicado» es lo que expone Docker en el host; «alcanzable desde Internet» es lo que el NSG
+deja pasar. El OCR y el ERP están publicados en el host pero **no** son alcanzables desde
+fuera, que es lo correcto (`maisa/api/README.md` §2.2).
 
 Puertos elegidos: **8010** para la API porque 8009 es el ERP y 8866 el OCR; **8866** para el
 OCR porque es el histórico de Paddle Serving y evita el 8080 habitual.
@@ -155,9 +161,9 @@ el directorio no tiene contenido, `GET /` devuelve un mensaje informativo en vez
 En cuanto haya un `index.html`, se sirve en `/` y el navegador habla con la API **en el mismo
 origen**: sin CORS y sin credenciales.
 
-El montaje se decide **al arrancar** la API (`maisa/api/app/main.py` → `_montar_ui()`): si
-añades el `index.html` con el contenedor ya en marcha, `GET /` seguirá devolviendo el mensaje
-informativo hasta que lo recrees (ver §7.11).
+La decisión se toma **en cada petición** (`maisa/api/app/main.py` → `_montar_ui()`), así que
+basta con dejar o quitar el `index.html`: no hay que reiniciar ni recrear el contenedor
+(ver §7.11).
 
 ---
 
@@ -170,13 +176,13 @@ informativo hasta que lo recrees (ver §7.11).
 | Replica set (forma de §13.9) | `docker compose -f maisa/docker-compose.yml exec mongo mongosh -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" --authenticationDatabase admin --eval "rs.status().ok"` | `1` |
 | Asientos cargados | `curl -s 'http://127.0.0.1:8010/api/asientos?limit=1'` | `"total": 516`. Si la API no autentica contra Mongo: `503` con `"codigo": "mongo_no_disponible"` (§7.3) |
 | OCR vivo | `curl -s http://127.0.0.1:8866/health` | `{"status":"ok", ...}` con `engines.local.loaded` y/o `engines.cloud` |
-| OCR por LAN | `cd maisa/ocr_service && ./smoke_lan.sh ../data/facturas/2026-01-25_P001.pdf` | 4/4 OK, con `RESULTADO: OCR operativo por localhost Y por LAN` |
-| API viva | `curl -s http://127.0.0.1:8010/health` | `"estado": "ok"` y `mongo.ok`/`ocr.ok` a `true` |
+| OCR por su puerto publicado | `cd maisa/ocr_service && ./smoke_lan.sh ../data/facturas/2026-01-25_P001.pdf` | 4/4 OK, con `RESULTADO: OCR operativo por localhost Y por LAN`. Prueba el OCR **directamente**, no a través de la API; el script y su nombre son del servicio de OCR y usan la IP privada del anfitrión como comprobación local |
+| API viva | `curl -s http://127.0.0.1:8010/health` | `"estado": "ok"` y `mongo.ok`/`ocr.ok`/`escritura.ok` a `true` |
 | API lista | `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8010/health/ready` | `200` (503 si falta una dependencia crítica: `mongo,ocr`) |
-| API desde la LAN | `curl -s http://10.0.0.75:8010/health` | mismo JSON que por `127.0.0.1` |
+| API desde Internet | `curl -s http://82.70.78.22:8010/health` | mismo JSON que por `127.0.0.1`. Es la vía de reparto real |
 | Proxy del OCR | `curl -s -X POST 'http://127.0.0.1:8010/api/ocr' -F file=@maisa/data/facturas/2026-01-08_P001.pdf` | `200` en 1–5 s según el motor elegido (reenvía a `ocr-api:8866`) |
-| Visor | `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8010/` | `200` con `content-type: text/html` sirviendo `index.html`; si el visor no se montó al arrancar, el mensaje informativo en JSON o un `404` (§7.11) |
-| **Todo de una pasada** | `./maisa/api/smoke_lan.sh --lan-ip <IP>` | `12 de 12 OK`. Recorre salud, estadísticas, facturas, PDF con `sha256`, asientos, snapshots, visor y `POST /api/ocr`; sale `1` diciendo qué falló |
+| Visor | `curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://127.0.0.1:8010/` | `200 text/html` sirviendo `index.html` si existe; si no, `200 application/json` con el mensaje informativo (§7.11) |
+| **Todo de una pasada** | `PUBLIC_IP=<IP pública> ./maisa/api/smoke_lan.sh --publico --engine local` | `10 de 10 OK` (14 con `--subir`). Recorre salud, estadísticas, facturas, PDF con `sha256`, asientos, snapshots, visor y `POST /api/ocr`; sale `1` diciendo qué falló |
 
 El `healthcheck` del contenedor usa `/health` y **no** `/health/ready` a propósito: un
 contenedor debe reiniciarse si el proceso no responde, no porque Mongo esté un momento caído.
@@ -235,8 +241,9 @@ devuelve `total: 500`, `por_resultado: {PAGAR: 448, NO_PAGAR: 9, ESCALAR: 43}` y
 
 Si se define `API_KEY`, **todos** los endpoints salvo `/health`, `/health/ready`, `/docs` y
 `/openapi.json` exigen la cabecera `X-API-Key`. Sin ella, la API arranca en **modo abierto**
-(lo avisa en el log y en `/api/meta` → `modo_abierto: true`) — aceptable en una LAN de
-confianza, no fuera de ella.
+(lo avisa en el log y en `/api/meta` → `modo_abierto: true`). El puerto 8010 está publicado en
+Internet y la API **también escribe** (`POST /api/facturas`), así que hoy cualquiera puede
+subir PDFs: define `API_KEY` antes de dejarlo así (`maisa/api/README.md` §2.4 y §3.8).
 
 ### 5.1 Variables de entorno
 
@@ -263,6 +270,7 @@ defecto, en `maisa/api/.env.example`. El compose les da valor para la red Docker
 | `CRITICAL_DEPS` | `mongo,ocr` | Qué dependencias hacen que `/health/ready` devuelva `503`. |
 | `HEALTH_TIMEOUT_S` | `2.0` | Margen por dependencia en `/health`. |
 | `MAX_UPLOAD_MB`, `DEFAULT_LIMIT`, `MAX_LIMIT`, `MAX_QUERY_LEN` | `50`, `50`, `500`, `64` | Límites de subida, paginación y longitud de `q`. |
+| `SUBIDAS_HABILITADAS` | `1` | Interruptor de `POST /api/facturas`. A `0`, el endpoint devuelve `403 subidas_deshabilitadas`. |
 | `LOG_LEVEL` | `INFO` | Nivel de log. |
 
 Las de los otros dos servicios, en sus propias plantillas: `maisa/.env.example`
@@ -284,7 +292,9 @@ nube: `OCR_ENGINE`, `OCR_CLOUD_*`, `OCR_DET_*`, `OCR_REC_*`, `OCR_MAX_UPLOAD_MB`
 > `0.0.0.0`») y el **RNF-10** (mínimo privilegio, puerto no expuesto).
 >
 > Si el frontend o el equipo necesitan datos del ERP, se piden a la **API** (`/api/asientos`,
-> `/api/snapshots`), que es la única que habla con Mongo y que lo hace **en solo lectura**.
+> `/api/snapshots`), que es la única que habla con Mongo. La API lee el catálogo del ERP y las
+> decisiones, y solo **escribe** lo suyo: `POST /api/facturas` guarda expedientes y eventos
+> (§`maisa/api/README.md` §3.8).
 > El motivo completo y las alternativas descartadas están en
 > `maisa/docs/ADR-0001-middleware-bff.md`.
 
@@ -292,10 +302,11 @@ nube: `OCR_ENGINE`, `OCR_CLOUD_*`, `OCR_DET_*`, `OCR_REC_*`, `OCR_MAX_UPLOAD_MB`
 
 ## 7. Problemas conocidos y su causa real
 
-### 7.1 Desde dentro de una red Docker, usar el DNS interno — nunca la IP de LAN
+### 7.1 Desde dentro de una red Docker, usar el DNS interno — nunca la IP del anfitrión
 
 Dentro de `albertitos_net`, `http://ocr-api:8866/health` y `mongo:27017` funcionan;
-`http://10.0.0.75:8866/health` falla con `curl: (7) ... Host is unreachable`.
+`http://10.0.0.75:8866/health` (la IP privada del anfitrión) falla con
+`curl: (7) ... Host is unreachable`.
 
 **Causa**: la regla `iptables -t nat` que publica el puerto excluye el tráfico que entra por
 la propia interfaz puente (`-A DOCKER ! -i br-...`). El paquete no se redirige al contenedor,
@@ -311,7 +322,7 @@ Si se ejecuta la API en el anfitrión, `run_local.sh` los reescribe a `127.0.0.1
 
 Solo acepta `lo` y el puerto 22, y rechaza el resto. **No** afecta a los puertos publicados
 por Docker (se atienden por DNAT/`FORWARD`), pero sí a cualquier servicio que escuche en el
-host sin publicarse: el ERP en `127.0.0.1:8009` no es alcanzable desde la LAN ni cambiando su
+host sin publicarse: el ERP en `127.0.0.1:8009` no es alcanzable desde fuera ni cambiando su
 bind, porque la cadena lo corta.
 
 ### 7.3 Credenciales de Mongo: manda el `.env` con el que se inicializó el volumen
@@ -416,6 +427,8 @@ Up (healthy)` con Mongo en rojo y `/health/ready` en `503`.
 
 Para saber si el sistema está entero hay que mirar el **cuerpo** de `/health`
 (`"estado": "ok"` y `mongo.ok`/`ocr.ok` a `true`) o el código de `/health/ready` (`200`).
+`escritura.ok` es informativa y **no** crítica: si Mongo no acepta escrituras, la API sigue
+sirviendo lectura y solo falla `POST /api/facturas`.
 
 ### 7.11 El visor se comprueba en cada petición (ya no hace falta reiniciar)
 
@@ -444,9 +457,13 @@ mensaje o un `404`.
 
 ### 7.12 El smoke test de la API acepta las dos respuestas de `/`
 
-`maisa/api/smoke_lan.sh` recorre las 12 comprobaciones del despliegue (salud por `127.0.0.1`
-y por la IP de LAN, estadísticas, facturas con motivos y hechos, el PDF con su `sha256`
-comparado, asientos, snapshots, el visor y un `POST /api/ocr` real). La comprobación de `/` da por
+`maisa/api/smoke_lan.sh` recorre las 10 comprobaciones del despliegue (salud por la IP pública y
+por `127.0.0.1`, estadísticas, facturas con motivos y hechos, el PDF con su `sha256`
+comparado, asientos, snapshots, el visor y un `POST /api/ocr` real). El nombre del fichero es
+histórico: la LAN **no** se prueba, porque no es una vía de consumo (ver `maisa/api/README.md`
+§2.1). Las bases se pasan con `--publico` (necesita `PUBLIC_IP`) o con `--base <URL>` (repetible), y
+`--subir` añade el ciclo de escritura (`201`, `200 duplicado`, expediente y PDF desde GridFS) y
+deja **14** comprobaciones. La comprobación de `/` da por
 bueno **cualquiera de los dos** casos de §7.11: `text/html` (hay visor) o `application/json` (no lo
 hay). Antes exigía `text/html` y fallaba legítimamente con `maisa/ui/` vacío. El resto de la salida
 es la mejor comprobación de una pasada que hay en el repo.
@@ -457,10 +474,10 @@ es la mejor comprobación de una pasada que hay en el repo.
 
 | Pendiente | Estado real |
 |---|---|
-| **Frontend/visor completo** (`maisa/ui/`) | En curso. El montaje está hecho y probado y ya hay un `index.html` (53 KB) que la API sirve en `/`; lo que falta es el visor terminado, no la tubería. |
-| **Persistencia en Mongo de `expedientes` y `eventos`** | Nada escrito. Las decisiones viven solo en `outputs/outcomes_traza.jsonl`; `expedientes`, `eventos`, `ejecuciones` y `excel_filas` están **vacías** (`TRASPASO.md` §1: «Persistencia Mongo (`expedientes`…) — a hacer»). Cuando el motor escriba ahí, `GET /api/facturas` debería preferir Mongo. |
-| **Autenticación real** | Hoy `API_KEY` es una **clave compartida**, no usuarios ni roles. El usuario que usa la API (`albertitos_app`) tiene `readWrite` sobre `albertitos`, cuando bastaría uno de solo lectura. |
-| **TLS** | No hay. Si la API sale de la LAN de confianza, hace falta TLS por delante. |
+| **Frontend/visor completo** (`maisa/ui/`) | En curso. El montaje está hecho y probado: en cuanto haya un `index.html` en `maisa/ui/`, la API lo sirve en `/` (en caliente, sin reiniciar). Hoy el directorio está vacío (solo `.gitkeep`), así que `/` devuelve el mensaje informativo en JSON. Lo que falta es el visor, no la tubería. |
+| **Persistencia en Mongo de `expedientes` y `eventos`** | **Parcial.** `POST /api/facturas` ya escribe expedientes y eventos (subidas por la API). Lo que sigue sin escribir es el **motor**: las decisiones viven solo en `outputs/outcomes_traza.jsonl`, y `ejecuciones` y `excel_filas` están **vacías** (`TRASPASO.md` §1: «Persistencia Mongo (`expedientes`…) — a hacer»). Cuando el motor escriba ahí, `GET /api/facturas` debería preferir Mongo. |
+| **Autenticación real** | Hoy `API_KEY` es una **clave compartida**, no usuarios ni roles. El usuario que usa la API (`albertitos_app`) tiene `readWrite` sobre `albertitos` (lo necesita para `POST /api/facturas`). |
+| **TLS** | No hay. La API ya está publicada en Internet y **escribe**: es lo primero que falta cerrar. |
 | **Cierre del `8866` del OCR** | Sigue publicado en `0.0.0.0:8866` por su propio compose, ahora que el frontend entra por `/api/ocr`. Decisión pendiente (ADR-0001 §5). |
 | **`GET /api/asientos/{asiento_id}` no filtra por `vigente`** | Con un solo snapshot es equivalente; con varios habrá que decidir cuál devolver. |
 | **Caché/ETag en el listado** | Con 500 facturas la traza cabe en memoria; si el volumen crece, tocará paginar desde Mongo y cachear. |
@@ -469,8 +486,9 @@ es la mejor comprobación de una pasada que hay en el repo.
 
 ## 9. Estado verificado el 2026-09-19
 
-Comprobado sobre esta máquina entre las 15:25 y las 15:33 UTC. Todo en verde **salvo el
-visor**, cuyo directorio (`maisa/ui/`) está reescribiendo otro agente en paralelo:
+Comprobado sobre esta máquina entre las 17:20 y las 17:45 UTC. Todo en verde. El visor
+(`maisa/ui/`) sigue vacío (solo `.gitkeep`), así que `/` devuelve el JSON informativo: es una
+respuesta **correcta** y el smoke la da por buena (§7.11 y §7.12):
 
 | Pieza | Verificación | Resultado |
 |---|---|---|
@@ -483,15 +501,16 @@ visor**, cuyo directorio (`maisa/ui/`) está reescribiendo otro agente en parale
 | ERP simulado | `ss -ltnp` | `python3 ... alberto_erp.py --puerto 8009` en `127.0.0.1:8009` |
 | Traza y entrega | `wc -l` y recuento | `outcomes.jsonl` y `outcomes_traza.jsonl`: 500 líneas; `PAGAR 448 / NO_PAGAR 9 / ESCALAR 43` |
 | Autenticación de Mongo | lectura anónima desde el propio contenedor | rechazada: `Command aggregate requires authentication` |
-| Tests de la API | `.venv-api/bin/python -m pytest maisa/api -q` | 55 pasan (no necesitan Mongo ni OCR) |
+| Tests de la API | `.venv-api/bin/python -m pytest maisa/api` | `92 passed` (no necesitan Mongo ni OCR). El `-q` ya viene en `maisa/api/pytest.ini`; añadir otro `-q` a mano lo deja en `-qq` y **se come el resumen** |
 | `albertitos-api` | `docker ps`, `docker port` | `Up (healthy)`, `0.0.0.0:8010->8000/tcp`, imagen `albertitos-api:latest`, usuario `apiuser` |
-| API, dependencias | `GET /health` | `"estado": "ok"`, `mongo.ok: true`, `ocr.ok: true` |
+| API, dependencias | `GET /health` | `"estado": "ok"`, `mongo.ok: true`, `ocr.ok: true`, `escritura.ok: true` |
 | API lista | `GET /health/ready` | `200` |
-| API por LAN | `GET http://10.0.0.75:8010/health`, `/`, `/api/facturas?limit=1` | `200` en los tres |
+| API desde Internet | `GET http://82.70.78.22:8010/health`, `/`, `/api/facturas?limit=1` | `200` en los tres |
+| Puertos no publicados | `curl --max-time 5 http://82.70.78.22:{8866,27017,8009}/health` | `000` en los tres (OCI descarta el paquete; el reparto es correcto) |
 | API contra Mongo | `GET /api/estadisticas` | `total: 500`, `PAGAR 448 / NO_PAGAR 9 / ESCALAR 43`, `asientos_vigentes: 516`, `mongo.ok: true`, `lineas_invalidas: 0`, `coincide_con_traza: true` |
 | Asientos y snapshots | `GET /api/asientos?limit=1`, `GET /api/snapshots` | `total: 516`; 1 snapshot (`snap-2026-09-19T08-25-58Z`, 516 asientos, 26 páginas, `vigente: true`) |
-| Proxy del OCR | `POST /api/ocr` con `2026-01-08_P001.pdf` | `200` en ~1,1 s; `motor: cloud`, 1 página (el OCR tiene `OCR_ENGINE=auto`) |
-| Smoke test completo | `./maisa/api/smoke_lan.sh --lan-ip 10.0.0.75` | **11 de 12 OK**. El único fallo es la comprobación del visor, porque `maisa/ui/` se estaba reescribiendo en ese momento (§7.11 y §7.12): `/` devolvía `404 application/json` |
+| Proxy del OCR | `POST /api/ocr` con `2026-01-08_P001.pdf` | `200` en ~4,7 s; `motor: cloud`, `paginas: 1`, `stats.regions: 12` (el OCR tiene `OCR_ENGINE=auto`) |
+| Smoke test completo | `PUBLIC_IP=82.70.78.22 ./maisa/api/smoke_lan.sh --publico --engine local --subir` | **14 de 14 OK**: salud (con `escritura`), estadísticas, facturas, PDF con `sha256`, asientos, snapshots, visor (`/` devuelve el JSON informativo, que es una respuesta válida: §7.11 y §7.12), `POST /api/ocr` con motor local y el ciclo de subida completo (`201`, `200 duplicado`, expediente y PDF desde GridFS) |
 
 El log de arranque de la API no avisa de índices que falten
 (`No se pudieron comprobar los indices` / `indices_faltantes`): con credenciales válidas la
@@ -500,6 +519,5 @@ comprobación pasa.
 **Lo que sigue sin verificar**: que el motor de nube del OCR esté *siempre* disponible — aquí
 respondió por la nube, pero si su cuota o su token fallan el OCR debe caer al motor local, y
 ese camino no se ha forzado a propósito. Tampoco se ha probado la API con `API_KEY` definida
-(hoy corre en modo abierto). Y el visor no se ha abierto en un navegador real: solo se ha
-comprobado que se sirve con `content-type: text/html` (y ahora mismo el directorio `maisa/ui/`
-lo está reescribiendo otro agente, así que su estado cambia entre comprobaciones).
+(hoy corre en modo abierto, ver §8). Y el visor no se ha abierto en un navegador real: solo se
+ha comprobado que `/` responde (con `maisa/ui/` vacío, el mensaje informativo en JSON).

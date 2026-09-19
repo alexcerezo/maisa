@@ -13,11 +13,13 @@ def test_health_con_dependencias_caidas_detalla_sin_romper(client):
     datos = respuesta.json()
 
     assert datos["estado"] == "error"
-    assert set(datos["dependencias"]) == {"mongo", "ocr"}
+    assert set(datos["dependencias"]) == {"mongo", "ocr", "escritura"}
     for nombre, dependencia in datos["dependencias"].items():
         assert dependencia["ok"] is False, nombre
         assert dependencia["error"], nombre
         assert dependencia["latencia_ms"] >= 0
+    # `escritura` comparte el cliente de Mongo, pero NO es critica: un fallo
+    # suyo no impide servir datos.
     assert sorted(datos["criticas_caidas"]) == ["mongo", "ocr"]
     # La traza es local: se lee aunque las dependencias externas esten caidas.
     assert datos["datos"]["traza"] == {"ok": True, "facturas": 4, "lineas_invalidas": 0}
@@ -40,6 +42,8 @@ def test_health_ok_con_dependencias_sanas(cliente_con_fakes):
     assert datos["criticas_caidas"] == []
     assert datos["dependencias"]["mongo"]["ok"] is True
     assert datos["dependencias"]["ocr"]["ok"] is True
+    assert datos["dependencias"]["escritura"]["ok"] is True
+    assert datos["dependencias"]["escritura"]["expedientes"] == 0
 
     listo = cliente_con_fakes.get("/health/ready")
     assert listo.status_code == 200

@@ -1,4 +1,4 @@
-# ADR-0001 — Middleware/BFF como única superficie publicada a la LAN
+# ADR-0001 — Middleware/BFF como única superficie publicada
 
 | Campo | Valor |
 |---|---|
@@ -31,8 +31,9 @@ intermedia**:
   sin backend.
 
 Eso era coherente mientras **todo** viviera en la misma máquina. Dejó de serlo cuando los
-consumidores —el frontend y el resto del equipo— **no están en esta máquina**. Aparece una
-necesidad nueva: publicar *algo* en la LAN, y ninguna pieza existente lo hacía sin
+consumidores —el frontend y el resto del equipo— **no están en esta máquina**: la instancia
+está en Oracle Cloud y se llega a ella por Internet. Aparece una
+necesidad nueva: publicar *algo* fuera del anfitrión, y ninguna pieza existente lo hacía sin
 contradecir D-12. Ese es el hueco que este ADR cierra.
 
 ---
@@ -92,19 +93,21 @@ Reglas que impone la decisión:
 ### Qué está expuesto y qué no
 
 ```
-   Puerto    Servicio              Interfaz publicada     ¿Alcanzable desde la LAN?
-   ------    -------------------   -------------------    --------------------------
-   8010      albertitos-api       0.0.0.0:8010           SÍ   <- única superficie nueva
-   8866      ocr-api              0.0.0.0:8866           SÍ   <- publicación histórica
+   Puerto    Servicio              Interfaz publicada     Abierto en el NSG (Internet)
+   ------    -------------------   -------------------    ----------------------------
+   8010      albertitos-api       0.0.0.0:8010           SÍ   <- única superficie publicada
+   8866      ocr-api              0.0.0.0:8866           NO   <- solo red Docker
    27017     albertitos-mongo     127.0.0.1:27017        NO   <- cerrado a propósito (D-12)
    8009      ERP simulado         127.0.0.1:8009         NO   <- solo loopback del host
 ```
 
-> El `ocr-api` **sí** sigue publicado en `0.0.0.0:8866` por su propio
-> `ocr_service/docker-compose.yml` (`ports: "8866:8866"`), que es anterior a este ADR y está
-> verificado como accesible por LAN en `ocr_service/README.md`. Lo que este ADR fija es que
-> **la API no lo publica** y que el frontend no necesita esa puerta: entra por `/api/ocr`.
-> Cerrar el 8866 es una decisión pendiente, no un efecto de este ADR (ver §5).
+> «Publicado» es lo que expone Docker en el host; la columna del NSG es lo que el cortafuegos
+> de la VCN deja entrar desde fuera. El `ocr-api` **sí** sigue publicado en `0.0.0.0:8866` por
+> su propio `ocr_service/docker-compose.yml` (`ports: "8866:8866"`), que es anterior a este ADR,
+> pero el NSG **no** abre el 8866: no es alcanzable desde Internet (ni desde la LAN). Lo que
+> este ADR fija es que **la API no lo publica** y que el frontend no necesita esa puerta: entra
+> por `/api/ocr`. Cerrar el 8866 en el host es una decisión pendiente, no un efecto de este ADR
+> (ver §5).
 
 ---
 
@@ -120,7 +123,7 @@ motivos concretos:
 | Rompe D-12 y el RNF-10 | La regla está escrita dos veces (`diseño_conceptual.md` D-12, `diseño_logico.md` §13) y el RNF-10 pide «puerto no expuesto». Sería revocar una decisión documentada, no ampliarla. |
 | Credenciales de BD en el navegador | Para consultar, el visor necesitaría la cadena de conexión. Hoy no la tiene ni la necesita. |
 | Acopla el frontend al esquema | El visor pasaría a conocer colecciones, validadores e índices; un cambio en `02-schema-init.js` rompe el cliente. |
-| Acceso total a la base para cualquiera en la LAN | El usuario de app tiene `readWrite` sobre `albertitos`: quien tenga la clave puede **escribir**, no solo leer. |
+| Acceso total a la base para cualquier cliente | El usuario de app tiene `readWrite` sobre `albertitos`: quien tenga la clave puede **escribir**, no solo leer. |
 | Sin punto único de CORS, auth ni observabilidad | Cada cliente resolvería por su cuenta los orígenes, la autenticación y el diagnóstico. |
 
 ### (b) Cada cliente (frontend, motor, herramientas) habla directo con Mongo y con el OCR — descartada
@@ -199,10 +202,10 @@ Pendiente, y así queda registrado:
 
 | Pendiente | Dónde está dicho |
 |---|---|
-| **Persistencia en Mongo de `expedientes` y `eventos`.** Hoy las decisiones viven solo en la traza de disco; `expedientes`, `eventos`, `ejecuciones` y `excel_filas` están vacías. Cuando el motor escriba ahí, `GET /api/facturas` debería preferir Mongo y usar la traza como respaldo. | `TRASPASO.md` §1 («Persistencia Mongo (`expedientes`…) — **a hacer**»), `maisa/api/README.md` §7 |
-| **Autenticación real.** `API_KEY` es una clave compartida: sirve para una LAN de confianza, no para Internet. Falta usuario/rol — y el usuario que usa la API hoy (`albertitos_app`) tiene `readWrite`, cuando bastaría uno de solo lectura. | `maisa/api/README.md` §7 |
-| **TLS** si la API sale de la LAN. | `maisa/api/README.md` §7 |
-| **Decidir si el `8866` del OCR se cierra** a la LAN, ahora que el frontend entra por `/api/ocr`. | §2 de este ADR |
+| **Persistencia en Mongo de `expedientes` y `eventos`.** Parcial: `POST /api/facturas` ya escribe expedientes y eventos; lo que no escribe todavía el **motor** son sus decisiones, que viven solo en la traza de disco (`ejecuciones` y `excel_filas` siguen vacías). Cuando el motor escriba ahí, `GET /api/facturas` debería preferir Mongo y usar la traza como respaldo. | `TRASPASO.md` §1 («Persistencia Mongo (`expedientes`…) — **a hacer**»), `maisa/api/README.md` §7 y §3.8 |
+| **Autenticación real.** `API_KEY` es una clave compartida. La API está publicada en Internet y **escribe** (`POST /api/facturas`), así que hoy cualquiera puede subir PDFs: hace falta clave y/o cerrar la regla de entrada. Falta usuario/rol — y el usuario que usa la API hoy (`albertitos_app`) tiene `readWrite`, que es lo que necesita para escribir expedientes. | `maisa/api/README.md` §2.4, §3.8 y §7 |
+| **TLS**: la API ya sale a Internet sin cifrar. | `maisa/api/README.md` §7 |
+| **Decidir si el `8866` del OCR se deja publicado** en el host, ahora que el frontend entra por `/api/ocr` (el NSG ya lo bloquea desde fuera). | §2 de este ADR |
 | **El visor completo** (`maisa/ui/`): el montaje está hecho y probado, pero el frontend es un trabajo en curso. | `maisa/api/README.md` §7 |
 
 ---

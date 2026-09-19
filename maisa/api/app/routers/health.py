@@ -24,8 +24,9 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from ..almacen import AlmacenFacturas
 from ..config import Settings
-from ..deps import get_mongo, get_ocr, get_settings, get_traza
+from ..deps import get_almacen, get_mongo, get_ocr, get_settings, get_traza
 from ..mongo_repo import MongoRepo
 from ..ocr_client import OcrClient
 from ..traza import TrazaStore
@@ -73,11 +74,23 @@ async def _comprobar_ocr(ocr: OcrClient, timeout: float) -> dict[str, Any]:
     }
 
 
-async def _estado(settings: Settings, mongo: MongoRepo, ocr: OcrClient, traza: TrazaStore, incluir_indices: bool) -> dict:
+async def _comprobar_escritura(almacen: AlmacenFacturas) -> dict[str, Any]:
+    return await almacen.estado()
+
+
+async def _estado(
+    settings: Settings,
+    mongo: MongoRepo,
+    ocr: OcrClient,
+    traza: TrazaStore,
+    almacen: AlmacenFacturas,
+    incluir_indices: bool,
+) -> dict:
     timeout = settings.health_timeout_s
     dependencias = {
         "mongo": await _con_tiempo("mongo", lambda: _comprobar_mongo(mongo, incluir_indices), timeout),
         "ocr": await _con_tiempo("ocr", lambda: _comprobar_ocr(ocr, timeout), timeout),
+        "escritura": await _con_tiempo("escritura", lambda: _comprobar_escritura(almacen), timeout),
     }
     caidas = [nombre for nombre, dato in dependencias.items() if not dato["ok"]]
     criticas = [nombre for nombre in settings.critical_deps if nombre in dependencias]
@@ -115,8 +128,9 @@ async def health(
     mongo: MongoRepo = Depends(get_mongo),
     ocr: OcrClient = Depends(get_ocr),
     traza: TrazaStore = Depends(get_traza),
+    almacen: AlmacenFacturas = Depends(get_almacen),
 ) -> dict:
-    return await _estado(settings, mongo, ocr, traza, incluir_indices=True)
+    return await _estado(settings, mongo, ocr, traza, almacen, incluir_indices=True)
 
 
 @router.get("/health/ready", summary="Listo para servir (503 si falla algo critico)")
@@ -125,8 +139,9 @@ async def ready(
     mongo: MongoRepo = Depends(get_mongo),
     ocr: OcrClient = Depends(get_ocr),
     traza: TrazaStore = Depends(get_traza),
+    almacen: AlmacenFacturas = Depends(get_almacen),
 ) -> JSONResponse:
-    estado = await _estado(settings, mongo, ocr, traza, incluir_indices=False)
+    estado = await _estado(settings, mongo, ocr, traza, almacen, incluir_indices=False)
     listo = not estado["criticas_caidas"]
     return JSONResponse(
         status_code=200 if listo else 503,

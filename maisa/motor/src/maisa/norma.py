@@ -577,15 +577,29 @@ class Decisor:
         # que un humano mire el papel. No se usa el umbral de calidad de la capa
         # de texto porque un escaneo no tiene capa de texto: todos los
         # documentos de vision puntuan 0,0 y el umbral escalaria los 29.
-        if self._es_ocr(lectura) and not lectura.iban:
+        #
+        # El IBAN no es el unico ancla que hay que leer. Un escaneo del que
+        # tampoco se lee el NIF del emisor **ni** la fecha no acredita quien
+        # cobra ni cuando se emitio: si el IBAN si se lee, la herencia de
+        # identidad tapa el hueco del NIF, R4 marca la fecha ausente como
+        # informativa (es un escaneo) y el documento acababa en PAGAR con la
+        # fecha vacia y el total reconstruido por aritmetica. El oraculo
+        # externo declara ese caso ilegible (`N0_legible`), asi que se exige
+        # ademas una de las dos anclas de identidad.
+        fechas_leidas = lectura.valores("fecha")
+        if self._es_ocr(lectura) and (not lectura.iban or (not nifs and not fechas_leidas)):
             hechos.append(Hecho(
                 "R6_anomalia", False, "documento no legible",
-                {"metodo": lectura.metodo, "iban_candidatos": 0,
-                 "nif_candidatos": len(nifs)},
+                {"metodo": lectura.metodo, "iban_candidatos": len(lectura.iban),
+                 "nif_candidatos": len(nifs),
+                 "fecha_candidatos": len(fechas_leidas)},
                 nombre="si_documento_no_legible",
             ))
             motivos.append(
                 "documento no legible: el escaneo no permite leer el IBAN de abono"
+                if not lectura.iban
+                else "documento no legible: el escaneo no permite leer ni el NIF "
+                "del emisor ni la fecha"
             )
 
         if not nifs:

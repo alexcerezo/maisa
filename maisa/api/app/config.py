@@ -162,6 +162,7 @@ class Settings:
     critical_deps: tuple[str, ...] = DEFAULT_CRITICAL_DEPS
     health_timeout_s: float = 2.0
     max_upload_mb: float = 50.0
+    subidas_habilitadas: bool = True
     default_limit: int = 50
     max_limit: int = 500
     max_query_len: int = 64
@@ -170,6 +171,11 @@ class Settings:
     # ------------------------------------------------------------------ #
     # Rutas derivadas
     # ------------------------------------------------------------------ #
+    @property
+    def max_upload_bytes(self) -> int:
+        """`MAX_UPLOAD_MB` en bytes, que es lo que compara el tope de lectura."""
+        return int(self.max_upload_mb * 1024 * 1024)
+
     @property
     def traza_path(self) -> Path:
         """Traza encadenada del motor (una linea JSON por factura)."""
@@ -212,6 +218,7 @@ class Settings:
             critical_deps=_env_list("CRITICAL_DEPS", DEFAULT_CRITICAL_DEPS),
             health_timeout_s=_env_float("HEALTH_TIMEOUT_S", 2.0),
             max_upload_mb=_env_float("MAX_UPLOAD_MB", 50.0),
+            subidas_habilitadas=_env_bool("SUBIDAS_HABILITADAS", True),
             default_limit=_env_int("DEFAULT_LIMIT", 50),
             max_limit=_env_int("MAX_LIMIT", 500),
             max_query_len=_env_int("MAX_QUERY_LEN", 64),
@@ -222,13 +229,13 @@ class Settings:
     # Resumen publico (para /api/meta): sin credenciales ni trazas internas
     # ------------------------------------------------------------------ #
     def publico(self) -> dict:
+        # `api_version` no va aqui: `/api/meta` ya lo pone en el nivel de arriba.
         return {
-            "api_version": API_VERSION,
             "mongo": {
                 "db": self.mongo_db,
                 "uri_sanitizada": sanitize_uri(self.mongo_uri),
                 "timeout_ms": self.mongo_timeout_ms,
-                "modo": "solo lectura",
+                "modo": "solo lectura del catalogo del ERP; escritura de expedientes por POST /api/facturas",
             },
             "ocr": {"url": self.ocr_url},
             "erp": {"url": self.erp_url, "nota": "solo informativo: la API no consulta el ERP"},
@@ -253,5 +260,14 @@ class Settings:
                 "dependencias_criticas": list(self.critical_deps),
                 "max_upload_mb": self.max_upload_mb,
                 "limite_paginacion": {"por_defecto": self.default_limit, "maximo": self.max_limit},
+                "subidas": {
+                    "habilitadas": self.subidas_habilitadas,
+                    "endpoint": "POST /api/facturas",
+                    "campo_fichero": "file",
+                    "formatos": ["application/pdf"],
+                    "almacenamiento": "GridFS bucket `pdfs` + coleccion `expedientes` + traza en `eventos`",
+                    "lotes": ["lote1", "lote2"],
+                    "ocr": "opcional (`?ocr=true`); por defecto solo se guarda el PDF",
+                },
             },
         }

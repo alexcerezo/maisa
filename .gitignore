@@ -27,8 +27,19 @@ maisa/outputs/*_traza.jsonl
 __pycache__/
 *.pyc
 
-# Cache de pytest (tests de la API en maisa/api)
+# Cache de pytest (tests de la API en maisa/api) y salida de pytest volcada a
+# mano en la raiz para inspeccionarla. Ninguna de las dos es una entrega.
 .pytest_cache/
+.pytest_out.txt
+
+# Cache de OCR del motor: se regenera en cada pasada (una entrada por hash de
+# PDF) y solo acelera el arranque, no es codigo ni dato de la entrega.
+maisa/motor/.cache/
+
+# Material de terceros clonado para consulta (referencias/maisa-hackaton es un
+# fixture de test ajeno, no codigo nuestro). Se clona a mano y NO se versiona:
+# meter un repo anidado aqui dentro es justo lo que rompe un `git add -A`.
+referencias/
 
 # Artefactos de Node (maisa/ui): dependencias instaladas y bundle compilado.
 # NUNCA se versionan. Se colaron una vez en el commit del lote 2: un

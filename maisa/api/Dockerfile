@@ -1,4 +1,4 @@
-# API/BFF de Albertitos: unica superficie expuesta a la LAN.
+# API/BFF de Albertitos: unica superficie expuesta a Internet.
 #
 # Construir:  docker build -t albertitos-api maisa/api
 # Correr:     docker compose -f maisa/api/docker-compose.yml up -d
@@ -29,7 +29,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 # Usuario sin privilegios (uid fijo para que el healthcheck y los volumenes
-# sean predecibles). El proceso no escribe nada en disco.
+# sean predecibles). El proceso no escribe en el disco del anfitrion: los
+# volumenes van en solo lectura y lo que sube va a Mongo (GridFS).
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin apiuser
 USER apiuser
 

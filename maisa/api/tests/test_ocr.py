@@ -10,7 +10,7 @@ from app.deps import get_mongo, get_ocr
 from app.errors import ApiError
 from app.main import create_app
 
-from .conftest import FakeMongo, FakeOcr
+from .conftest import FakeOcr
 
 
 def _fichero(contenido: bytes = b"%PDF-1.4 factura", nombre: str = "factura.pdf"):

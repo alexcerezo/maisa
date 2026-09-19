@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path
 
+import pytest
+
+from app.almacen import PATRON_FILE_ID, normalizar_file_id
 from app.routers.facturas import resolver_pdf
 
 from .conftest import PDF_BYTES, PDF_VALIDO
@@ -153,10 +157,21 @@ def test_pdf_inline(client):
     assert respuesta.content == PDF_BYTES
 
 
-def test_pdf_inexistente_da_404(client):
-    respuesta = client.get("/api/facturas/2026-12-31_P999.pdf/pdf")
+def test_pdf_inexistente_da_404(cliente_con_fakes):
+    respuesta = cliente_con_fakes.get("/api/facturas/2026-12-31_P999.pdf/pdf")
     assert respuesta.status_code == 404
     assert respuesta.json()["error"]["codigo"] == "pdf_no_encontrado"
+
+
+def test_pdf_sin_disco_y_con_mongo_caido_da_503(client):
+    """Si el PDF no esta en disco, la respuesta depende de GridFS.
+
+    No se puede afirmar "no existe" cuando no se ha podido preguntar: un 404
+    aqui seria mentira, y el cliente lo tomaria por definitivo.
+    """
+    respuesta = client.get("/api/facturas/2026-12-31_P999.pdf/pdf")
+    assert respuesta.status_code == 503
+    assert respuesta.json()["error"]["codigo"] == "mongo_no_disponible"
 
 
 def test_resolver_pdf_no_permite_salir_del_directorio(facturas_dir: Path):
@@ -171,3 +186,44 @@ def test_resolver_pdf_no_permite_salir_del_directorio(facturas_dir: Path):
 def test_traversal_por_http_da_404(client):
     respuesta = client.get("/api/facturas/%2e%2e%2f%2e%2e%2fetc%2fpasswd/pdf")
     assert respuesta.status_code in (400, 404)
+
+
+# --------------------------------------------------------------------------- #
+# `file_id` con acentos
+# --------------------------------------------------------------------------- #
+# El corpus real de Maisa trae nombres acentuados ("FA-2116_mensajeria.pdf" con
+# i acentuada, "F26-5240_ofimatica.pdf"): 65 de las 500 facturas de la traza.
+# Con el patron ASCII anterior, esas 65 devolvian 422 `peticion_invalida` tanto
+# en el detalle como en el PDF, y el visor del panel no abria nada.
+FILE_ID_ACENTUADO = "FA-2116_mensajería.pdf"
+
+
+def test_pdf_con_acentos_no_lo_rechaza_el_patron(client, facturas_dir: Path):
+    """Regresion: el patron del path param debe admitir Unicode."""
+    (facturas_dir / FILE_ID_ACENTUADO).write_bytes(PDF_BYTES)
+    respuesta = client.get(f"/api/facturas/{FILE_ID_ACENTUADO}/pdf")
+    assert respuesta.status_code == 200
+    assert respuesta.headers["content-type"] == "application/pdf"
+    assert respuesta.content == PDF_BYTES
+
+
+def test_detalle_con_acentos_no_lo_rechaza_el_patron(client):
+    """Un `file_id` acentuado inexistente da 404, no 422: el formato es valido."""
+    respuesta = client.get(f"/api/facturas/{FILE_ID_ACENTUADO}")
+    assert respuesta.status_code == 404
+    assert respuesta.json()["error"]["codigo"] == "factura_no_encontrada"
+
+
+def test_patron_file_id_sigue_cortando_rutas():
+    """La ampliacion a Unicode no reabre el traversal."""
+    for hostil in ("..", "../fuera.pdf", "/etc/passwd", "mal nombre.pdf", ".", "_x.pdf"):
+        assert not PATRON_FILE_ID.match(hostil), hostil
+
+
+def test_normalizar_file_id_acepta_acentos_y_normaliza_a_nfc():
+    """Un nombre en NFD (macOS) se guarda en NFC para que la traza lo encuentre."""
+    nfd = unicodedata.normalize("NFD", "informática.pdf")
+    assert normalizar_file_id(nfd) == "informática.pdf"
+    assert normalizar_file_id("sub/dir/informática.pdf") == "informática.pdf"
+    with pytest.raises(ValueError):
+        normalizar_file_id("mal nombre.pdf")

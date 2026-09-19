@@ -283,3 +283,136 @@ def test_cli_verifica_y_diff(tmp_path: Path, capsys: pytest.CaptureFixture) -> N
     otra = registro_ejemplo(tmp_path / "otra.jsonl", ("PAGAR", "PAGAR")).ruta
     assert trace.main(["diff", str(ruta), str(otra)]) == 0
     assert "ESCALAR -> PAGAR" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# Vocabulario de tipos: los 4 propios + los 11 del motor Rust legado
+# --------------------------------------------------------------------------- #
+
+# Valores exactos que el Rust escribe en `eventos.tipo` (`TRASPASO.md` 3.7 y
+# `docker/mongosh/02-schema-init.js`). Si alguno cambia, cambia la traza.
+VOCABULARIO_RUST = (
+    "ERP_RETRY_ORA_00600",
+    "ERP_RETRY_SES_401",
+    "ERP_RETRY_ERP_429",
+    "ERP_CACHE_HIT",
+    "ERP_CACHE_MISS",
+    "OCR_FAIL",
+    "OCR_OK",
+    "EXPEDIENTE_ESTADO",
+    "DECISION_EMITIDA",
+    "REVISION_ABIERTA",
+    "REVISION_RESUELTA",
+)
+
+TIPOS_ANTIGUOS = (trace.TIPO_LOTE, trace.TIPO_LECTURA, trace.TIPO_DECISION, trace.TIPO_FIN)
+
+TIPOS_NUEVOS = (
+    trace.TIPO_OCR_OK,
+    trace.TIPO_OCR_FAIL,
+    trace.TIPO_ERP_CACHE_HIT,
+    trace.TIPO_ERP_CACHE_MISS,
+    trace.TIPO_ERP_RETRY_ORA_00600,
+    trace.TIPO_ERP_RETRY_SES_401,
+    trace.TIPO_ERP_RETRY_ERP_429,
+    trace.TIPO_REVISION_ABIERTA,
+    trace.TIPO_REVISION_RESUELTA,
+    trace.TIPO_DECISION_EMITIDA,
+    trace.TIPO_EXPEDIENTE_ESTADO,
+)
+
+# Hash de un evento de tipo nuevo con `RELOJ_TS` fijo y `hash_prev` fijo (el
+# del evento 0 de `registro_nuevo`). Fijarlo es lo que convierte "el hash es
+# estable" en algo comprobable: si cambia el formato canonico, este test cae.
+HASH_OCR_OK = "68971587642d3256ccb4a59f8d693447ebf34d87c95273d6bc7327b52723014c"
+
+
+def registro_nuevo(ruta: Path) -> trace.Registro:
+    """Log con un evento de cada tipo nuevo, ademas de lote/fin."""
+    reg = trace.Registro(ruta, reloj=lambda: RELOJ_TS)
+    reg.anota(trace.TIPO_LOTE, lote=1, version_norma="norma_v3", facturas=1)
+    reg.anota(trace.TIPO_OCR_OK, "f.pdf", paginas=1, ms=42)
+    reg.anota(trace.TIPO_OCR_FAIL, "ilegible.pdf", motivo="servicio OCR caido", ms=900)
+    reg.anota(trace.TIPO_ERP_CACHE_HIT, "g.pdf", pedido="PO-2026-0725")
+    reg.anota(trace.TIPO_ERP_CACHE_MISS, "f.pdf", pedido="PO-2026-0724")
+    reg.anota(trace.TIPO_ERP_RETRY_ORA_00600, trace.GLOBAL, intento=2, backoff_ms=400)
+    reg.anota(trace.TIPO_ERP_RETRY_SES_401, trace.GLOBAL, intento=1, relogin=True)
+    reg.anota(trace.TIPO_ERP_RETRY_ERP_429, trace.GLOBAL, intento=3, espera_ms=1000)
+    reg.anota(trace.TIPO_REVISION_ABIERTA, "f.pdf", motivo="total no legible")
+    reg.anota(trace.TIPO_REVISION_RESUELTA, "f.pdf", resolucion="PAGAR", revisor="alberto")
+    reg.anota(trace.TIPO_DECISION_EMITIDA, "f.pdf", result="PAGAR", version_norma="norma_v3")
+    reg.anota(trace.TIPO_EXPEDIENTE_ESTADO, "f.pdf", de="ABIERTO", a="PAGADO")
+    reg.anota(trace.TIPO_FIN, resultados={"PAGAR": 1}, escalones={"capa_texto": 1})
+    reg.cierra()
+    return reg
+
+
+def test_es_tipo_valido_acepta_antiguos_y_nuevos_y_rechaza_inventados() -> None:
+    for tipo in TIPOS_ANTIGUOS:
+        assert trace.es_tipo_valido(tipo), tipo
+    for tipo in TIPOS_NUEVOS:
+        assert trace.es_tipo_valido(tipo), tipo
+    assert not trace.es_tipo_valido("inventado")
+    assert not trace.es_tipo_valido("ocr_ok")  # el Rust los escribe en MAYUSCULAS
+    assert not trace.es_tipo_valido("")
+
+
+def test_los_tipos_nuevos_copian_el_vocabulario_del_rust() -> None:
+    assert len(TIPOS_NUEVOS) == len(set(TIPOS_NUEVOS)) == 11
+    assert sorted(TIPOS_NUEVOS) == sorted(VOCABULARIO_RUST)
+    assert trace.TIPOS[len(TIPOS_ANTIGUOS):] == TIPOS_NUEVOS  # los 11 del Rust, tal cual
+
+
+def test_tipos_sin_duplicados_y_con_los_antiguos() -> None:
+    assert len(trace.TIPOS) == len(set(trace.TIPOS))
+    assert len(trace.TIPOS) == len(TIPOS_ANTIGUOS) + len(VOCABULARIO_RUST)
+    assert set(TIPOS_ANTIGUOS) <= set(trace.TIPOS)
+    assert set(trace.TIPOS) == set(TIPOS_ANTIGUOS) | set(VOCABULARIO_RUST)
+
+
+def test_eventos_de_tipos_nuevos_verifican_y_se_detecta_la_manipulacion(
+    tmp_path: Path,
+) -> None:
+    ruta = registro_nuevo(tmp_path / "nuevo.jsonl").ruta
+    assert trace.verifica(ruta) == []
+    tipos = [ev.tipo for ev in trace.carga(ruta)]
+    assert tipos == [trace.TIPO_LOTE, *TIPOS_NUEVOS, trace.TIPO_FIN]
+
+    original = lineas(ruta)
+    linea = original[1]  # el OCR_OK, un tipo nuevo
+    corte = linea.index('"ts":"') + len('"ts":"')
+    assert linea[corte] == "2"
+    cambiada = linea[:corte] + "3" + linea[corte + 1 :]
+    roto = escribe(tmp_path / "roto.jsonl", original[:1] + [cambiada] + original[2:])
+    clases = {p.clase for p in trace.verifica(roto)}
+    assert "hash_roto" in clases
+    assert trace.main(["verifica", str(roto)]) == 1
+
+
+def test_hash_de_un_tipo_nuevo_es_estable_y_no_depende_del_vocabulario(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El hash cubre seq/ts/tipo/file_id/datos/hash_prev, no el conjunto de tipos."""
+    reg = trace.Registro(tmp_path / "a.jsonl", reloj=lambda: RELOJ_TS)
+    reg.anota(trace.TIPO_LOTE, lote=1)
+    evento = reg.anota(trace.TIPO_OCR_OK, "f.pdf", paginas=1, ms=42)
+    reg.cierra()
+    assert evento.hash == HASH_OCR_OK
+    assert evento.hash_prev == reg[0].hash
+    assert '"tipo":"OCR_OK"' in evento.canonico()
+    assert trace.carga(tmp_path / "a.jsonl")[1].hash == HASH_OCR_OK  # el ida y vuelta no cambia
+
+    # Mismo contenido, otro registro: mismo hash (determinismo).
+    otro = trace.Registro(tmp_path / "b.jsonl", reloj=lambda: RELOJ_TS)
+    otro.anota(trace.TIPO_LOTE, lote=1)
+    assert otro.anota(trace.TIPO_OCR_OK, "f.pdf", paginas=1, ms=42).hash == HASH_OCR_OK
+
+    # Y crecer el vocabulario no toca ni un hash: TIPOS no entra en el calculo.
+    monkeypatch.setattr(trace, "TIPOS", trace.TIPOS + ("INVENTADO",))
+    assert trace.es_tipo_valido("INVENTADO")
+    tercera = trace.Registro(tmp_path / "c.jsonl", reloj=lambda: RELOJ_TS)
+    tercera.anota(trace.TIPO_LOTE, lote=1)
+    crecido = tercera.anota(trace.TIPO_OCR_OK, "f.pdf", paginas=1, ms=42)
+    tercera.cierra()
+    assert crecido.hash == HASH_OCR_OK
+    assert trace.verifica(tmp_path / "c.jsonl") == []

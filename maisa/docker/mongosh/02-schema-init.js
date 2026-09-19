@@ -129,7 +129,7 @@
             bsonType: "object",
             required: ["motor", "lineas"],
             properties: {
-              motor: { enum: ["rapidocr", "pytesseract", "pdfplumber", "ninguno"] },
+              motor: { enum: ["rapidocr", "pytesseract", "pdfplumber", "paddleocr_vl", "ninguno"] },
               paginas: { bsonType: "int", minimum: 0 },
               duracion_ms: { bsonType: "int", minimum: 0 },
               disponible: { bsonType: "bool" },

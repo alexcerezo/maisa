@@ -12,6 +12,7 @@ motor y la API solo lo lee.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -23,6 +24,13 @@ from typing import Any, Iterable
 logger = logging.getLogger("albertitos-api")
 
 RESULTADOS = ("PAGAR", "NO_PAGAR", "ESCALAR")
+
+# Firma que se publica cuando no hay traza legible: es estable a proposito, para
+# que un cliente que cachea no vea cambiar el ETag sin motivo.
+FIRMA_SIN_TRAZA = "sin-traza"
+
+# Tamano del bloque con el que se calcula el sha256 del fichero.
+_BLOQUE_HASH = 1 << 20
 
 # Campos del resumen que se indexan para la busqueda de texto libre.
 CAMPOS_BUSQUEDA = ("file_id", "proveedor", "pedido", "asiento")
@@ -135,6 +143,18 @@ class _Firma:
         return cls(st.st_mtime_ns, st.st_size)
 
 
+def _sha256_fichero(ruta: Path) -> str | None:
+    """sha256 del contenido del fichero, o None si no se puede leer."""
+    try:
+        digest = hashlib.sha256()
+        with ruta.open("rb") as fichero:
+            for bloque in iter(lambda: fichero.read(_BLOQUE_HASH), b""):
+                digest.update(bloque)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
 class TrazaStore:
     """Traza del motor en memoria, con recarga automatica si cambia el fichero."""
 
@@ -142,6 +162,7 @@ class TrazaStore:
         self.ruta = ruta
         self._lock = threading.Lock()
         self._firma: _Firma | None = None
+        self._hash: str | None = None
         self._registros: list[dict] = []
         self._resumenes: list[dict] = []
         self._indice: dict[str, int] = {}
@@ -151,6 +172,12 @@ class TrazaStore:
     # Carga
     # ------------------------------------------------------------------ #
     def cargar(self, forzar: bool = False) -> None:
+        """Recarga la traza si el fichero cambio (o siempre, con `forzar`).
+
+        Solo se lee el fichero cuando su identidad en disco (`mtime`/tamano)
+        cambia; el sha256 del contenido se calcula en esa misma recarga, no en
+        cada consulta.
+        """
         firma = _Firma.de(self.ruta)
         with self._lock:
             if not forzar and firma is not None and firma == self._firma:
@@ -159,7 +186,9 @@ class TrazaStore:
             resumenes: list[dict] = []
             indice: dict[str, int] = {}
             invalidas = 0
+            hash_contenido: str | None = None
             if firma is not None:
+                hash_contenido = _sha256_fichero(self.ruta)
                 with self.ruta.open("r", encoding="utf-8") as fichero:
                     for numero, linea in enumerate(fichero, start=1):
                         linea = linea.strip()
@@ -180,6 +209,7 @@ class TrazaStore:
                         registros.append(registro)
                         resumenes.append(resumir(registro))
             self._firma = firma
+            self._hash = hash_contenido
             self._registros = registros
             self._resumenes = resumenes
             self._indice = indice
@@ -209,6 +239,17 @@ class TrazaStore:
     def lineas_invalidas(self) -> int:
         self._asegurar()
         return self._lineas_invalidas
+
+    def firma(self) -> str:
+        """Firma estable del contenido cargado (sha256 del fichero de traza).
+
+        Es la identidad de la traza para quien cachea: dos lecturas con la misma
+        firma describen exactamente el mismo contenido, y la firma cambia cuando
+        el motor reescribe el fichero. Sin traza legible devuelve
+        `FIRMA_SIN_TRAZA`, que tambien es estable.
+        """
+        self._asegurar()
+        return self._hash or FIRMA_SIN_TRAZA
 
     def obtener(self, file_id: str) -> dict | None:
         self._asegurar()

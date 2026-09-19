@@ -61,7 +61,9 @@ def test_meta_expone_version_y_versiones_del_motor(client):
     assert datos["api_version"] == "1.0.0"
     assert datos["motor"]["facturas_en_traza"] == 4
     assert datos["motor"]["versiones_norma"] == {"norma_v3.0": 1, "norma_v3.1": 3}
-    assert datos["configuracion"]["mongo"]["modo"] == "solo lectura"
+    assert datos["configuracion"]["mongo"]["modo"].startswith("solo lectura")
+    assert "POST /api/facturas" in datos["configuracion"]["mongo"]["modo"]
+    assert datos["configuracion"]["api"]["subidas"]["habilitadas"] is True
     assert datos["configuracion"]["ocr"]["url"] == "http://127.0.0.1:1"
     assert datos["configuracion"]["api"]["cors_origins"] == [
         "http://localhost:8010",

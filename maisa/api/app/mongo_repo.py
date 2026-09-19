@@ -3,9 +3,11 @@
 Reglas que se cumplen aqui y conviene no romper:
 
   * Solo `find`, `count_documents` y `aggregate`. Nunca `insert`/`update`/
-    `delete`/`$out`/`$merge`/`$where`: la escritura la gobierna el motor, no la
-    API. El usuario de app (`albertitos_app`) ya es `readWrite`, asi que el
-    limite lo pone esta capa.
+    `delete`/`$out`/`$merge`/`$where`: lo que se consulta desde aqui es el
+    catalogo del ERP y los snapshots, que gobierna el motor. El usuario de app
+    (`albertitos_app`) ya es `readWrite`, asi que el limite lo pone esta capa.
+  * La unica escritura de la API (subir facturas) vive aparte, en `almacen.py`,
+    y reutiliza **este mismo cliente** via `MongoRepo.base()`.
   * Un unico `MongoClient` reutilizado por proceso (crear un cliente por
     peticion agota el pool y multiplica los handshakes).
   * Timeouts cortos (`MONGO_TIMEOUT_MS`): si Mongo no esta, la API debe
@@ -159,6 +161,15 @@ class MongoRepo:
         if self._cliente is None:
             raise MongoNoDisponible(self._error_arranque or "Cliente de Mongo no configurado.")
         return self._cliente[self.db_nombre]
+
+    def base(self):
+        """`Database` de la API, para que la capa de escritura reuse el cliente.
+
+        Existe para `almacen.py`: un `MongoClient` por proceso es la regla, y
+        abrir un segundo cliente solo para escribir duplicaria el pool y los
+        handshakes. Las consultas de esta clase siguen siendo de solo lectura.
+        """
+        return self._db()
 
     def cerrar(self) -> None:
         if self._cliente is not None:

@@ -7,8 +7,10 @@ Mapa de la aplicacion:
     /docs, /openapi.json     -> documentacion interactiva
     /                        -> visor estatico si `UI_DIR/index.html` existe
 
-La API es la **unica** superficie publicada a la LAN. Mongo sigue en 127.0.0.1 y
-el OCR en la red compartida; el frontend solo necesita conocer esta URL.
+La API es la **unica** superficie de datos del sistema y se consume de dos
+maneras: por Internet (la IP publica de la instancia) o desde otro contenedor de
+la red compartida (`http://albertitos-api:8000`). La LAN de la maquina
+anfitriona no es una via de consumo.
 """
 
 from __future__ import annotations
@@ -21,12 +23,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .almacen import AlmacenFacturas
 from .config import API_VERSION, Settings
 from .deps import require_api_key
 from .errors import instalar_manejadores
 from .mongo_repo import MongoRepo
 from .ocr_client import OcrClient
-from .routers import asientos, estadisticas, facturas, health, meta, ocr
+from .routers import asientos, estadisticas, expedientes, facturas, health, meta, ocr
 from .traza import EntregaStore, TrazaStore
 
 logger = logging.getLogger("albertitos-api")
@@ -55,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             max_query_len=settings.max_query_len,
         )
         app.state.ocr = OcrClient(settings.ocr_url)
+        app.state.almacen = AlmacenFacturas(app.state.mongo)
 
         app.state.traza.cargar()
         if not app.state.traza.disponible:
@@ -65,14 +69,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.api_key is None:
             logger.warning(
                 "API_KEY no definida: la API arranca en MODO ABIERTO (sin autenticacion). "
-                "Definela antes de publicarla fuera de la LAN de confianza."
+                "Con el puerto publicado a Internet eso deja leer Y ESCRIBIR facturas a cualquiera: "
+                "define API_KEY antes de exponerla."
             )
+        if not settings.subidas_habilitadas:
+            logger.warning("SUBIDAS_HABILITADAS=0: POST /api/facturas devolvera 403.")
         logger.info(
-            "albertitos-api %s escuchando: mongo_db=%s ocr=%s facturas=%s",
+            "albertitos-api %s escuchando: mongo_db=%s ocr=%s facturas=%s subidas=%s",
             API_VERSION,
             settings.mongo_db,
             settings.ocr_url,
             settings.facturas_dir,
+            "si" if settings.subidas_habilitadas else "no",
         )
         try:
             faltantes = app.state.mongo.indices_faltantes()
@@ -122,6 +130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
     api.include_router(facturas.router)
+    api.include_router(expedientes.router)
     api.include_router(asientos.router)
     api.include_router(estadisticas.router)
     api.include_router(ocr.router)

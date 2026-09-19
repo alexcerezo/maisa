@@ -8,14 +8,26 @@ caida" se prueba de verdad, sin simularlo.
 
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.almacen import (
+    ESTADO_INICIAL,
+    ESTADO_TRAS_OCR,
+    ESQUEMA_VERSION,
+    FacturaDuplicada,
+    Subida,
+    lineas_desde_ocr,
+    motor_desde_engine,
+    normalizar_file_id,
+)
 from app.config import Settings
-from app.deps import get_mongo, get_ocr
+from app.deps import get_almacen, get_mongo, get_ocr
 from app.errors import ApiError
 from app.main import create_app
 from app.mongo_repo import MongoNoDisponible
@@ -363,14 +375,134 @@ class FakeOcr:
         return {
             "texto": self._texto,
             "score": 0.93,
-            "motor": "local",
+            "motor": engine or "local",
             "paginas": 1,
             "lineas": 4,
             "segundos_ocr": 0.8,
             "segundos_proxy": 0.81,
             "bytes_enviados": len(contenido),
             "stats": {"mean_score": 0.93},
-            "bruto": {"text": self._texto, "engine": "local"},
+            "bruto": {"text": self._texto, "engine": engine or "local"},
+        }
+
+
+class FakeAlmacen:
+    """Doble de `AlmacenFacturas` con memoria en vez de Mongo y GridFS.
+
+    Reutiliza `normalizar_file_id`, `lineas_desde_ocr` y `motor_desde_engine`
+    del modulo real: asi los tests comprueban el comportamiento de verdad y no
+    una reimplementacion paralela que se puede desincronizar.
+    """
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.db_nombre = "albertitos"
+        self._error = error
+        self.expedientes: dict[str, dict] = {}
+        self.pdfs: dict[str, bytes] = {}
+        self.eventos: list[dict] = []
+
+    def _comprobar(self) -> None:
+        if self._error:
+            raise self._error
+
+    async def guardar(
+        self,
+        *,
+        nombre_original: str,
+        contenido: bytes,
+        content_type: str | None = None,
+        lote_id: str = "lote1",
+        ocr: dict | None = None,
+        run_id: str = "api",
+    ) -> Subida:
+        self._comprobar()
+        file_id = normalizar_file_id(nombre_original)
+        sha256 = hashlib.sha256(contenido).hexdigest()
+        previo = self.expedientes.get(file_id)
+        if previo is not None:
+            if previo["documento"]["sha256"] == sha256:
+                return Subida(
+                    file_id=file_id,
+                    sha256=sha256,
+                    tamano_bytes=len(contenido),
+                    lote_id=previo["lote_id"],
+                    estado_proceso=previo["estado_proceso"],
+                    creado_en=datetime.now(timezone.utc),
+                    duplicado=True,
+                    expediente=previo,
+                )
+            raise FacturaDuplicada(f"Ya existe una factura '{file_id}' con otro contenido.")
+
+        lineas = lineas_desde_ocr((ocr or {}).get("bruto") or {})
+        motor = motor_desde_engine((ocr or {}).get("motor"), bool(lineas))
+        estado = ESTADO_TRAS_OCR if ocr is not None else ESTADO_INICIAL
+        ahora = datetime.now(timezone.utc)
+        documento: dict = {
+            "_id": file_id,
+            "lote_id": lote_id,
+            "estado_proceso": estado,
+            "esquema_version": ESQUEMA_VERSION,
+            "creado_en": ahora.isoformat(),
+            "actualizado_en": ahora.isoformat(),
+            "documento": {
+                "nombre_original": nombre_original,
+                "sha256": sha256,
+                "tamano_bytes": len(contenido),
+                "gridfs_id": f"gridfs-{file_id}",
+            },
+            "ocr": {"motor": motor, "lineas": lineas, "disponible": ocr is not None},
+            "decision": None,
+        }
+        self.expedientes[file_id] = documento
+        self.pdfs[file_id] = contenido
+
+        eventos = ["EXPEDIENTE_ESTADO"]
+        self.eventos.append({"tipo": "EXPEDIENTE_ESTADO", "file_id": file_id, "run_id": run_id})
+        if ocr is not None:
+            tipo = "OCR_OK" if lineas or ocr.get("texto") else "OCR_FAIL"
+            self.eventos.append({"tipo": tipo, "file_id": file_id, "run_id": run_id})
+            eventos.append(tipo)
+        return Subida(
+            file_id=file_id,
+            sha256=sha256,
+            tamano_bytes=len(contenido),
+            lote_id=lote_id,
+            estado_proceso=estado,
+            creado_en=ahora,
+            duplicado=False,
+            expediente=documento,
+            eventos=tuple(eventos),
+        )
+
+    async def evento(self, **kwargs) -> None:
+        self._comprobar()
+        self.eventos.append(dict(kwargs))
+
+    async def obtener(self, file_id: str) -> dict | None:
+        self._comprobar()
+        return self.expedientes.get(file_id)
+
+    async def listar(self, *, lote_id=None, estado=None, limit=50, offset=0):
+        self._comprobar()
+        filas = [
+            documento
+            for documento in self.expedientes.values()
+            if (lote_id is None or documento["lote_id"] == lote_id)
+            and (estado is None or documento["estado_proceso"] == estado)
+        ]
+        return filas[offset : offset + limit], len(filas)
+
+    async def abrir_pdf(self, file_id: str) -> bytes | None:
+        self._comprobar()
+        return self.pdfs.get(file_id)
+
+    async def estado(self) -> dict:
+        self._comprobar()
+        return {
+            "bucket": "pdfs",
+            "expedientes": len(self.expedientes),
+            "pdfs": len(self.pdfs),
+            "eventos": len(self.eventos),
         }
 
 
@@ -453,11 +585,19 @@ def fake_ocr() -> FakeOcr:
 
 
 @pytest.fixture
-def cliente_con_fakes(settings: Settings, fake_mongo: FakeMongo, fake_ocr: FakeOcr):
-    """App con Mongo y OCR sustituidos por dobles."""
+def fake_almacen() -> FakeAlmacen:
+    return FakeAlmacen()
+
+
+@pytest.fixture
+def cliente_con_fakes(
+    settings: Settings, fake_mongo: FakeMongo, fake_ocr: FakeOcr, fake_almacen: FakeAlmacen
+):
+    """App con Mongo, OCR y el almacen sustituidos por dobles."""
     app = create_app(settings)
     app.dependency_overrides[get_mongo] = lambda: fake_mongo
     app.dependency_overrides[get_ocr] = lambda: fake_ocr
+    app.dependency_overrides[get_almacen] = lambda: fake_almacen
     with TestClient(app) as cliente:
         yield cliente
     app.dependency_overrides.clear()
@@ -468,6 +608,7 @@ __all__ = [
     "PDF_BYTES",
     "PDF_VALIDO",
     "ApiError",
+    "FakeAlmacen",
     "FakeMongo",
     "FakeOcr",
     "construir_settings",

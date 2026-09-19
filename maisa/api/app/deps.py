@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, Header, Query, Request
 
+from .almacen import AlmacenFacturas
 from .config import Settings
 from .errors import ApiError
 from .mongo_repo import MongoRepo
@@ -32,6 +33,10 @@ def get_entrega(request: Request) -> EntregaStore:
 
 def get_mongo(request: Request) -> MongoRepo:
     return request.app.state.mongo
+
+
+def get_almacen(request: Request) -> AlmacenFacturas:
+    return request.app.state.almacen
 
 
 def get_ocr(request: Request) -> OcrClient:
