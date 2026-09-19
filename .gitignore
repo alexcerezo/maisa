@@ -2,3 +2,11 @@ target
 .vscode
 .venv
 500-*/*.md
+
+# Credenciales de MongoDB (nunca versionar)
+.env
+hackspain-ocr/.env
+
+# Copias de seguridad de la base de datos
+backups/
+*.archive
