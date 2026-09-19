@@ -7,7 +7,7 @@ target
 
 # Credenciales de MongoDB (nunca versionar)
 .env
-hackspain-ocr/.env
+maisa/hackspain-ocr/.env
 
 # Copias de seguridad de la base de datos
 backups/
@@ -15,11 +15,11 @@ backups/
 
 # Salida del lote de ejemplo: se regenera y NO es una entrega.
 # (`outputs/outcomes.jsonl` sí se versiona: esa SÍ es la entrega.)
-hackspain-ocr/outputs/outcomes_ejemplo.jsonl
+maisa/hackspain-ocr/outputs/outcomes_ejemplo.jsonl
 
 # Traza encadenada: material de auditoría que se regenera en cada pasada y
 # lleva marca de tiempo, así que versionarla ensuciaría el repo en cada run.
-hackspain-ocr/outputs/*_traza.jsonl
+maisa/hackspain-ocr/outputs/*_traza.jsonl
 
 
 # Restos de Python (el descargador del ERP y validate_jsonl.py son stdlib)
@@ -36,3 +36,21 @@ _scratch/
 asientos.json
 asientos.ndjson
 snapshot_meta.json
+# --- Nada de reconocimiento de equipos rivales en el repo publico ---------
+# El trabajo de campo sobre los repos de los demas equipos vive SOLO en el
+# workspace local (`PaddleOCR/recon/`, `RECON_MAISA.md`) y en el watcher de
+# `~/.cache/maisa-watch/`. No es un artefacto de la entrega: si apareciera
+# aqui, publicariamos datos de terceros. Estas reglas son una red de
+# seguridad, no una invitacion a ignorar el criterio.
+recon/
+RECON_*.md
+*rival*
+*oraculo*
+oracle.json
+analisis-rivales*
+comparativa-*
+briefings/
+digests/
+pending-delta.md
+latest-delta.md
+maisa-watch*

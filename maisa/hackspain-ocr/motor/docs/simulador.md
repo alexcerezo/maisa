@@ -74,7 +74,7 @@ lote       : .../corpus/maisa/facturas (500 facturas, lote 1, 4 trabajadores)
 norma      : norma_v3.1 (.../maisa/config/reglas.toml)
 cambios aplicados (en memoria, nada escrito en disco):
   - politica.tolerancia = 10.0
-decision   : {'ESCALAR': 48, 'NO_PAGAR': 9, 'PAGAR': 443}  ->  {'ESCALAR': 47, 'NO_PAGAR': 9, 'PAGAR': 444}
+decision   : {'ESCALAR': 43, 'NO_PAGAR': 9, 'PAGAR': 448}  ->  {'ESCALAR': 42, 'NO_PAGAR': 9, 'PAGAR': 449}
 movidas    : 1 de 500 facturas cambian de resultado | 1 cambian su traza de hechos
 
   factura_2018.pdf             ESCALAR -> PAGAR
@@ -98,7 +98,7 @@ movidas    : 1 de 500 facturas cambian de resultado | 1 cambian su traza de hech
 
 Los seis se lanzaron de verdad contra el lote 1 completo (500 PDFs) con el motor
 en su revisión de ese momento. Reparto de partida en los seis:
-`PAGAR 443 · ESCALAR 48 · NO_PAGAR 9`.
+`PAGAR 448 · ESCALAR 43 · NO_PAGAR 9`.
 
 Ese reparto es **el mismo de la entrega**, y no por casualidad: el simulador
 declara al decisor la duplicidad de pedido del lote con el mismo
@@ -124,14 +124,14 @@ revisar un descuadre real.
 ### 4.2 Convertir en NO_PAGAR el fallo de `R2_pedido` (`regla`)
 
 ```
-movidas    : 29 de 500 facturas cambian de resultado | 0 cambian su traza de hechos
-decision   : {'ESCALAR': 48, ...}  ->  {'ESCALAR': 19, 'NO_PAGAR': 38, 'PAGAR': 443}
+movidas    : 16 de 500 facturas cambian de resultado | 0 cambian su traza de hechos
+decision   : {'ESCALAR': 43, ...}  ->  {'ESCALAR': 27, 'NO_PAGAR': 25, 'PAGAR': 448}
   2026-0811-B_catering.pdf   ESCALAR -> NO_PAGAR
       = R2_pedido   FALLA  el total de la factura NO cuadra con el importe del pedido
       = R3_iva      FALLA  total != base + IVA
 ```
 
-**Lectura de negocio:** endurecer la política mueve **29** facturas de ESCALAR a
+**Lectura de negocio:** endurecer la política mueve **16** facturas de ESCALAR a
 NO_PAGAR. Y aquí el simulador destapa algo que un "diff de resultados" no vería:
 **no cambia ni un hecho**. Los mismos hechos probados, decididos al revés. Eso
 significa que el cambio es puro endurecimiento de política, reversible, y que no
@@ -259,16 +259,27 @@ en el TOML → `--comprobar` para confirmar que **solo** se movieron esas factur
 ## 7. Procedencia de las medidas de este documento
 
 Salida completa y sin recortes en `maisa/_scratch_res/simula_demos.txt`
-(temporal). Medidas del **2026-09-19 11:38** con el motor en:
+(temporal). Medidas del **2026-09-19 12:59** con el motor en:
 
 ```
-src/maisa/norma.py     sha256 6867fbece01a08a5  (34638 bytes)
+src/maisa/norma.py     sha256 1d989b63c503b915  (35195 bytes)
 src/maisa/lectura.py   sha256 4e66b880a52ad6bc  (5607 bytes)
-src/maisa/texto.py     sha256 5501ed225899ceb3  (16355 bytes)
-src/maisa/procesa.py   sha256 50ad16f668db89cd  (7451 bytes)
+src/maisa/texto.py     sha256 03931b4e5c32fd3f  (16792 bytes)
+src/maisa/procesa.py   sha256 3462ff955745bd99  (8881 bytes)
 src/maisa/emit.py      sha256 574f0cb8977eef6e  (3941 bytes)
 ```
 
 Como el motor se sigue afinando, cualquier número de este documento se puede
 reproducir con los comandos de la §4; si el reparto de partida ya no es
-`PAGAR 443 · ESCALAR 48 · NO_PAGAR 9`, el motor ha cambiado, no el simulador.
+`PAGAR 448 · ESCALAR 43 · NO_PAGAR 9`, el motor ha cambiado, no el simulador.
+
+Estas medidas son **posteriores** a las de las 11:38: entre una y otra se corrigió
+un defecto del extractor —los separadores de `base`, `IVA` y `total` no admitían
+el salto de línea que el OCR de visión introduce entre la etiqueta y su importe—.
+Cinco facturas que escalaban solo por eso pasan a `PAGAR`, así que el reparto de
+partida cambió de `PAGAR 443 · ESCALAR 48 · NO_PAGAR 9` a
+`PAGAR 448 · ESCALAR 43 · NO_PAGAR 9`. El ensayo §4.2 es el que más lo nota:
+mueve **16** facturas en vez de 29, y la cuenta cuadra exactamente con la
+cobertura por regla —`R2_pedido` suspende hoy en 16 facturas y suspendía en 29—:
+las 13 que faltan ya leen su total, así que el pedido les cuadra y dejan de
+depender del endurecimiento.

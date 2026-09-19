@@ -268,7 +268,7 @@ def credenciales(args: argparse.Namespace) -> tuple[str, str, str]:
     if not usuario or not clave:
         raise ErrorImportacion(
             "faltan credenciales: define MONGO_ROOT_USER y MONGO_ROOT_PASSWORD en "
-            "hackspain-ocr/.env o pasalas con --usuario / --clave"
+            "maisa/hackspain-ocr/.env o pasalas con --usuario / --clave"
         )
     return usuario, clave, base
 
