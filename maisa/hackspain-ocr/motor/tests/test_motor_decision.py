@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
 
@@ -355,6 +355,30 @@ def test_los_caracteres_invisibles_no_parten_los_campos(sintetica, mundo):
     lectura = lee_texto(cuerpo)
     assert lectura.valores("iban") == [iban]
     assert lectura.valores("total") == [str(mundo.importe(mundo.pedido_base))]
+    assert mundo.decisor.decide(lectura).resultado == PAGAR
+
+
+def test_la_etiqueta_y_su_importe_pueden_ir_en_lineas_distintas(sintetica, mundo):
+    """El OCR de vision imprime la etiqueta y su importe en lineas distintas.
+
+    `_normaliza_espacios` colapsa los espacios pero **respeta** los saltos de
+    linea, asi que los separadores de base, IVA y total tienen que admitir
+    `\\n`. Sin ellos el importe no se leia y el decisor no podia contrastarlo
+    contra el ERP: cinco de los 29 escaneos del corpus escalaban solo por esto,
+    pese a ser facturas limpias con NIF, IBAN y total legibles.
+    """
+    total = mundo.importe(mundo.pedido_base)
+    base = (total / Decimal("1.21")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    cuerpo = sintetica.texto(pedido=mundo.pedido_base)
+    cuerpo = re.sub(r"^(Base|IVA \(21%\)|TOTAL): (.+)$", r"\1:\n\2", cuerpo, flags=re.M)
+    # Sin esto la prueba pasaria aunque el `re.sub` no hubiera casado nada.
+    assert "Base:\n" in cuerpo and "IVA (21%):\n" in cuerpo and "TOTAL:\n" in cuerpo
+
+    lectura = lee_texto(cuerpo, metodo="vision_ocr")
+    assert lectura.valores("base") == [str(base)]
+    assert lectura.valores("iva") == [str(total - base)]
+    assert lectura.valores("total") == [str(total)]
     assert mundo.decisor.decide(lectura).resultado == PAGAR
 
 

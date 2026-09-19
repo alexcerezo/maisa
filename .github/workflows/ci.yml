@@ -5,7 +5,8 @@
 #   2. tests   la suite del motor. Sintetica: no toca corpus ni OCR.
 #   3. lote    reproduce las 500 decisiones DOS veces y exige el mismo md5.
 #   4. entrega el outcomes.jsonl versionado tiene que ser exactamente lo que
-#              produce el motor hoy, y el banco de oro no puede haberse movido.
+#              produce el motor hoy, el banco de oro no puede haberse movido, y
+#              la copia de la raiz (`la-caja-outcomes/`) tiene que ser la misma.
 #
 # La puerta 3 es la que de verdad protege: no comprobamos que el codigo "hace
 # algo", comprobamos que **decide lo mismo dos veces**. Un motor de pagos que
@@ -14,6 +15,10 @@
 # Todo corre sin red: los 29 PDFs escaneados llevan su texto ya cacheado en
 # `motor/.cache/ocr/` (indexado por sha256 del PDF), asi que no hace falta
 # levantar el contenedor de vision.
+#
+# Estructura del repo: la raiz solo tiene `la-caja-outcomes/` (los tres ficheros
+# de la entrega) y `maisa/` (todo el resto: motor, datos, docs, ui). El codigo
+# se ejecuta desde `maisa/hackspain-ocr/`, que es lo que fija `defaults` abajo.
 name: CI
 
 on:
@@ -27,7 +32,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: hackspain-ocr
+    working-directory: maisa/hackspain-ocr
 
 env:
   PYTHONPATH: motor/src
@@ -38,7 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: .
+        # La raiz de `maisa/` es donde vive `ruff.toml`; desde ahi `ruff check .`
+        # recorre todo el Python del repo.
+        working-directory: maisa
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,7 +69,7 @@ jobs:
       # `motor/pytest.ini` declara `pythonpath = src`, `testpaths = tests` y
       # `-m "not lento"`, asi que esto funciona recien clonado sin exportar nada.
       - name: pytest
-        working-directory: hackspain-ocr/motor
+        working-directory: maisa/hackspain-ocr/motor
         run: python -m pytest
 
   lote:
@@ -117,6 +124,20 @@ jobs:
             exit 1
           fi
           echo "outputs/outcomes.jsonl al dia ($(wc -l < outputs/outcomes.jsonl) lineas)"
+
+      # La entrega se publica desde la RAIZ del repo (`la-caja-outcomes/`), asi
+      # que la copia de la raiz tiene que ser byte a byte la misma que la que
+      # versiona el motor. Sin esto, alguien puede arreglar el motor, regenerar
+      # `outputs/` y dejar la entrega de la raiz anclada en la version vieja.
+      - name: la copia de la raiz es la misma entrega
+        run: |
+          set -e
+          if ! cmp /tmp/outcomes.jsonl ../../la-caja-outcomes/outcomes.jsonl; then
+            echo "::error::la-caja-outcomes/outcomes.jsonl NO coincide con outputs/outcomes.jsonl."
+            echo "Regeneralo con: cp outputs/outcomes.jsonl ../../la-caja-outcomes/outcomes.jsonl"
+            exit 1
+          fi
+          echo "la-caja-outcomes/outcomes.jsonl al dia ($(wc -l < ../../la-caja-outcomes/outcomes.jsonl) lineas)"
 
       # `|` y no escalar plegado: sin el bloque, YAML junta las lineas en una
       # sola y los `\` de continuacion se comen los argumentos de oro.py.

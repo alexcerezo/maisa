@@ -21,6 +21,13 @@ from .normaliza import (
 )
 
 # Etiquetas equivalentes por campo. Orden = prioridad de la etiqueta.
+#
+# Los separadores de `base`, `iva` y `total` admiten `\n`. En los documentos
+# que llegan por vision el OCR pone la etiqueta y su importe en lineas
+# distintas ("TOTAL\n774,40 EUR"), y `_normaliza_espacios` colapsa los espacios
+# pero respeta los saltos de linea. Sin el `\n` en la clase estos tres campos
+# se perdian en los escaneos y facturas perfectamente legibles escalaban por no
+# poder contrastar el importe contra el ERP.
 _PATRONES: dict[str, list[str]] = {
     "pedido": [
         r"(?:SU\s+PEDIDO|REF\.?\s*PEDIDO|PEDIDO\s+CLIENTE|PEDIDO\s+ASOCIADO|N[ºo°]?\s*PEDIDO|PEDIDO|PO)"
@@ -46,16 +53,16 @@ _PATRONES: dict[str, list[str]] = {
     ],
     "base": [
         # Sin `\b` final: el OCR pega la etiqueta al numero ("Base1.165,90").
-        r"(?:BASE\s+IMPONIBLE|IMPORTE\s+BASE|SUBTOTAL|BASE)[ .:]{0,60}"
-        r"(?:EUR|\u20ac)?[ ]{0,6}(\d[\d.,]*)",
+        r"(?:BASE\s+IMPONIBLE|IMPORTE\s+BASE|SUBTOTAL|BASE)[ .:\n]{0,60}"
+        r"(?:EUR|\u20ac)?[ \n]{0,6}(\d[\d.,]*)",
     ],
     "iva": [
         r"(?:I\.?\s?V\.?\s?A\.?|CUOTA\s+IVA|IVA)\s*\(?\s*(\d{1,2}(?:[.,]\d+)?)\s*%\s*\)?"
-        r"[ .:]{0,60}(?:EUR|\u20ac)?[ ]{0,6}(\d[\d.,]*)",
+        r"[ .:\n]{0,60}(?:EUR|\u20ac)?[ \n]{0,6}(\d[\d.,]*)",
     ],
     "total": [
-        r"\b(?:IMPORTE\s+TOTAL|TOTAL\s+A\s+PAGAR|TOTAL\s+FACTURA|TOTAL)[ .:]{0,60}"
-        r"(?:EUR|\u20ac)?[ ]{0,6}(\d[\d.,]*)",
+        r"\b(?:IMPORTE\s+TOTAL|TOTAL\s+A\s+PAGAR|TOTAL\s+FACTURA|TOTAL)[ .:\n]{0,60}"
+        r"(?:EUR|\u20ac)?[ \n]{0,6}(\d[\d.,]*)",
     ],
     "num_factura": [
         r"(?:N[ºo°]\s*DE\s*FACTURA|REF\s*FACTURA|FACTURA\s*N[ºo°]|INVOICE\s*#|FACTURA|REF)"

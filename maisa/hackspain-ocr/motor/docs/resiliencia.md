@@ -5,17 +5,15 @@
 **Cómo se reproduce todo, con un solo comando:**
 
 ```bash
-cd maisa
+# desde el directorio del motor (`maisa/hackspain-ocr/motor`)
 # con el bridge ERP de Alberto CAIDO (caso normal): 61/61 OK, exit 0
-PYTHONPATH=src:/home/ubuntu/projects/PaddleOCR/.venv/lib/python3.12/site-packages \
-    python3 tools/evidencia_resiliencia.py
+PYTHONPATH=src ../.venv/bin/python tools/evidencia_resiliencia.py
 
 # con el bridge levantado (python3 corpus/maisa/alberto_erp.py): 68/68 OK, exit 0
-PYTHONPATH=src:/home/ubuntu/projects/PaddleOCR/.venv/lib/python3.12/site-packages \
-    python3 tools/evidencia_resiliencia.py --erp-vivo
+PYTHONPATH=src ../.venv/bin/python tools/evidencia_resiliencia.py --erp-vivo
 ```
 
-La herramienta tarda ~4 min (incluye un lote frío de 234 s de OCR real). `--rapido` recorta
+La herramienta tarda unos minutos (incluye un lote frío de 139 s de OCR real). `--rapido` recorta
 el lote. `--erp-vivo` añade 7 comprobaciones contra el bridge de Alberto en
 `http://127.0.0.1:8009` (bloque H); sin él, la herramienta mide todo lo que no necesita ERP,
 incluido el caso "ERP caído" (bloque D, que exige el bridge **apagado**).
@@ -31,7 +29,7 @@ puede auditar línea a línea.
 
 | # | Escenario | Síntoma si no se tratara | Mecanismo | Evidencia |
 |---|-----------|--------------------------|-----------|-----------|
-| 1 | El proceso muere a mitad de lote (SIGKILL) | Lote perdido; traza truncada ilegible | Escritura con `flush` línea a línea + `Registro(continuar=True)` | §1 · bloque A — 3 SIGKILL, prefijos de 65/61/60 líneas sin `cadena_rota`, reanudación 68 = 65 + 3 sin hueco de `seq` |
+| 1 | El proceso muere a mitad de lote (SIGKILL) | Lote perdido; traza truncada ilegible | Escritura con `flush` línea a línea + `Registro(continuar=True)` | §1 · bloque A — 3 SIGKILL, prefijos de 62/67/61 líneas sin `cadena_rota`, reanudación 65 = 62 + 3 sin hueco de `seq` |
 | 2 | Alguien edita la traza para cambiar una decisión | El log dice `PAGAR` y nadie lo nota | Cadena de hashes + sello publicado | §2 · bloques B y C — `hash_roto` en la línea exacta; la reescritura coherente la delata el sello |
 | 3 | ERP devuelve `ORA-00600` | Caída del lote | Reintento con backoff, presupuesto acotado | §3.1 · H — 3 reintentos en la descarga completa, 0 errores |
 | 4 | ERP devuelve `ERP-429` (límite 10 req/s) | Caída por ráfaga | Freno de cliente a 8 req/s + respeto de `Retry-After` | §3.2 · H4 — 73 esperas 429, 0 errores internos |
@@ -39,8 +37,8 @@ puede auditar línea a línea.
 | 6 | El ERP entero está caído | No se puede decidir | Snapshot en disco + fallo declarado si no hay ninguno | §3.4 · D y H5 — 516 asientos del snapshot, exit 0; sin snapshot, `ErrorERP` exit 1 y **sin** JSONL |
 | 7 | Un PDF está corrupto | *(hoy: el lote entero muere)* | **Fail-stop** (no decide mal) — mitigación propuesta | §4 · F — `PdfStreamError`, exit 1, 0 ficheros escritos |
 | 8 | La caché de OCR se corrompe | Texto basura tomado por bueno | `sha256` del PDF en la entrada + reconstrucción | §5.1 · G — JSON roto y sha falso se rehacen solos; el texto manipulado **sí** pasa |
-| 9 | El servicio de OCR no responde | Documento "vacío" tomado por bueno | `ConnectionError` ruidoso, jamás texto vacío | §5.2 · E0 — excepción declarada; con caché, 2,6 ms |
-| 10 | Se pierde la caché de OCR | 863 s de OCR en cada arranque | Caché reconstruida byte a byte | §5.3 · E — frío 234,55 s vs caliente 4,14 s (×56,6), 29/29 idénticas |
+| 9 | El servicio de OCR no responde | Documento "vacío" tomado por bueno | `ConnectionError` ruidoso, jamás texto vacío | §5.2 · E0 — excepción declarada; con caché, 5,1 ms |
+| 10 | Se pierde la caché de OCR | 863 s de OCR en cada arranque | Caché reconstruida byte a byte | §5.3 · E — frío 139,08 s vs caliente 4,14 s (×33,6), 29/29 idénticas |
 | 11 | Cambia un dato (lo que pide el sábado) | Miedo a tocar el motor | Modo `--simula` de `tools/oro.py` | `docs/simulador.md` |
 
 ---
@@ -64,27 +62,27 @@ facturas matados con `SIGKILL` a mitad:
 
 | Intento | Eventos escritos | Exit | s | Tipos escritos | `verifica` | `outcomes.jsonl` |
 |---------|-----------------|------|---|----------------|-----------|------------------|
-| 1 | 65 | −9 | 4,55 | `decision 32, lectura 32, lote 1` | ninguno | no existe |
-| 2 | 61 | −9 | 4,41 | `decision 30, lectura 30, lote 1` | ninguno | no existe |
-| 3 | 60 | −9 | 4,46 | `decision 29, lectura 30, lote 1` | ninguno | no existe |
+| 1 | 62 | −9 | 4,48 | `decision 30, lectura 31, lote 1` | ninguno | no existe |
+| 2 | 67 | −9 | 4,30 | `decision 33, lectura 33, lote 1` | ninguno | no existe |
+| 3 | 61 | −9 | 4,67 | `decision 30, lectura 30, lote 1` | ninguno | no existe |
 
-Y sobre el prefijo de 65 líneas:
+Y sobre el prefijo de 62 líneas:
 
 ```
-prefijo de partida                 65 lineas, sello 9f1153b1b2fbd55f...
-eventos cargados al reanudar       65
-primer seq nuevo                   65
-hash_prev del primer evento nuevo  9f1153b1b2fbd55f...     <- es la cabeza anterior
-lineas tras reanudar               68
+prefijo de partida                 62 lineas, sello 3118cbbc7ca79b01...
+eventos cargados al reanudar       62
+primer seq nuevo                   62
+hash_prev del primer evento nuevo  3118cbbc7ca79b01...     <- es la cabeza anterior
+lineas tras reanudar               65
 problemas tras reanudar            ninguno
-sello final                        817543b8e0a4da16e4f1648ae3dd48440262ca11f194b71e1867ef62eb37a7d6
+sello final                        12ce0aaac0cd9c2a0259fb6ac2b1bf93de9dc91f990ef649e20301391b236350
 ```
 
 Lo que demuestra:
 
 - El prefijo **no acusa `cadena_rota`**: lo que se escribió, se escribió bien.
 - No hay evento `fin` → se distingue un lote completo de uno interrumpido sin mirar nada más.
-- El `seq` **continúa sin hueco** (65 tras 64) y el primer evento nuevo encadena con el
+- El `seq` **continúa sin hueco** (62 tras 61) y el primer evento nuevo encadena con el
   hash de la cabeza anterior: la traza reanudada es **una sola cadena**, no dos pegadas.
 - El prefijo **no se reescribe** (comprobado byte a byte).
 - `outcomes.jsonl` no existe hasta que el lote termina: **nunca hay una entrega parcial
@@ -111,16 +109,16 @@ comprueba que `hash_prev` es el hash del evento anterior. El **sello** es el has
 cabeza, que se publica fuera del log (en la entrega, en el acta).
 
 **Evidencia** (bloques B y C, sobre la traza de referencia de 1002 eventos, sello
-`888ee32cc573c259b14668d1fa3a78f3b02e41a8b48168a37ec92ecfcc43254d`):
+`b8f20ca18cdca5d9d37ade76511b928096ddc8201faf6840a815c5673f6e9ebe`):
 
 | Ataque | Detección | Línea señalada |
 |--------|-----------|----------------|
-| Editar `datos.result` de la línea 3 (`2026-01-08_P001.pdf`: `PAGAR → NO_PAGAR`) | `hash_roto`: declarado `4782f677799d…` ≠ recalculado `d7d43406a04f…` | **3** |
-| Cambiar el `hash_prev` de la última línea (1002) | `hash_roto` (`888ee32cc573…` ≠ `3b5afc34a604…`) + `cadena_rota` (`ffffffffffff…` no es el hash anterior `5b026f970e53…`) | 1002 |
-| Un byte distinto en la cabeza | `sello_distinto`: `f88ee32cc573…` frente a `888ee32cc573…` | 1002 |
-| Añadir un evento legítimo al final | `sello_distinto` (`92ae060c07d6…`); la traza sigue siendo válida | 1003 |
-| **Reescritura coherente** (recalcular toda la cadena) | `verifica()` **sin** sello: limpio; **con** el sello publicado (`765c74261b62…` ≠ `888ee32cc573…`): `sello_distinto` | 1002 |
-| Tocar una línea del **medio** | `hash_roto` en esa línea (`90283a732485…` ≠ `90d0f527a933…`); el sello **no** cambia | 4 |
+| Editar `datos.result` de la línea 3 (`2026-01-08_P001.pdf`: `PAGAR → NO_PAGAR`) | `hash_roto`: declarado `3b0fbc5606ad…` ≠ recalculado `5bcd5f38f93c…` | **3** |
+| Cambiar el `hash_prev` de la última línea (1002) | `hash_roto` (`b8f20ca18cdc…` ≠ `2fec5d5d5478…`) + `cadena_rota` (`ffffffffffff…` no es el hash anterior `3a8083e87585…`) | 1002 |
+| Un byte distinto en la cabeza | `sello_distinto`: `f8f20ca18cdc…` frente a `b8f20ca18cdc…` | 1002 |
+| Añadir un evento legítimo al final | `sello_distinto` (`493724c18f9d…`); la traza sigue siendo válida | 1003 |
+| **Reescritura coherente** (recalcular toda la cadena) | `verifica()` **sin** sello: limpio; **con** el sello publicado (`82816eb1b7c7…` ≠ `b8f20ca18cdc…`): `sello_distinto` | 1002 |
+| Tocar una línea del **medio** | `hash_roto` en esa línea (`6b009f57de42…` ≠ `7489164038d1…`); el sello **no** cambia | 4 |
 
 Lecturas honestas de la tabla:
 
@@ -257,12 +255,12 @@ declarado**.
 ```
 -- d1) hay ERP vivo?
    sonda a http://127.0.0.1:8009      sin respuesta ([Errno 111] Connection refused)
-   snapshot en disco                  /tmp/asientos.json (81263 bytes)
+   snapshot en disco                  data/erp_snapshot.json (221113 bytes)
 
 -- d2) lote completo arrancando del snapshot, con el bridge caido
    codigo de salida                   0
    * facturas   : 500
-   * resultado  : {'PAGAR': 443, 'ESCALAR': 48, 'NO_PAGAR': 9}
+   * resultado  : {'PAGAR': 448, 'ESCALAR': 43, 'NO_PAGAR': 9}
    * erp        : 516 asientos
    * validacion : OK
    * traza hash : 1002 eventos, OK
@@ -271,7 +269,7 @@ declarado**.
 
 -- d3) sin snapshot y con una URL inalcanzable: fallo declarado
    codigo de salida                   1
-   segundos hasta fallar              8.16
+   segundos hasta fallar              8.18
    ultima linea de la salida          maisa.erp.ErrorERP: SES-401: no se pudo obtener token tras varios intentos
    fichero de salida                  NO se creo
 ```
@@ -368,13 +366,11 @@ renombrado no vuelve a pagar OCR) y contiene `{"sha256": …, "texto": …}`.
 ```
 PDF en cache                       copia_2026_0518.pdf
 entrada                            b738972687b4819d34799d86da87fd279194b805a43aa7d6a5d0a2610e6692d2.json (338 bytes)
-(a) JSON truncado                  escalon=vision_ocr cache=False 15.85s
-(b) sha256 que no cuadra           escalon=vision_ocr cache=False 4.37s
+(a) JSON truncado                  escalon=vision_ocr cache=False 4.53s
+(b) sha256 que no cuadra           escalon=vision_ocr cache=False 4.24s
 decision con la cache legitima     ESCALAR
-motivos con la cache legitima      ['documento no legible: el escaneo no permite leer el IBAN de abono',
-                                    'NIF del emisor no legible', 'IBAN no legible',
-                                    'total de factura no legible', 'fecha no legible']
-(c) texto cambiado, sha intacto    escalon=cache_ocr cache=True 0.01s
+motivos con la cache legitima      ['documento no legible: el escaneo no permite leer el IBAN de abono']
+(c) texto cambiado, sha intacto    escalon=cache_ocr cache=True 0.00s
 decision con la cache manipulada   ESCALAR
 motivos que publica                ['pedido no identificable']
 entrada de cache restaurada        True
@@ -382,9 +378,9 @@ entrada de cache restaurada        True
 
 | Caso | Resultado | ¿Se recupera? |
 |------|-----------|----------------|
-| (a) JSON truncado a la mitad | `json.JSONDecodeError` capturado → se rehace por OCR (15,85 s) | **Sí, sola** |
-| (b) JSON válido con `sha256` falso | La entrada no cuadra con el PDF → se rehace por OCR (4,37 s) | **Sí, sola** |
-| (c) JSON válido, `sha256` correcto, **texto cambiado** | Se lee como `cache_ocr` en 0,01 s | **No** |
+| (a) JSON truncado a la mitad | `json.JSONDecodeError` capturado → se rehace por OCR (4,53 s) | **Sí, sola** |
+| (b) JSON válido con `sha256` falso | La entrada no cuadra con el PDF → se rehace por OCR (4,24 s) | **Sí, sola** |
+| (c) JSON válido, `sha256` correcto, **texto cambiado** | Se lee como `cache_ocr` en 0,00 s | **No** |
 
 El caso (c) es un **límite declarado**, no un olvido: la caché está anclada al `sha256` del
 **PDF**, no al del **texto**. Quien pueda escribir en `.cache/ocr` puede cambiar lo que el
@@ -408,36 +404,36 @@ una decisión inventada.
    con el OCR inalcanzable            requests.exceptions.ConnectionError
    mensaje                            HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded...
    [OK   ] el escalon de vision falla de forma ruidosa, no devuelve texto vacio
-   el mismo PDF con la cache          escalon=cache_ocr cache=True 2.6 ms
+   el mismo PDF con la cache          escalon=cache_ocr cache=True 5.1 ms
    [OK   ] con la cache presente el PDF se lee sin tocar el servicio
 ```
 
 Y si el OCR cae en mitad de un lote, la caché es lo que salva la entrega: los 471 PDF con
-capa de texto no lo tocan nunca y los 29 escaneados ya están en caché (2,6 ms cada uno).
+capa de texto no lo tocan nunca y los 29 escaneados ya están en caché (5,1 ms cada uno).
 
 ### 5.3 Pérdida de la caché
 
 ```
 -- E. OCR CAIDO / CACHE: LOTE CALIENTE CONTRA LOTE FRIO
    entradas de cache antes            29
-   segundos (lote frio)               234.55
+   segundos (lote frio)               139.08
    llamadas al servicio OCR (frio)    29
-   segundos dentro de OCR (frio)      863.73
+   segundos dentro de OCR (frio)      504.56
    entradas de cache reconstruidas    29
    segundos (lote caliente)           4.14
    llamadas al servicio OCR (caliente) 0
-   factor de aceleracion              56.6x
+   factor de aceleracion              33.6x
    [OK   ] el contenido reconstruido es identico byte a byte
    [OK   ] la cache original queda restaurada byte a byte -- 29 entradas
 ```
 
 La caché **se reconstruye sola** al primer lote frío y el resultado es **idéntico byte a
-byte**: la pérdida de la caché cuesta 234,55 s una vez (29 llamadas de OCR), no corrección.
-Nótese la aritmética de la concurrencia: 863,73 s de OCR dentro de 234,55 s de pared → el
+byte**: la pérdida de la caché cuesta 139,08 s una vez (29 llamadas de OCR), no corrección.
+Nótese la aritmética de la concurrencia: 504,56 s de OCR dentro de 139,08 s de pared → el
 escalón de OCR sí va en paralelo, aunque el contenedor sea el cuello (ver `capacidad.md` §5).
 El número absoluto depende de la carga del contenedor de OCR en ese momento (mediciones del
-mismo día: 143,42 s y 234,55 s); lo estable es la **forma**: 0 llamadas en caliente frente a
-29 en frío, y ×31,5 a ×56,6 de factor.
+mismo día: 139,08 s, 143,42 s y 234,55 s); lo estable es la **forma**: 0 llamadas en caliente frente a
+29 en frío, y ×33,6 a ×56,6 de factor.
 
 ---
 
@@ -466,7 +462,7 @@ mismo día: 143,42 s y 234,55 s); lo estable es la **forma**: 0 llamadas en cali
 1. **"El motor no decide si no puede decidir."** Un PDF corrupto no produce una factura
    vacía: exit 1 y ni un `outcomes.jsonl` a medias. *(§4)*
 2. **"Nada se escribe a medias."** `kill -9` a mitad de lote: el prefijo queda íntegro, sin
-   `cadena_rota`, y se reanuda encima encadenando el hash (68 = 65 + 3, `seq` sin hueco).
+   `cadena_rota`, y se reanuda encima encadenando el hash (65 = 62 + 3, `seq` sin hueco).
    Nunca hay entrega parcial publicada. *(§1)*
 3. **"El log se puede auditar."** Cambiar una decisión en la traza señala la línea exacta; y
    si alguien reescribe toda la cadena, el sello publicado lo delata. *(§2)*
@@ -483,7 +479,7 @@ mismo día: 143,42 s y 234,55 s); lo estable es la **forma**: 0 llamadas en cali
 
 | Qué | Bloque | Herramienta |
 |-----|--------|-------------|
-| Lote de referencia (4,14 s, 1002 eventos, sello `888ee32cc573…`) y caché caliente/fría | 0 y E | `tools/evidencia_resiliencia.py` |
+| Lote de referencia (4,14 s, 1002 eventos, sello `b8f20ca18cdc…`) y caché caliente/fría | 0 y E | `tools/evidencia_resiliencia.py` |
 | Muerte a mitad de lote y reanudación | A | ídem |
 | Manipulación de la traza y sello | B y C | ídem |
 | ERP caído, snapshot y fallo declarado | D | ídem (con el bridge **apagado**) |
@@ -492,14 +488,18 @@ mismo día: 143,42 s y 234,55 s); lo estable es la **forma**: 0 llamadas en cali
 | Caché corrupta o manipulada | G | ídem |
 | `ORA-00600`, `ERP-429`, caducidad de sesión, vivo vs snapshot | H (H1–H5) | ídem con `--erp-vivo` y `python3 corpus/maisa/alberto_erp.py` |
 
-Corridas finales: **2026-09-19 11:59–12:03**, `61/61 OK` (por defecto, bridge caído) y
-**11:52–11:53**, `68/68 OK` (`--erp-vivo`), exit 0 en ambos casos. Motor al medir:
-`norma.py 6867fbece01a08a5` · `lectura.py 4e66b880a52ad6bc` · `texto.py 5501ed225899ceb3` ·
-`procesa.py 50ad16f668db89cd` · `emit.py 574f0cb8977eef6e` · `erp.py 4363333f2cf94423` ·
-`trace.py 382350ad94ced8cd` · `reglas.toml a1933ebcde417995` (**norma_v3.1**). Si el motor
+Corridas finales: **2026-09-19 13:03–13:10**, `61/61 OK` (por defecto, bridge caído) y
+**11:52–11:53**, `68/68 OK` (`--erp-vivo`), exit 0 en ambos casos. El bloque H se midió
+antes del arreglo del extractor, pero ese arreglo no toca `erp.py`: las cifras de §3 siguen
+siendo las del motor actual. Motor al medir:
+`norma.py 1d989b63c503b915` · `lectura.py 4e66b880a52ad6bc` · `texto.py 03931b4e5c32fd3f` ·
+`procesa.py 3462ff955745bd99` · `emit.py 574f0cb8977eef6e` · `erp.py 0167dfac9429dd06` ·
+`trace.py 382350ad94ced8cd` · `reglas.toml be2cc0248ffe75c6` (**norma_v3.1**). Si el motor
 cambia, los números de este documento cambian con él: vuelve a lanzar el comando.
 
-> Nota de honestidad: una corrida anterior del mismo día (11:23) daba
-> `{'PAGAR': 448, 'ESCALAR': 43, 'NO_PAGAR': 9}` porque el motor aún no era `norma_v3.1`.
-> Las cifras de este documento son de la versión actual y se reproducen con el comando de
-> arriba.
+> Nota de honestidad: las cifras de este documento son de la revisión actual del motor. Una
+> corrida anterior del mismo día (11:23) daba `{'PAGAR': 443, 'ESCALAR': 48, 'NO_PAGAR': 9}`
+> porque el extractor no leía el importe de los escaneos que traen la etiqueta y su valor en
+> líneas distintas: cinco facturas limpias escalaban de más. Corregido el extractor, el
+> reparto es `{'PAGAR': 448, 'ESCALAR': 43, 'NO_PAGAR': 9}`, que es el que reproduce el
+> comando de arriba.

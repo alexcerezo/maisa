@@ -1,4 +1,4 @@
-# hackspain-ocr
+# maisa/hackspain-ocr
 
 Estructura de proyecto según `spec_y_plan.md`. Conciliación a tres bandas
 (PDF ↔ ERP ↔ Excel) para decidir `PAGAR` / `NO_PAGAR` / `ESCALAR`.
@@ -49,7 +49,7 @@ el plazo, pero su análisis de dominio es el que fijó la semántica de los esta
 # Motor de decisión (Python). No necesita red ni servicios: la caché de OCR de
 # los 29 escaneados va versionada en motor/.cache/ocr/.
 python -m pip install -r motor/requirements.txt
-cd hackspain-ocr
+cd maisa/hackspain-ocr
 PYTHONPATH=motor/src python -m maisa.procesa \
   --facturas data/facturas \
   --xlsx     data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
@@ -75,7 +75,7 @@ python alberto_erp.py --rapido
 # 2. Servicio de OCR (FastAPI + RapidOCR)
 cd ocr_service && uvicorn main:app --host 127.0.0.1 --port 8000
 
-# 3. Binario Rust (rutas relativas a la raiz de `hackspain-ocr/`)
+# 3. Binario Rust (rutas relativas a la raiz de `maisa/hackspain-ocr/`)
 cargo run --release -- --pdf-dir data/facturas --out outputs/outcomes.jsonl
 ```
 

@@ -3,7 +3,7 @@
 # el interprete ni los comandos ("/bin/sh^M: bad interpreter").
 #
 # Los comodines llevan `**/` delante a proposito: este .gitattributes vive en la
-# raiz de `maisa`, pero los scripts estan en `hackspain-ocr/docker/...`. Con el
+# raiz de `maisa`, pero los scripts estan en `maisa/hackspain-ocr/docker/...`. Con el
 # patron anterior (`docker/**`) no casaban con nada.
 **/docker/**/*.sh text eol=lf
 **/docker/**/*.js text eol=lf

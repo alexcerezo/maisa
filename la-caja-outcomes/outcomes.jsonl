@@ -311,7 +311,7 @@
 {"file_id": "FA-9507_catering.pdf", "result": "PAGAR"}
 {"file_id": "FA-9517_transportes.pdf", "result": "PAGAR"}
 {"file_id": "FA-9810_seguridad.pdf", "result": "PAGAR"}
-{"file_id": "copia_2026_0518.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "NIF del emisor no legible", "IBAN no legible", "total de factura no legible", "fecha no legible"]}
+{"file_id": "copia_2026_0518.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono"]}
 {"file_id": "factura_0088.pdf", "result": "PAGAR"}
 {"file_id": "factura_0102.pdf", "result": "PAGAR"}
 {"file_id": "factura_0279.pdf", "result": "PAGAR"}
@@ -470,8 +470,8 @@
 {"file_id": "factura_9590.pdf", "result": "PAGAR"}
 {"file_id": "factura_9696.pdf", "result": "PAGAR"}
 {"file_id": "factura_97183.pdf", "result": "PAGAR"}
-{"file_id": "fax_2026_0411.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "NIF del emisor no legible", "IBAN no legible", "total de factura no legible", "fecha no legible"]}
-{"file_id": "reimpresion_0712.pdf", "result": "ESCALAR", "motivos": ["IBAN de abono distinto del maestro: posible desvio de pago", "total de factura no legible"]}
+{"file_id": "fax_2026_0411.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "NIF del emisor no legible", "IBAN no legible", "base o IVA no legibles", "fecha no legible"]}
+{"file_id": "reimpresion_0712.pdf", "result": "ESCALAR", "motivos": ["IBAN de abono distinto del maestro: posible desvio de pago"]}
 {"file_id": "scan_001.pdf", "result": "PAGAR"}
 {"file_id": "scan_002.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono"]}
 {"file_id": "scan_003.pdf", "result": "PAGAR", "motivos": ["base o IVA no legibles"]}
@@ -488,13 +488,13 @@
 {"file_id": "scan_014.pdf", "result": "PAGAR", "motivos": ["base o IVA no legibles"]}
 {"file_id": "scan_015.pdf", "result": "PAGAR"}
 {"file_id": "scan_016.pdf", "result": "ESCALAR", "motivos": ["IBAN de abono distinto del maestro: posible desvio de pago"]}
-{"file_id": "scan_017.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "NIF del emisor no legible", "IBAN no legible", "total de factura no legible", "fecha no legible"]}
-{"file_id": "scan_018.pdf", "result": "ESCALAR", "motivos": ["IBAN de abono distinto del maestro: posible desvio de pago", "total de factura no legible"]}
-{"file_id": "scan_021.pdf", "result": "ESCALAR", "motivos": ["NIF del emisor no legible", "total de factura no legible", "fecha no legible"]}
-{"file_id": "scan_022.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "IBAN no legible", "total de factura no legible"]}
-{"file_id": "scan_023.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "NIF del emisor desconocido en el maestro", "IBAN no legible", "total de factura no legible", "fecha no legible"]}
-{"file_id": "scan_025.pdf", "result": "ESCALAR", "motivos": ["total de factura no legible"]}
-{"file_id": "scan_026.pdf", "result": "ESCALAR", "motivos": ["total de factura no legible"]}
-{"file_id": "scan_027.pdf", "result": "ESCALAR", "motivos": ["total de factura no legible"]}
-{"file_id": "scan_028.pdf", "result": "ESCALAR", "motivos": ["total de factura no legible"]}
-{"file_id": "scan_029.pdf", "result": "ESCALAR", "motivos": ["IBAN de abono distinto del maestro: posible desvio de pago", "total de factura no legible"]}
+{"file_id": "scan_017.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "NIF del emisor no legible", "IBAN no legible", "base o IVA no legibles", "fecha no legible"]}
+{"file_id": "scan_018.pdf", "result": "ESCALAR", "motivos": ["IBAN de abono distinto del maestro: posible desvio de pago"]}
+{"file_id": "scan_021.pdf", "result": "PAGAR"}
+{"file_id": "scan_022.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "IBAN no legible"]}
+{"file_id": "scan_023.pdf", "result": "ESCALAR", "motivos": ["documento no legible: el escaneo no permite leer el IBAN de abono", "base o IVA no legibles"]}
+{"file_id": "scan_025.pdf", "result": "PAGAR"}
+{"file_id": "scan_026.pdf", "result": "PAGAR"}
+{"file_id": "scan_027.pdf", "result": "PAGAR"}
+{"file_id": "scan_028.pdf", "result": "PAGAR"}
+{"file_id": "scan_029.pdf", "result": "ESCALAR", "motivos": ["IBAN de abono distinto del maestro: posible desvio de pago"]}

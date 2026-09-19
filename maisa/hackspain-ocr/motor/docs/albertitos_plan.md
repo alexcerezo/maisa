@@ -29,7 +29,7 @@ opcionales; **los omitimos en la entrega** para minimizar el riesgo de que un
 parser estricto se atragante. La traza completa se genera aparte, para el pitch.
 
 **Resultado del lote 1:** 500/500 líneas, un outcome por factura, sin
-duplicados. Distribución: **443 PAGAR · 48 ESCALAR · 9 NO_PAGAR**.
+duplicados. Distribución: **448 PAGAR · 43 ESCALAR · 9 NO_PAGAR**.
 
 ---
 
@@ -93,7 +93,7 @@ reejecutar es gratis.
 | **OCR (modelo)** | Traducir píxeles a texto. Solo se invoca para el 5,8% de la Caja. | No extrae campos, no normaliza, no decide. |
 | **Extractor + normalizadores (deterministas)** | Sacar NIF, pedido, fecha, base, IVA, total y convertirlos a tipos canónicos. | No adivina: si no puede convertir, devuelve `None` y eso es una señal. |
 | **Motor de reglas (determinista)** | Aplicar la norma v3 y asignar `PAGAR`/`NO_PAGAR`/`ESCALAR`. | No inventa datos que faltan. Nunca usa un LLM para la etiqueta final. |
-| **Persona (operador)** | Revisar los 48 `ESCALAR` con el PDF y la traza a la vista. | No revisa lo que el motor ya cerró con hecho duro. |
+| **Persona (operador)** | Revisar los 43 `ESCALAR` con el PDF y la traza a la vista. | No revisa lo que el motor ya cerró con hecho duro. |
 
 **Cómo trabajó el equipo.** El desarrollo se repartió entre personas y agentes
 de IA en paralelo: agentes de construcción para trazabilidad, pruebas y
@@ -125,10 +125,10 @@ sobre los 500 hechos registrados en la traza):
 
 | Regla | Facturas que la pasan | Facturas que la suspenden | De ellas, hechos duros | Informativas |
 |---|---:|---:|---:|---:|
-| `R1_identidad` | 478 | 18 | 0 | 1 |
-| `R2_pedido` | 471 | 29 | 0 | 0 |
-| `R3_iva` | 476 | 15 | 0 | 6 |
-| `R4_fecha` | 489 | 8 | 0 | 0 |
+| `R1_identidad` | 480 | 15 | 0 | 2 |
+| `R2_pedido` | 484 | 16 | 0 | 0 |
+| `R3_iva` | 486 | 2 | 0 | 9 |
+| `R4_fecha` | 489 | 5 | 0 | 3 |
 | `R5_estado` | 488 | 9 | **9** | 0 |
 | `R6_anomalia` | 0 | 14 | 0 | 20 |
 
@@ -271,7 +271,17 @@ bloque tiene un vecino limpio inmediatamente al lado.
 las que se les ha degradado la capa de texto. Un sistema que manda todo escaneo
 a `ESCALAR` falla el bloque entero. Nosotros lo tratamos como lo que es: un
 problema de **lectura**, no de **negocio**, y lo resolvemos cruzando con el ERP.
-Recuperamos 15 de los 29.
+Recuperamos **18 de los 29**.
+
+**El defecto que este bloque nos hizo encontrar.** Trabajar los escaneos destapó
+un fallo real del extractor. En visión el OCR imprime la etiqueta y su importe en
+**líneas distintas** —`TOTAL` en una línea y `774,40` en la siguiente—, y los
+separadores de `base`, `IVA` y `total` no admitían el salto de línea, así que el
+importe no llegaba a leerse. El efecto no era un dato sucio: era una decisión de
+más. **Cinco facturas limpias** —con NIF, IBAN, pedido y total legibles y
+coincidentes con el ERP— escalaban solo por no poder contrastar el importe. El
+arreglo son tres clases de caracteres y una prueba de regresión que falla si
+alguien las vuelve a estrechar; el reparto pasó de 443/48/9 a **448/43/9**.
 
 **Y hay 20 facturas con texto que intenta dar órdenes al sistema** (§ADR 4):
 19 en el cuerpo del PDF y **1 solo en los metadatos**.
