@@ -294,7 +294,7 @@ Dado `Factura` (del PDF) e índices en memoria de asientos y filas Excel:
 1. **Match por pedido** (fuerte): si `pedido` está en el índice del ERP,
    ese es el asiento candidato.
 2. **Match por (nif, importe ± tolerancia)** (medio): si no hay pedido,
-   buscar asientos con mismo NIF y con importe dentro de ±0,02 €.
+   buscar asientos con mismo NIF y con importe dentro de ±0,01 €.
 3. **Match por NIF único** (débil): si el NIF solo aparece en un asiento del ERP
    y otros campos no descuadran demasiado.
 4. **Cruce con Excel**: buscar filas del Excel donde aparezcan el pedido o el NIF
@@ -326,7 +326,7 @@ Orden de evaluación sobre `Evidencia`:
 **Reglas parametrizables** (leídas de `config/reglas.toml` o CLI flags):
 
 ```toml
-tolerancia_importe = 0.02       # euros
+tolerancia_importe = 0.01       # euros (Norma_Pagos_v3); 2 centimos ya es ESCALAR
 umbral_pago_maximo = 5000.00    # para override manual futuro
 score_minimo = 0.85             # confianza OCR
 ```

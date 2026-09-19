@@ -88,7 +88,8 @@ existe + filas Excel relacionadas + conflictos detectados) y evalúa:
 1. **Sin identificadores extraíbles** (ni NIF ni pedido en el PDF) → `ESCALAR`.
 2. **Asiento ERP en estado `PAGADA`** → `NO_PAGAR`, motivo `"asiento AS-xxxxx PAGADA"`.
 3. **Asiento ERP en `PENDIENTE` + importes conciliados** (PDF total ≈ ERP importe,
-   tolerancia ±0.02 €) → `PAGAR`, motivo `"asiento AS-xxxxx PENDIENTE, importes conciliados"`.
+   tolerancia ±0.01 €, que es la de `Norma_Pagos_v3`) → `PAGAR`, motivo
+   `"asiento AS-xxxxx PENDIENTE, importes conciliados"`.
 4. **Asiento ERP en `PENDIENTE` pero descuadre de importes** → `ESCALAR`,
    motivo `"descuadre: PDF 1234,50 vs ERP 1200,00"`.
 5. **No hay asiento en ERP pero sí filas relacionadas en Excel** → `ESCALAR`,
@@ -100,7 +101,7 @@ existe + filas Excel relacionadas + conflictos detectados) y evalúa:
 **Umbrales parametrizables** en `config/reglas.toml`:
 
 ```toml
-tolerancia_importe = 0.02       # euros
+tolerancia_importe = 0.01       # euros (Norma_Pagos_v3); 2 centimos ya es ESCALAR
 score_minimo       = 0.85       # confianza OCR mínima por campo crítico
 # reglas que Alberto puede añadir el sábado:
 # prohibido_pagar_proveedor = ["B12345678"]

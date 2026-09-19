@@ -329,7 +329,7 @@ aplicación. El diseño lógico los hace cumplir con `$jsonSchema`.
 | INV-5 | `resultado = NO_PAGAR` ⟹ existe `evidencia.asiento_id` con estado `PAGADA` **o** duplicado detectado | Bloqueo de pago legítimo |
 | INV-6 | `resultado = ESCALAR` ⟹ `motivo` no vacío | Escalado sin explicación para el operador |
 | INV-7 | `huella_negocio = nif|pedido` es **no única** por diseño | Un duplicado es un caso de negocio legítimo (→ `NO_PAGAR`), no un error de datos |
-| INV-8 | Todo importe es `Decimal128`, nunca `double` | Drift binario en conciliaciones de ±0,02 € |
+| INV-8 | Todo importe es `Decimal128`, nunca `double` | Drift binario en conciliaciones de ±0,01 € |
 | INV-9 | `decision.huellas` referencia `reglas_version`, `erp_snapshot_id` y `run_id` | Imposible detectar decisiones obsoletas |
 | INV-10 | Un expediente `COMPLETADA` es inmutable salvo `revision` | Pérdida de la traza original |
 
@@ -458,7 +458,7 @@ queda implícito.**
 | D-1 | MongoDB documental | PostgreSQL normalizado | 1 escritura atómica por expediente; esquema flexible para OCR/Excel |
 | D-2 | Documento raíz `expedientes` con subdocumentos embebidos | Colecciones separadas por fase | Evita transacciones en el camino crítico |
 | D-3 | `_id = file_id` | ObjectId autogenerado | Idempotencia natural y trazabilidad directa desde el nombre del PDF |
-| D-4 | `Decimal128` para importes | `double` | Exactitud en tolerancias de ±0,02 € |
+| D-4 | `Decimal128` para importes | `double` | Exactitud en tolerancias de ±0,01 € |
 | D-5 | `huella_negocio` con índice **no único** | Clave única `(nif, pedido)` | Los duplicados son un caso de negocio (→ `NO_PAGAR`) |
 | D-6 | Bitemporalidad mínima vía `decision.huellas` | Sin versionado | Permite detectar decisiones obsoletas tras `--lote2` o cambio de reglas |
 | D-7 | `eventos` como time-series con TTL 90 días | Colección normal sin TTL | Métricas con una sola agregación; crecimiento acotado |

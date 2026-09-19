@@ -4,9 +4,18 @@
 # Version logica del juego de reglas. Va a `Decision::huellas.reglas_version`,
 # asi que hay que subirla en el mismo commit que cambia una regla: es lo que
 # permite saber con que reglas se pago y que decisiones han quedado obsoletas.
-version = 1
+#
+# version 2 = tolerancia 0.02 -> 0.01. Se sube en el mismo commit que el cambio
+# de regla: las decisiones tomadas con version 1 usaban 0.02 EUR de margen y no
+# son comparables con las de version 2.
+version = 2
 
-tolerancia_importe = 0.02
+# Tolerancia de un centimo: el valor de la hoja `Norma_Pagos_v3` del Excel de
+# control (NO 0.02, que era la suposicion inicial del plan). Absorbe el ruido de
+# redondeo de un centimo (IVA al 21%, importes con tres decimales, el propio
+# Excel que trae basura de coma flotante) sin abrir la puerta a pagar de mas.
+# Diferencia de 2 centimos o mas -> R7 -> ESCALAR: "en la duda, ESCALAR" (ADR 6).
+tolerancia_importe = 0.01
 umbral_pago_maximo = 5000.00
 score_minimo = 0.85
 

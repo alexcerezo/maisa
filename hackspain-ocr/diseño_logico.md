@@ -540,7 +540,7 @@ db.createCollection("asientos", {
 | `_id_` | `{_id: 1}` | Lectura directa por asiento + snapshot | Clave compuesta natural |
 | `ix_pedido_vigente` | `{pedido: 1, vigente: 1}` | **Match por pedido** (estrategia fuerte) | El reconciler busca por pedido en el snapshot activo |
 | `ix_nif_vigente` | `{nif: 1, vigente: 1}` | **Match por NIF único** (estrategia débil) | Fallback cuando no hay pedido |
-| `ix_nif_importe_vigente` | `{nif: 1, importe: 1, vigente: 1}` | **Match por (nif, importe ± tolerancia)** | Rango sobre `importe` con prefijo `nif` fijo |
+| `ix_nif_importe_vigente` | `{nif: 1, importe: 1, vigente: 1}` | **Match por (nif, importe ± tolerancia)** | Rango sobre `importe` (±0,01 €) con prefijo `nif` fijo |
 | `ix_snapshot` | `{snapshot_id: 1}` | Marcar/desmarcar `vigente` al refetchear | Actualización masiva por snapshot |
 | `ix_vigente_parcial` | `{vigente: 1}` **parcial** `{vigente: true}` | Cualquier consulta del snapshot activo | Índice parcial: solo ~516 entradas de los ~2 500 totales |
 
@@ -686,12 +686,12 @@ db.createCollection("reglas_versiones", {
 {
   _id: 3,
   hash: "9f2c1a7b4e8d3f6a0b5c9e2d7f4a1b8c3e6d9f2a5b8c1e4d7f0a3b6c9e2d5f8a",
-  contenido_toml: "tolerancia_importe = 0.02\numbral_pago_maximo = 5000.00\nscore_minimo = 0.85\n",
+  contenido_toml: "tolerancia_importe = 0.01\numbral_pago_maximo = 5000.00\nscore_minimo = 0.85\n",
   vigente: true,
   creado_en: ISODate("2026-09-19T09:00:00Z"),
   descripcion: "Reglas iniciales del lote 1",
   parametros: {
-    tolerancia_importe: NumberDecimal("0.02"),
+    tolerancia_importe: NumberDecimal("0.01"),
     umbral_pago_maximo: NumberDecimal("5000.00"),
     score_minimo: 0.85,
     prohibido_pagar_proveedor: null,
@@ -1143,7 +1143,7 @@ patrón de acceso que lo consuma.**
 |---|---|---|---|---|
 | P1 | ¿Ya está procesada esta factura? (idempotencia) | `expedientes` | `findOne({_id: file_id})` | `_id_` |
 | P2 | Match por pedido (estrategia fuerte) | `asientos` | `findOne({pedido, vigente: true})` | `ix_pedido_vigente` |
-| P3 | Match por (nif, importe ± tolerancia) | `asientos` | `find({nif, vigente: true, importe: {$gte, $lte}})` | `ix_nif_importe_vigente` |
+| P3 | Match por (nif, importe ± tolerancia) | `asientos` | `find({nif, vigente: true, importe: {$gte, $lte}})` (±0,01 €) | `ix_nif_importe_vigente` |
 | P4 | Match por NIF único (estrategia débil) | `asientos` | `find({nif, vigente: true})` | `ix_nif_vigente` |
 | P5 | Cruce con Excel por NIF | `excel_filas` | `find({"indices.nif": nif})` | `ix_indices_nif` |
 | P6 | Cruce con Excel por pedido | `excel_filas` | `find({"indices.pedido": pedido})` | `ix_indices_pedido` |
@@ -1745,7 +1745,7 @@ vigente y fresco, no se toca ni el ERP ni el fichero.
 | L-2 | Subdocumentos embebidos en `expedientes` | 1 escritura atómica; sin transacciones en el camino crítico |
 | L-3 | `oneOf` por `estado_proceso` en el validador | Hace cumplir INV-2/INV-3 a nivel de base de datos |
 | L-4 | `enum` en `resultado` | Hace cumplir INV-1; el JSONL no puede ser inválido |
-| L-5 | `Decimal128` en todos los importes | Hace cumplir INV-8; exactitud en tolerancias de ±0,02 € |
+| L-5 | `Decimal128` en todos los importes | Hace cumplir INV-8; exactitud en tolerancias de ±0,01 € |
 | L-6 | `huella_negocio` con índice no único | Hace cumplir INV-7; los duplicados son caso de negocio |
 | L-7 | `_id` compuesto `<snapshot_id>#<asiento_id>` | Permite versionar el ERP sin perder historia |
 | L-8 | `vigente` + índice parcial | Consultas del snapshot activo sobre un índice diminuto |

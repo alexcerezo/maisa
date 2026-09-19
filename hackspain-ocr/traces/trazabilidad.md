@@ -195,7 +195,7 @@ Este fichero cierra el ciclo de auditoría. Permite justificar ante auditores el
   "reglas_evaluadas": [
     "R1_IDENTIFICADORES_MINIMOS: PASS (NIF='B87654321', Pedido='PED-2009-8812')",
     "R2_ERP_PAGADA: NO_MATCH (Estado ERP='PENDIENTE')",
-    "R3_ERP_PENDIENTE_CONCILIADO: MATCH (Diferencia=0.00 € <= Tolerancia=0.02 €)"
+    "R3_ERP_PENDIENTE_CONCILIADO: MATCH (Diferencia=0.00 € <= Tolerancia=0.01 €)"
   ],
   "timings_ms": {
     "ocr": 342,
@@ -447,7 +447,7 @@ Gracias a que cada factura guarda de manera limpia sus artefactos en `traces/<fi
 ## 7. Argumentario para la Defensa (Respuestas al Tribunal)
 
 * **P: "¿Por qué habéis pagado la factura 312 si el Excel decía otra cosa?"**
-*R:* "Según el **ADR 1**, el ERP legado es la fuente de verdad contable oficial según el manual del cliente. En `traces/factura_312.pdf/evidencia.json` se comprueba que el asiento del ERP estaba `PENDIENTE` con importe exacto dentro de la tolerancia de 0.02 €, mientras que la discrepancia del Excel se auditó y categorizó como contexto desactualizado."
+*R:* "Según el **ADR 1**, el ERP legado es la fuente de verdad contable oficial según el manual del cliente. En `traces/factura_312.pdf/evidencia.json` se comprueba que el asiento del ERP estaba `PENDIENTE` con importe exacto dentro de la tolerancia de 0.01 € (la de `Norma_Pagos_v3`), mientras que la discrepancia del Excel se auditó y categorizó como contexto desactualizado."
 * **P: "¿Qué pasa si el sistema se apaga en la factura 240?"**
 *R:* "El método `already_processed()` comprueba la existencia de `traces/<file_id>/decision.json`. Las 239 facturas cerradas atómicamente no se vuelven a procesar ni a mandar al OCR. El sistema reanuda de manera idempotente desde la 240 en menos de un segundo."
 * **P: "¿Cómo manejasteis las caídas periódicas del ERP?"**

@@ -355,7 +355,12 @@ mod tests {
         }
     }
 
-    const TOL: &str = "0.02";
+    /// Tolerancia de producción: **un céntimo**, el valor de `Norma_Pagos_v3`.
+    /// Es el mismo valor que `ReglasConfig::default().tolerancia_importe`, porque
+    /// "conciliado" tiene que significar lo mismo al emparejar y al decidir. Si
+    /// esto se separa del valor real, los tests dejan de probar el
+    /// comportamiento real.
+    const TOL: &str = "0.01";
 
     #[test]
     fn normaliza_claves_de_pedido_y_nif() {
@@ -414,6 +419,8 @@ mod tests {
         assert!(ev.asiento.is_none(), "el ERP no se puede tocar sin identificar");
     }
 
+    /// Match medio en su frontera: un céntimo de diferencia (la tolerancia
+    /// exacta) todavía empareja.
     #[test]
     fn match_medio_por_nif_e_importe_dentro_de_tolerancia() {
         let asientos = vec![
@@ -424,7 +431,7 @@ mod tests {
 
         // Sin pedido en el PDF: se cae a (NIF, importe).
         let ev = conciliar(
-            &factura(Some("B12345678"), None, Some("1234.48")),
+            &factura(Some("B12345678"), None, Some("1234.49")),
             &erp,
             &IndiceExcel::default(),
             d(TOL),
@@ -432,6 +439,29 @@ mod tests {
 
         assert_eq!(ev.match_por, MatchStrategy::ByNifYImporte);
         assert_eq!(ev.asiento_id.as_deref(), Some("AS-00412"));
+    }
+
+    /// Dos céntimos de ruido ya invalidan el emparejamiento por importe. Como los
+    /// dos asientos comparten NIF, tampoco se puede caer al match débil: la
+    /// factura queda sin asiento y acabará en `ESCALAR`. Es deliberado — no se
+    /// paga contra un importe "que casi cuadra".
+    #[test]
+    fn dos_centimos_de_ruido_impiden_el_match_por_importe() {
+        let asientos = vec![
+            asiento("AS-00100", "B12345678", "PED-99999", "300.00", EstadoAsiento::Pendiente),
+            asiento("AS-00412", "B12345678", "PED-00123", "1234.50", EstadoAsiento::Pendiente),
+        ];
+        let erp = IndiceErp::nuevo(&asientos);
+
+        let ev = conciliar(
+            &factura(Some("B12345678"), None, Some("1234.48")),
+            &erp,
+            &IndiceExcel::default(),
+            d(TOL),
+        );
+
+        assert_eq!(ev.match_por, MatchStrategy::None);
+        assert!(ev.asiento_id.is_none());
     }
 
     #[test]

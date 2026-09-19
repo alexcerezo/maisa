@@ -45,7 +45,14 @@ pub struct ReglasConfig {
     /// sábado se inyecte la regla nueva. La declara el propio `reglas.toml` para
     /// que la traza apunte al artefacto exacto, sin depender de un hash.
     pub version: u32,
-    /// Tolerancia de conciliación de importes, en euros (p. ej. 0.02).
+    /// Tolerancia de conciliación de importes, en euros.
+    ///
+    /// Producción la fija a **un céntimo**, que es lo que dice la hoja
+    /// `Norma_Pagos_v3` del Excel de control. Absorbe el ruido de redondeo de un
+    /// céntimo (IVA al 21%, tercer decimal, el propio Excel que trae basura de
+    /// coma flotante) sin abrir la puerta a pagar de más: **dos** céntimos de
+    /// diferencia ya caen en R7 (`ESCALAR`). El parámetro se declara aquí para
+    /// poder relajarlo o endurecerlo sin recompilar.
     pub tolerancia_importe: Decimal,
     /// Umbral a partir del cual un pago exige revisión manual (reservado).
     pub umbral_pago_maximo: Decimal,
@@ -72,7 +79,9 @@ impl Default for ReglasConfig {
     fn default() -> Self {
         Self {
             version: 1,
-            tolerancia_importe: Decimal::new(2, 2),       // 0.02
+            // Un centimo: coincide con `config/reglas.toml`. Ver el doc de
+            // `ReglasConfig::tolerancia_importe` para el porqué.
+            tolerancia_importe: Decimal::new(1, 2),       // 0.01
             umbral_pago_maximo: Decimal::new(500_000, 2), // 5000.00
             score_minimo: 0.85,
             prohibido_pagar_proveedor: Vec::new(),
@@ -253,6 +262,11 @@ pub fn decidir(
 }
 
 /// ¿Los dos importes concilian dentro de la tolerancia? (`|a − b| ≤ tol`).
+///
+/// El límite es **inclusivo**, y con `tol = 0` esto degenera en igualdad exacta:
+/// no hace falta una rama especial para el caso cero porque `Decimal` es
+/// aritmética decimal, no `f64`, así que `1234.5` y `1234.50` comparan iguales
+/// pese a tener distinta escala.
 pub(crate) fn concilia(a: Decimal, b: Decimal, tolerancia: Decimal) -> bool {
     (a - b).abs() <= tolerancia
 }
@@ -406,13 +420,44 @@ mod tests {
         assert!(dec.motivo.contains("importes conciliados"));
     }
 
+    /// Tolerancia de producción = 1 céntimo, y el límite es **inclusivo**
+    /// (`|a − b| <= tol`): 0,01 € de diferencia todavía es "conciliado".
     #[test]
-    fn tolerancia_de_dos_centimos_se_respeta() {
+    fn un_centimo_de_diferencia_concilia_y_paga() {
         let mut f = factura_base();
-        f.total = leido(d("1234.52"), "TOTAL 1.234,52 EUR"); // 0.02 → dentro
+        f.total = leido(d("1234.51"), "TOTAL 1.234,51 EUR");
         let ev = evidencia(Some(asiento(EstadoAsiento::Pendiente, "1234.50")), &[], &[]);
         let dec = decidir(&f, &ev, &ReglasConfig::default(), huellas());
         assert_eq!(dec.resultado, Resultado::Pagar);
+        assert!(dec.motivo.contains("importes conciliados"), "motivo: {}", dec.motivo);
+    }
+
+    /// El centímetro siguiente ya no: **dos** céntimos es descuadre, no ruido.
+    /// Es la frontera exacta del valor de `Norma_Pagos_v3`, así que si alguien
+    /// toca la tolerancia este test es el que avisa de que se ha movido.
+    #[test]
+    fn dos_centimos_de_diferencia_ya_son_descuadre_y_escalan() {
+        let mut f = factura_base();
+        f.total = leido(d("1234.52"), "TOTAL 1.234,52 EUR");
+        let ev = evidencia(Some(asiento(EstadoAsiento::Pendiente, "1234.50")), &[], &[]);
+        let dec = decidir(&f, &ev, &ReglasConfig::default(), huellas());
+        assert_eq!(dec.resultado, Resultado::Escalar);
+        assert!(dec.motivo.contains("descuadre"), "motivo: {}", dec.motivo);
+    }
+
+    /// El importe exacto se sigue pagando: sin este test, apretar la tolerancia
+    /// podría degenerar en un motor que no paga nunca y nadie lo notaría.
+    ///
+    /// El PDF trae `1234.5` y el ERP `1234.50`: distinta escala, mismo valor.
+    /// `concilia` resta, así que la escala se normaliza sola.
+    #[test]
+    fn el_importe_exacto_sigue_pagando() {
+        let mut f = factura_base();
+        f.total = leido(d("1234.5"), "TOTAL 1.234,5 EUR");
+        let ev = evidencia(Some(asiento(EstadoAsiento::Pendiente, "1234.50")), &[], &[]);
+        let dec = decidir(&f, &ev, &ReglasConfig::default(), huellas());
+        assert_eq!(dec.resultado, Resultado::Pagar);
+        assert!(dec.motivo.contains("importes conciliados"));
     }
 
     #[test]
@@ -603,8 +648,11 @@ mod tests {
         ))
         .expect("reglas.toml existe");
         let reglas = ReglasConfig::from_toml_str(&toml_src).expect("TOML válido");
-        assert_eq!(reglas.version, 1);
-        assert_eq!(reglas.tolerancia_importe, d("0.02"));
+        assert_eq!(reglas.version, 2);
+        assert_eq!(reglas.tolerancia_importe, d("0.01"));
+        // El defecto del código y el fichero de producción no pueden divergir:
+        // si divergen, `cargo test --bins` pasa y el lote real decide distinto.
+        assert_eq!(reglas.tolerancia_importe, ReglasConfig::default().tolerancia_importe);
         assert_eq!(reglas.umbral_pago_maximo, d("5000.00"));
         assert!((reglas.score_minimo - 0.85).abs() < 1e-9);
         assert!(reglas.prohibido_pagar_proveedor.is_empty());
