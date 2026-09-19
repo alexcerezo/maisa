@@ -15,6 +15,12 @@ Albertitos (motor de decisión de pago de facturas, HackSpain 2026).
 > **La API no decide nada.** Las decisiones de negocio las toma el motor; esto es una capa de
 > transporte y lectura. Si un dato no está en la traza o en Mongo, aquí no aparece.
 
+**Cómo leer este documento.** Si vienes de cero: §0 (resumen y **vocabulario** — sin él, nombres
+como `motivos`, `hechos` o `vigente` no significan nada) y §1 (topología). Si ya sabes qué es esto y
+solo quieres consumirlo: §3.1 dice para qué sirve cada endpoint, §3.5 trae salidas reales de todos
+ellos y §3.7 el camino concreto que va a recorrer el frontend. Si lo que quieres es **levantarlo**:
+§5 y `docs/arranque_servicios.md`.
+
 ---
 
 ## 0. Resumen rápido
@@ -29,6 +35,38 @@ Albertitos (motor de decisión de pago de facturas, HackSpain 2026).
 | ¿Hace falta alguna cabecera? | Solo `X-API-Key` **si** arrancas con `API_KEY` definida. Por defecto, ninguna. |
 | ¿Está expuesta la base de datos? | **No.** Mongo sigue en `127.0.0.1:27017` y no se publica. |
 | ¿Hay CORS que configurar? | No, si el frontend se sirve desde la propia API (mismo origen). |
+
+### Vocabulario: las palabras que usa el resto del documento
+
+Todo esto lo produce el motor; la API solo lo transporta. Los nombres de la izquierda son
+**literales** de las respuestas JSON.
+
+| Término | Qué es |
+|---|---|
+| **traza** | `maisa/outputs/outcomes_traza.jsonl`: una línea por factura con **todo** (decisión, motivos, hechos, campos leídos, metadatos de lectura). Es la fuente de `/api/facturas*`. |
+| **entrega** (*outcomes*) | `maisa/outputs/outcomes.jsonl`: el fichero que se entrega, con **solo dos claves**, `file_id` y `result`. Los motivos **no** van aquí; viven en la traza. `/api/estadisticas` comprueba que los dos ficheros cuadran (`entrega.coincide_con_traza`). |
+| `file_id` | El nombre del PDF **y la clave primaria de todo el sistema** (`2026-01-08_P001.pdf`). Con él se pide el detalle, el PDF, y se cruzan las decisiones. |
+| `resultado` · `result` | La decisión, y solo puede ser `PAGAR`, `NO_PAGAR` o `ESCALAR`. Es el mismo dato con dos nombres: `result` en el fichero de entrega, `resultado` en la API. |
+| `motivos` | Lista de motivos **en lenguaje natural**, pensados para que los lea un humano. `[]` (lista vacía) en un `PAGAR` limpio: **eso es lo bueno**, no un fallo. |
+| `motivo_principal` | El primero de `motivos`, ya listo para pintar en una tabla. Es **`null`** (no `""`) cuando no hay motivos. |
+| `hechos` | La **evidencia estructurada**: una entrada por regla evaluada (`R1_identidad`, `R2_pedido`, `R3_iva`, `R4_fecha`, `R5_estado`, `R6_anomalia`) con `ok`, `motivo`, `datos` (los valores que se compararon), `duro`, `informativo` y `nombre` (etiqueta legible por máquina, o `""`). Es lo que permite **auditar** por qué se decidió algo. |
+| `duro` | `true` = incumplimiento que **bloquea el pago**. Hoy solo lo usa `R5_estado`/`pago_duplicado`, que da `NO_PAGAR`. |
+| `informativo` | `true` = **aviso que no bloquea** (p. ej. `R6_anomalia` cuando el documento trae texto dirigido al sistema: se marca y se sigue). Un hecho con `ok: false` puede no ser ni `duro` ni `informativo`: es una anomalía que se refleja pero no decide. |
+| `campos` | Todo lo que el motor extrajo: `nif`, `iban`, `pedido`, `base`, `iva`, `total`, `fecha`… más los **candidatos** (`*_candidatos`, lo que aparecía en el texto) y lo que había en el maestro del ERP (`*_maestro`, `importe_erp`, `estado_erp`). **No siempre tiene las mismas claves**: entre 23 y 25 según el documento. |
+| `lectura` | Cómo se leyó el documento: `metodo_lectura` (`texto_determinista` o `vision_ocr`), `escalon_lectura` (`capa_texto` o `cache_ocr`), `calidad_lectura` (0–1), `segundos_lectura`, `sospechosos` y `sospechosos_meta`. |
+| `lote` | Agrupación del motor. Hoy todo va en el lote `1`. |
+| `asiento` · `asiento_id` | Una línea del ERP simulado, con id `AS-00096`. El catálogo completo vive en Mongo y se consulta con `/api/asientos`. |
+| `snapshot` | Una descarga completa del ERP (`snap-2026-09-19T08-25-58Z`), con `total_asientos`, `paginas`, `duracion_ms` y `reintentos`. |
+| `vigente` | Solo un snapshot (y sus asientos) está vigente a la vez: el que refleja el estado actual del ERP. Es un booleano, no una fecha. |
+| `estado_erp` | Estado del pedido en el ERP: `PENDIENTE`, `PAGADA`… y puede ser `null` si no se encontró. |
+| `desvio_importe` | Diferencia entre el total de la factura y el importe del ERP (`0.0` = cuadra). |
+| `identificacion_fiable` | El motor está seguro de a quién pertenece la factura (NIF, IBAN y pedido cuadran). |
+| `version_norma` | Versión del juego de reglas que tomó la decisión (`norma_v3.1`). |
+
+> **Dos ficheros, no uno.** La entrega es deliberadamente pobre: **solo `file_id` y `result`**. Todo
+> el detalle (motivos, hechos, campos) vive en la traza, que no se entrega. Por eso
+> `GET /api/facturas` lee la traza y no la entrega, y por eso el visor puede enseñar motivos aunque
+> la entrega no los lleve.
 
 ---
 
@@ -243,20 +281,20 @@ Los datos van bajo `/api`. `/health`, `/docs` y `/` quedan fuera del prefijo.
 
 ### 3.1 Resumen
 
-| Método | Ruta | Datos de | Cabeceras | Códigos |
-|---|---|---|---|---|
-| `GET` | `/health` | Mongo + OCR + traza | — | `200` siempre (el estado va en el cuerpo) |
-| `GET` | `/health/ready` | ídem, solo el veredicto | — | `200` listo · `503` falta algo crítico |
-| `GET` | `/api/facturas` | traza | `X-API-Key` | `200` · `400` · `503` |
-| `GET` | `/api/facturas/{file_id}` | traza | `X-API-Key` | `200` · `404` · `503` |
-| `GET` | `/api/facturas/{file_id}/pdf` | disco | `X-API-Key` | `200` PDF · `404` · `503` |
-| `GET` | `/api/asientos` | Mongo | `X-API-Key` | `200` · `503` |
-| `GET` | `/api/asientos/{asiento_id}` | Mongo | `X-API-Key` | `200` · `404` · `503` |
-| `GET` | `/api/snapshots` | Mongo | `X-API-Key` | `200` · `503` |
-| `GET` | `/api/estadisticas` | traza + Mongo | `X-API-Key` | `200` |
-| `POST` | `/api/ocr` | proxy al OCR | `X-API-Key` + multipart | `200` · `400` · `413` · `422` · `503` |
-| `GET` | `/api/meta` | configuración | `X-API-Key` | `200` |
-| `GET` | `/` | frontend estático | — | `200` · `404` |
+| Método | Ruta | Datos de | Para qué sirve | Cabeceras | Códigos |
+|---|---|---|---|---|---|
+| `GET` | `/health` | Mongo + OCR + traza | Comprobar dependencias con detalle y latencias | — | `200` siempre (el estado va en el cuerpo) |
+| `GET` | `/health/ready` | ídem, solo el veredicto | Sonda para Docker: ¿puedo servir? | — | `200` listo · `503` falta algo crítico |
+| `GET` | `/api/facturas` | traza | La tabla del visor: listar y filtrar decisiones | `X-API-Key` | `200` · `400` · `503` |
+| `GET` | `/api/facturas/{file_id}` | traza | El detalle: motivos, hechos y campos de una factura | `X-API-Key` | `200` · `404` · `503` |
+| `GET` | `/api/facturas/{file_id}/pdf` | disco | El PDF original, para incrustarlo en un `<iframe>` | `X-API-Key` | `200` PDF · `404` · `503` |
+| `GET` | `/api/asientos` | Mongo | El catálogo del ERP simulado | `X-API-Key` | `200` · `503` |
+| `GET` | `/api/asientos/{asiento_id}` | Mongo | Un asiento concreto | `X-API-Key` | `200` · `404` · `503` |
+| `GET` | `/api/snapshots` | Mongo | Las descargas del ERP y cuál está vigente | `X-API-Key` | `200` · `503` |
+| `GET` | `/api/estadisticas` | traza + Mongo | Los contadores del panel de cabecera | `X-API-Key` | `200` |
+| `POST` | `/api/ocr` | proxy al OCR | Leer un PDF suelto sin pasar por el motor | `X-API-Key` + multipart | `200` · `400` · `413` · `422` · `503` |
+| `GET` | `/api/meta` | configuración | Saber qué versión y qué configuración está viva | `X-API-Key` | `200` |
+| `GET` | `/` | frontend estático | Servir el visor si está en `UI_DIR`; si no, JSON informativo | — | `200` siempre |
 
 ### 3.2 Parámetros
 
@@ -272,7 +310,9 @@ Los datos van bajo `/api`. `/health`, `/docs` y `/` quedan fuera del prefijo.
 | `offset` | entero ≥ 0 | `0` | Desplazamiento. |
 
 La respuesta siempre trae `total`, `limit` (**el realmente aplicado**), `offset`, `devueltas` e
-`items`.
+`items`. `total` es cuántos hay **después de filtrar** (no cuántos se devuelven), `devueltas` es
+`items.length`, y el recorte de `limit` a `MAX_LIMIT` **no es un error**: `?limit=99999` responde
+`"limit": 500`. Para paginar: pide páginas mientras `offset + devueltas < total`.
 
 **`GET /api/asientos`** — `vigente` (bool), `q` (busca en `asiento_id`, `nif` y `pedido`),
 `limit`, `offset`.
@@ -329,6 +369,11 @@ stateDiagram-v2
         /health/ready → 503 si lo caído es crítico
     end note
 ```
+
+`/health/ready` devuelve **`200`** solo cuando **todas** las dependencias listadas en
+`CRITICAL_DEPS` responden, y **`503`** si cae alguna, con `listo: false` y `criticas_caidas` en el
+cuerpo. No comprueba los índices de Mongo (eso lo hace solo `/health`). Con `CRITICAL_DEPS` vacío
+siempre es `200`.
 
 ### 3.5 Ejemplos `curl` (salidas reales)
 
@@ -489,6 +534,83 @@ Formato uniforme, mensajes en español, sin trazas internas ni cadenas de conexi
 | `mongo_no_disponible` | `503` | Mongo no responde. |
 | `error_ocr` | `503` | El OCR falla; se propaga el mensaje original. |
 
+### 3.7 Recetas: el camino que va a recorrer el frontend
+
+Cinco llamadas cubren el visor entero. Los ejemplos van contra la LAN (`10.0.0.75`); añade
+`-H 'X-API-Key: ...'` en todas si `API_KEY` está definida.
+
+**1. La cabecera del panel** — dos números y a pintar:
+
+```console
+$ curl -s http://10.0.0.75:8010/api/estadisticas
+{"total": 500,
+ "por_resultado": {"PAGAR": 448, "NO_PAGAR": 9, "ESCALAR": 43},
+ "asientos_vigentes": 516, ...}
+```
+
+**2. La tabla, filtrada y paginada** — lo que hay que revisar a mano:
+
+```console
+$ curl -s 'http://10.0.0.75:8010/api/facturas?resultado=ESCALAR&limit=50&offset=0'
+$ curl -s 'http://10.0.0.75:8010/api/facturas?q=PO-2026-0476'   # búsqueda libre
+```
+
+**3. El detalle de la fila pulsada** — aquí están los `motivos` en lenguaje natural y la evidencia:
+
+```console
+$ curl -s http://10.0.0.75:8010/api/facturas/2026-0233-A_catering.pdf
+{"resultado": "ESCALAR",
+ "motivos": ["el pedido PO-2026-0492 aparece en mas de una factura del lote: tambien en factura_41082.pdf"],
+ "hechos": [{"regla": "R6_anomalia", "ok": false, "motivo": "pedido repetido en el lote",
+             "datos": {"pedido": "PO-2026-0492", "asiento": "AS-00492",
+                       "otros_documentos": ["factura_41082.pdf"]},
+             "duro": false, "informativo": false, "nombre": "si_pedido_repetido"}, ...],
+ "resumen": {...}}   # el item del listado, idéntico
+```
+
+**4. El PDF original**, sin descargarlo (`content-disposition: inline`):
+
+```html
+<iframe src="http://10.0.0.75:8010/api/facturas/2026-0233-A_catering.pdf/pdf"></iframe>
+```
+
+**5. Leer un PDF que aún no está en la traza** (subida directa al OCR, sin pasar por el motor):
+
+```console
+$ curl -s -X POST 'http://10.0.0.75:8010/api/ocr?engine=auto' -F file=@nueva.pdf
+{"texto": "FACTURA\n\n...", "motor": "cloud", "paginas": 1, "segundos_ocr": 4.4, ...}
+```
+
+El orden recomendado de arranque del visor: **`/health/ready` → `/api/estadisticas` → `/api/facturas`
+→ detalle y PDF bajo demanda**. Con eso el panel sale con dos llamadas y el resto se pide al pulsar,
+no al cargar.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Visor (navegador)
+    participant API as albertitos-api
+    participant M as Mongo
+    participant O as OCR
+    UI->>API: GET /health/ready
+    API->>M: ping + indices
+    API->>O: GET /health
+    API-->>UI: 200 listo (o 503 si falta algo critico)
+    UI->>API: GET /api/estadisticas
+    API->>M: count asientos vigentes
+    API-->>UI: contadores del panel
+    UI->>API: GET /api/facturas?resultado=ESCALAR&limit=50
+    API-->>UI: total + items (la tabla)
+    UI->>API: GET /api/facturas/{file_id}
+    API-->>UI: motivos + hechos + campos (el detalle)
+    UI->>API: GET /api/facturas/{file_id}/pdf
+    API-->>UI: PDF inline (el iframe)
+    UI->>API: GET /api/asientos?q=PO-2026-0476
+    API->>M: find sobre asientos vigentes
+    M-->>API: el asiento del ERP
+    API-->>UI: el asiento del ERP
+```
+
 ---
 
 ## 4. Variables de entorno
@@ -513,7 +635,7 @@ Mongo vive en `maisa/.env`, que no se versiona.
 | `ERP_URL` | `http://127.0.0.1:8009` | Informativo; la API no consulta el ERP. |
 | `OUTPUTS_DIR` | `maisa/outputs` (repo) / `/datos/outputs` (Docker) | Traza y entrega del motor. Solo lectura. |
 | `FACTURAS_DIR` | `maisa/data/facturas` / `/datos/facturas` | PDFs originales. Solo lectura. |
-| `UI_DIR` | `maisa/ui` / `/datos/ui` | Frontend estático. Si está vacío, `/` devuelve un mensaje informativo. |
+| `UI_DIR` | `maisa/ui` / `/datos/ui` | Frontend estático (bind mount). Si hay `index.html`, `/` lo sirve; si no, `/` devuelve un JSON informativo. La decisión se toma **en cada petición**, así que añadir o quitar el fichero no requiere reiniciar. |
 | `CORS_ORIGINS` | 4 orígenes locales | Lista blanca separada por comas. Vacío = solo orígenes locales. `*` se acepta pero **desactiva las credenciales**. |
 | `CORS_ALLOW_CREDENTIALS` | `false` | Nunca `true` junto con `*`. |
 | `API_KEY` | vacío | Si se define, exige `X-API-Key` en todo salvo `/health`, `/health/ready`, `/docs` y `/openapi.json`. Si está vacío, la API arranca en **modo abierto** (lo avisa en el log y en `/api/meta`). |
