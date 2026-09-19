@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 axum = { version = "0.7", features = ["multipart"] }
 tokio = { version = "1.36", features = ["full"] }
-mongodb = "2.8"
+mongodb = "3.2"
 # `multipart`: `ocr.rs` manda el PDF como un unico campo de formulario
 # (`"file"`, TRASPASO.md §3.3), que es lo que espera el servicio FastAPI.
 reqwest = { version = "0.11", features = ["json", "multipart"] }
