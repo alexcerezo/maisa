@@ -1,6 +1,8 @@
 # MongoDB 7 para el sistema Albertitos.
-# Arranque:     cp .env.example .env  &&  docker compose up -d
-# Verificacion: docker compose exec mongo mongosh --eval "rs.status().ok"  -> 1
+# Arranque:     docker network create albertitos_net   # una sola vez (red compartida)
+#               cp .env.example .env  &&  docker compose up -d
+# Verificacion: docker compose exec mongo mongosh -u <root> -p <pass> \
+#                 --authenticationDatabase admin --eval "rs.status().ok"  -> 1
 #
 # Decisiones de diseno (ver diseno_logico.md §13):
 #   - Replica set de 1 nodo (rs0): habilita change streams (UI en vivo) y
@@ -25,7 +27,10 @@ services:
     container_name: albertitos-mongo
     restart: unless-stopped
     # Envuelve al entrypoint oficial para generar el keyfile antes del arranque.
-    entrypoint: ["/usr/local/bin/mongo-keyfile-entrypoint.sh"]
+    # Se invoca con /bin/sh a proposito: el script se monta desde el repo y asi
+    # no depende de que el bit de ejecucion sobreviva a la copia (zip, Windows,
+    # filesystems sin exec). El script tiene shebang, pero esto lo blinda.
+    entrypoint: ["/bin/sh", "/usr/local/bin/mongo-keyfile-entrypoint.sh"]
     command:
       - "--replSet"
       - "rs0"
@@ -90,5 +95,12 @@ volumes:
     name: albertitos_mongo_config
 
 networks:
+  # Red compartida por TODO el sistema (Mongo, OCR, middleware/API).
+  # Es EXTERNA a proposito: la crea el operador una sola vez
+  #   docker network create albertitos_net
+  # y asi su nombre no depende del directorio ni del project name de Compose,
+  # y "docker compose down" de cualquiera de los proyectos no se la lleva por
+  # delante mientras otro contenedor siga conectado.
   albertitos:
+    external: true
     name: albertitos_net
