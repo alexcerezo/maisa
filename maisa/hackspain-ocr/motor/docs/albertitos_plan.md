@@ -8,14 +8,21 @@
 
 ## 0. Entregables y contrato
 
-Tres ficheros en la raíz del repositorio público de entrega:
+Tres ficheros sueltos en la raíz del repositorio público, junto a la carpeta
+`maisa/` (motor, datos y docs) y `.github/` (workflows):
 
 ```
-la-caja-outcomes/
-├── outcomes.jsonl        # 500 facturas del lote 1
-├── outcomes_lote2.jsonl  # lote adicional del sábado
-└── albertitos_plan.pdf   # este documento
+outcomes.jsonl          # 500 facturas del lote 1
+outcomes_lote2.jsonl    # lote adicional del sábado
+albertitos_plan.pdf     # este documento
+maisa/                  # motor, datos, docs y ui (no es entregable)
 ```
+
+La spec pide un repositorio separado con *"exactamente estos tres archivos"* en la
+raíz. Mantenemos los tres ficheros sueltos en la raíz, que es la lectura literal,
+y convivimos con `maisa/` y `.github/` en el mismo repositorio por decisión
+explícita del equipo: la CI tiene que estar en `.github/workflows/` para correr.
+Es una desviación consciente y la asumimos en la defensa.
 
 **Contrato JSONL** (una línea por factura, UTF-8 sin BOM, saltos LF):
 

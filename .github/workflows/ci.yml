@@ -6,7 +6,7 @@
 #   3. lote    reproduce las 500 decisiones DOS veces y exige el mismo md5.
 #   4. entrega el outcomes.jsonl versionado tiene que ser exactamente lo que
 #              produce el motor hoy, el banco de oro no puede haberse movido, y
-#              la copia de la raiz (`la-caja-outcomes/`) tiene que ser la misma.
+#              la copia de la raiz tiene que ser la misma.
 #
 # La puerta 3 es la que de verdad protege: no comprobamos que el codigo "hace
 # algo", comprobamos que **decide lo mismo dos veces**. Un motor de pagos que
@@ -16,9 +16,11 @@
 # `motor/.cache/ocr/` (indexado por sha256 del PDF), asi que no hace falta
 # levantar el contenedor de vision.
 #
-# Estructura del repo: la raiz solo tiene `la-caja-outcomes/` (los tres ficheros
-# de la entrega) y `maisa/` (todo el resto: motor, datos, docs, ui). El codigo
-# se ejecuta desde `maisa/hackspain-ocr/`, que es lo que fija `defaults` abajo.
+# Estructura del repo: la raiz tiene los tres ficheros de la entrega
+# (`outcomes.jsonl`, `outcomes_lote2.jsonl`, `albertitos_plan.pdf`), `maisa/`
+# (todo el resto: motor, datos, docs, ui) y `.github/` (que GitHub solo lee
+# desde la raiz). El codigo se ejecuta desde `maisa/hackspain-ocr/`, que es lo
+# que fija `defaults` abajo.
 name: CI
 
 on:
@@ -125,19 +127,19 @@ jobs:
           fi
           echo "outputs/outcomes.jsonl al dia ($(wc -l < outputs/outcomes.jsonl) lineas)"
 
-      # La entrega se publica desde la RAIZ del repo (`la-caja-outcomes/`), asi
-      # que la copia de la raiz tiene que ser byte a byte la misma que la que
-      # versiona el motor. Sin esto, alguien puede arreglar el motor, regenerar
-      # `outputs/` y dejar la entrega de la raiz anclada en la version vieja.
+      # La entrega se publica en la RAIZ del repo, asi que la copia de la raiz
+      # tiene que ser byte a byte la misma que la que versiona el motor. Sin
+      # esto, alguien puede arreglar el motor, regenerar `outputs/` y dejar la
+      # entrega de la raiz anclada en la version vieja.
       - name: la copia de la raiz es la misma entrega
         run: |
           set -e
-          if ! cmp /tmp/outcomes.jsonl ../../la-caja-outcomes/outcomes.jsonl; then
-            echo "::error::la-caja-outcomes/outcomes.jsonl NO coincide con outputs/outcomes.jsonl."
-            echo "Regeneralo con: cp outputs/outcomes.jsonl ../../la-caja-outcomes/outcomes.jsonl"
+          if ! cmp /tmp/outcomes.jsonl ../../outcomes.jsonl; then
+            echo "::error::outcomes.jsonl (raiz) NO coincide con outputs/outcomes.jsonl."
+            echo "Regeneralo con: cp outputs/outcomes.jsonl ../../outcomes.jsonl"
             exit 1
           fi
-          echo "la-caja-outcomes/outcomes.jsonl al dia ($(wc -l < ../../la-caja-outcomes/outcomes.jsonl) lineas)"
+          echo "outcomes.jsonl (raiz) al dia ($(wc -l < ../../outcomes.jsonl) lineas)"
 
       # `|` y no escalar plegado: sin el bloque, YAML junta las lineas en una
       # sola y los `\` de continuacion se comen los argumentos de oro.py.

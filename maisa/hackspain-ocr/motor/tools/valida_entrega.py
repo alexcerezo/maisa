@@ -2,11 +2,11 @@
 """Valida el arbol de entrega del track Maisa antes de publicarlo.
 
 La spec oficial (`corpus/maisa/README.md`) exige un repositorio **separado** cuya
-raiz contenga *exactamente* `la-caja-outcomes/` con tres ficheros: dos JSONL (un
-objeto por cada archivo de La Caja) y `albertitos_plan.pdf`. La validacion del
-jurado es binaria: exactamente un outcome por archivo y `result` en el enum. Un
-solo fallo de formato invalida la entrega entera, asi que este script audita el
-arbol completo antes de hacer `git push`.
+raiz contenga *exactamente* tres ficheros: dos JSONL (un objeto por cada archivo
+de La Caja) y `albertitos_plan.pdf`. La validacion del jurado es binaria:
+exactamente un outcome por archivo y `result` en el enum. Un solo fallo de
+formato invalida la entrega entera, asi que este script audita el arbol completo
+antes de hacer `git push`.
 
 Las comprobaciones semanticas de linea (enum, duplicados, espacios, cobertura)
 se delegan en `maisa.emit.valida_jsonl` para no tener dos verdades distintas:
@@ -41,10 +41,11 @@ sys.path.insert(0, str(_SRC))
 
 from maisa.emit import RESULTADOS, normaliza_file_id, valida_jsonl  # noqa: E402
 
-CARPETA = "la-caja-outcomes"
 FICHEROS = ("outcomes.jsonl", "outcomes_lote2.jsonl", "albertitos_plan.pdf")
 LOTE2 = "outcomes_lote2.jsonl"
-
+# Nombre de la carpeta que envolvia la entrega antes de bajarla a la raiz. Solo
+# se usa para reconocer el arbol viejo y decir que esta mal, no como ruta valida.
+CARPETA_LEGACY = "la-caja-outcomes"
 BLOQUEANTE = "BLOQUEANTE"
 AVISO = "AVISO"
 INFO = "INFO"
@@ -100,26 +101,23 @@ def plano(texto: str) -> str:
     return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode().lower()
 
 
-def revisa_estructura(raiz: Path, inf: Informe, publicable: bool) -> Path | None:
-    carpeta = raiz / CARPETA
-    if not carpeta.is_dir():
-        anidados = sorted(p for p in raiz.rglob(CARPETA) if p.is_dir())
-        extra = f" (encontrada anidada en {anidados[0].relative_to(raiz)}: la spec pide la raiz)" if anidados else ""
-        inf.error(CARPETA, f"no existe el directorio {CARPETA}/ en la raiz de la entrega{extra}")
-        return None
+def revisa_estructura(raiz: Path, inf: Informe) -> bool:
+    """Los tres ficheros de la entrega van SUELTOS en la raiz del repositorio.
 
-    presentes = sorted(p.name for p in carpeta.iterdir() if p.name not in IGNORAR_RECURSIVO)
-    faltan = [f for f in FICHEROS if f not in presentes]
-    sobran = [f for f in presentes if f not in FICHEROS]
+    La spec pide "la raiz del repositorio debe contener exactamente estos tres
+    archivos". La unica desviacion admitida es `.github/` y `maisa/`, que no son
+    parte de la entrega pero viven aqui por decision explicita del equipo.
+    """
+    anidada = raiz / CARPETA_LEGACY
+    if anidada.is_dir():
+        inf.error(CARPETA_LEGACY, f"sobra el directorio {CARPETA_LEGACY}/: los tres ficheros van "
+                                  "sueltos en la raiz, no dentro de una carpeta")
+    faltan = [f for f in FICHEROS if not (raiz / f).is_file()]
     if faltan:
-        inf.error(CARPETA, f"faltan ficheros obligatorios: {', '.join(faltan)}")
-    if sobran:
-        nivel = "estricto" if publicable else "aviso"
-        inf.anota(BLOQUEANTE if publicable else AVISO, CARPETA,
-                  f"ficheros extra dentro de {CARPETA}/ ({nivel}): {', '.join(sobran)}"
-                  " -- la spec dice 'exactamente estos tres archivos'")
-    inf.dato(f"{CARPETA}/ contiene: {', '.join(presentes) if presentes else '(vacio)'}")
-    return carpeta
+        inf.error("raiz", f"faltan ficheros obligatorios en la raiz: {', '.join(faltan)}")
+    presentes = [f for f in FICHEROS if (raiz / f).is_file()]
+    inf.dato(f"raiz: {', '.join(presentes) if presentes else '(ningun fichero de entrega)'}")
+    return not faltan and not anidada.is_dir()
 
 
 def revisa_bytes_jsonl(ruta: Path, inf: Informe) -> list[tuple[int, object]]:
@@ -282,12 +280,14 @@ def revisa_plan(ruta: Path, inf: Informe) -> None:
 
 def revisa_publicable(raiz: Path, inf: Informe) -> None:
     """La spec pide un repo separado sin solucion, sin credenciales y sin aplicacion ejecutable."""
-    extras = sorted(p.name for p in raiz.iterdir() if p.name not in IGNORAR_RECURSIVO and p.name != CARPETA)
+    extras = sorted(p.name for p in raiz.iterdir()
+                    if p.name not in IGNORAR_RECURSIVO and p.name not in FICHEROS)
     if extras:
-        inf.error("raiz", "la raiz debe contener exactamente "
-                  f"{CARPETA}/ y sobra: {', '.join(extras)} (no se sube la solucion ni una app ejecutable)")
+        inf.error("raiz", "la raiz debe contener exactamente los tres ficheros de la entrega "
+                  f"y sobra: {', '.join(extras)} (no se sube la solucion ni una app ejecutable)")
     else:
-        inf.dato(f"raiz: solo {CARPETA}/ (mas .git) -- repositorio publicable en cuanto a estructura")
+        inf.dato("raiz: solo los tres ficheros de la entrega (mas .git) -- repositorio publicable "
+                 "en cuanto a estructura")
     for patron in CODIGO:
         for p in raiz.rglob(patron):
             if IGNORAR_RECURSIVO & set(p.parts):
@@ -309,8 +309,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Valida el arbol de entrega del track Maisa.")
     ap.add_argument("raiz", type=Path, help="directorio raiz del repositorio de entrega")
     ap.add_argument("--publicable", action="store_true",
-                    help="modo estricto: exige ademas que la raiz no tenga nada mas que la-caja-outcomes/ "
-                         "y que no se suba solucion, codigo ejecutable ni credenciales")
+                    help="modo estricto: exige ademas que la raiz no tenga nada mas que los tres "
+                         "ficheros de la entrega y que no se suba solucion, codigo ejecutable ni credenciales")
     ap.add_argument("--corpus", type=Path, default=_CORPUS / "facturas",
                     help="directorio con los 500 PDFs de La Caja")
     ap.add_argument("--corpus-lote2", type=Path, default=None,
@@ -327,8 +327,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.publicable:
         revisa_publicable(raiz, inf)
 
-    carpeta = revisa_estructura(raiz, inf, args.publicable)
-    if carpeta is None:
+    estructura_ok = revisa_estructura(raiz, inf)
+    if not estructura_ok:
         return _cierra(inf)
 
     pdfs = corpus_de(args.corpus)
@@ -337,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     lote2 = corpus_de(args.corpus_lote2) if args.corpus_lote2 else corpus_de(corpus_lote2_por_defecto())
 
     for nombre in FICHEROS:
-        ruta = carpeta / nombre
+        ruta = raiz / nombre
         if not ruta.exists():
             if nombre == LOTE2:
                 inf.error(nombre, "NO EXISTE: es obligatorio para la entrega (lo envia Alberto el sabado); "
