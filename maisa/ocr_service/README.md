@@ -69,6 +69,9 @@ curl -s http://localhost:8866/health | jq
 # Probar con un archivo local
 ./test_ocr.sh ./test_files/test.png
 
+# Humo completo: localhost + LAN + motores + un PDF cronometrado
+./smoke_lan.sh ../data/facturas/2026-01-25_P001.pdf
+
 # Forzar el motor local (sin tocar la red)
 curl -s -X POST "http://localhost:8866/ocr?engine=local" -F "file=@docs/scan_001.pdf" | jq
 
@@ -81,6 +84,40 @@ Desde otra máquina de la red:
 ```bash
 curl -s -X POST -F "file=@documento.png" http://<IP-DE-LA-MAQUINA>:8866/ocr | jq
 ```
+
+### Prueba de humo por LAN
+
+`smoke_lan.sh` verifica de una pasada que el servicio responde por localhost **y** por
+la IP de LAN, lista los motores disponibles y cronometra un documento real:
+
+```bash
+./smoke_lan.sh ../data/facturas/2026-01-25_P001.pdf        # autodetecta la IP de LAN
+./smoke_lan.sh ../data/facturas/2026-01-25_P001.pdf 10.0.0.75
+OCR_ENGINE=cloud ./smoke_lan.sh factura.pdf               # forzar un motor concreto
+```
+
+Sale con código 1 y un mensaje explícito si el OCR no responde, indicando si el fallo
+está en localhost (servicio caído) o en la LAN (binding o firewall). Solo necesita
+`curl`; `jq` es opcional.
+
+**Verificado el 2026-09-19** (contenedor `ocr-api`, `0.0.0.0:8866->8866`): `/health`,
+`/cloud` y `/docs` devuelven 200 tanto por `127.0.0.1` como por `10.0.0.75` (mismo JSON,
+byte a byte), y `/ocr/text` reconoce facturas reales por la IP de LAN.
+
+Dos avisos importantes si depuras desde otra máquina o desde otro contenedor:
+
+- **Desde otro contenedor, usa el nombre DNS, no la IP de LAN.** Dentro de una red
+  Docker, `http://ocr-api:8866/health` funciona (alias `ocr-api` y `ocr`), pero
+  `http://<IP-DE-LAN>:8866/health` falla con `curl: (7) ... Host is unreachable`.
+  No es un fallo del OCR: la regla `iptables -t nat` que publica el puerto excluye el
+  tráfico que entra por la propia interfaz puente (`! -i br-...`), así que el paquete
+  no se redirige al contenedor y acaba tratándose como entrega local, donde la cadena
+  `INPUT` lo rechaza. Desde fuera de Docker (otra máquina) esa exclusión no aplica y el
+  DNAT sí funciona.
+- **El host tiene la cadena `INPUT` endurecida** (solo acepta `lo` y el puerto 22, y
+  rechaza el resto con `icmp-host-prohibited`). No afecta al OCR porque el puerto
+  publicado se atiende por DNAT/`FORWARD`, no por `INPUT`; pero sí afecta a cualquier
+  servicio que escuche en el host sin publicarse por Docker.
 
 ---
 
@@ -537,6 +574,7 @@ Ejemplo de informe: `docs_review/ocr_report.txt`.
 ├── docker-compose.yml      # Servicio, puerto 8866, límites de recursos
 ├── .env.example            # Selección de modelos, umbrales y token (vacío)
 ├── test_ocr.sh             # Prueba rápida contra la API
+├── smoke_lan.sh            # Humo: localhost + LAN + motores + un PDF cronometrado
 └── test_files/test.png     # Archivo de prueba (bind mount de solo lectura)
 ```
 

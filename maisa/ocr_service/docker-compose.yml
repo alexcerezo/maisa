@@ -1,3 +1,15 @@
+# Servicio de OCR (FastAPI + RapidOCR).
+#
+# Redes:
+#   - ocr_service_default: red propia del servicio (nombre fijado, no depende
+#     del directorio ni del project name).
+#   - albertitos_net: red COMPARTIDA con MongoDB y con el middleware/API.
+#     Es externa; creala una sola vez antes del primer arranque:
+#       docker network create albertitos_net
+#     (o `docker compose up -d` en el directorio padre, que la declara igual).
+#
+# El contenedor se llama `ocr-api`, asi que dentro de albertitos_net se le
+# alcanza por DNS como `http://ocr-api:8866` (o `http://ocr:8866`).
 services:
   ocr:
     build: .
@@ -34,7 +46,26 @@ services:
       timeout: 10s
       retries: 5
       start_period: 180s
+    networks:
+      # La red propia del OCR (se conserva tal cual: es la que da el puerto y
+      # el aislamiento del servicio) mas la red compartida del sistema.
+      - default
+      - albertitos_net
 
 volumes:
   ocr_models:
   ocr_tmp:
+
+networks:
+  # Red propia del servicio OCR. Se fija el nombre para que no dependa del
+  # directorio ni del project name de Compose.
+  default:
+    name: ocr_service_default
+  # Red compartida con MongoDB (y con el middleware/API que vendra despues).
+  # Es EXTERNA: la crea el operador una sola vez con
+  #   docker network create albertitos_net
+  # antes de "docker compose up". Al ser externa, un "down" de este proyecto
+  # no se la lleva por delante.
+  albertitos_net:
+    external: true
+    name: albertitos_net
