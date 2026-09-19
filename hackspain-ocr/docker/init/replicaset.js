@@ -20,6 +20,27 @@ const RS_NAME = process.env.MONGO_REPLSET_NAME || "rs0";
 const MEMBER_HOST = process.env.MONGO_RS_HOST || "127.0.0.1:27017";
 const MAX_INTENTOS = Number(process.env.MONGO_RS_MAX_ATTEMPTS || 90);
 
+/*
+ * Fallos PERMANENTES: reintentar no los arregla y ademas tapan el diagnostico
+ * real detras del "no alcanzo el estado PRIMARY" del final.
+ */
+const ERRORES_PERMANENTES = new Map([
+	[13, "Unauthorized: el keyFile no coincide o las credenciales no valen"],
+	[23, "AlreadyInitialized: el replica set ya existe con OTRA configuracion"],
+	[93, "AlreadyInitialized: el replica set ya existe con OTRA configuracion"],
+	[94, "NotYetInitialized con una configuracion incompatible"],
+]);
+
+let ultimoMotivo = null;
+
+function motivoDe(e) {
+	if (!e) {
+		return "error desconocido";
+	}
+	const codigo = e.code === undefined ? "" : "codigo " + e.code + ": ";
+	return codigo + (e.codeName || e.message || String(e));
+}
+
 function hayPrimary() {
 	try {
 		const status = rs.status();
@@ -43,8 +64,14 @@ function intentarIniciar() {
 		print("[mongo-init] rs.initiate(" + JSON.stringify(cfg) + ")");
 		rs.initiate(cfg);
 	} catch (e) {
+		ultimoMotivo = motivoDe(e);
+		if (ERRORES_PERMANENTES.has(e && e.code)) {
+			print("[mongo-init] ERROR PERMANENTE al iniciar el replica set -> " + ultimoMotivo);
+			print("[mongo-init] " + ERRORES_PERMANENTES.get(e.code));
+			quit(1);
+		}
 		// Esperado mientras el contenedor aun esta en la fase de initdb.
-		print("[mongo-init] todavia no se puede iniciar (" + (e.codeName || e.message) + "), reintentando...");
+		print("[mongo-init] todavia no se puede iniciar (" + ultimoMotivo + "), reintentando...");
 	}
 }
 
@@ -57,5 +84,9 @@ for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
 	sleep(1000);
 }
 
-print("[mongo-init] ERROR: el replica set no alcanzo el estado PRIMARY.");
+print("[mongo-init] ERROR: el replica set '" + RS_NAME + "' no alcanzo el estado PRIMARY"
+	+ " tras " + MAX_INTENTOS + " intentos.");
+if (ultimoMotivo !== null) {
+	print("[mongo-init] ultimo error: " + ultimoMotivo);
+}
 quit(1);

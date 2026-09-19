@@ -12,3 +12,18 @@ hackspain-ocr/.env
 # Copias de seguridad de la base de datos
 backups/
 *.archive
+
+# Restos de Python (el descargador del ERP y validate_jsonl.py son stdlib)
+__pycache__/
+*.pyc
+
+# Zona de trabajo suelta: NO forma parte de la entrega (la entrega son
+# exactamente 3 ficheros en la raiz del repo publico). Se ignora para que un
+# `git add -A` no la arrastre nunca.
+_scratch/
+
+# Artefactos temporales de la importacion a Mongo (los genera
+# importar_asientos_mongo.py)
+asientos.json
+asientos.ndjson
+snapshot_meta.json

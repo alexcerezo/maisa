@@ -1,7 +1,7 @@
 # Albertitos · Plan de Entrega
 
 **Equipo (teamId):** YEM9Q8TP
-**Repositorio GitHub:** [INSERTE_URL_PUBLICA_GITHUB]
+**Repositorio GitHub:** https://github.com/alexcerezo/maisa
 **Fecha límite:** Domingo 20, 10:30 (hora de Madrid)
 
 ---
@@ -60,7 +60,7 @@ local con XML en ISO-8859-1. El sistema concilia las tres fuentes.
    por `pedido` y por `nif`.
 2. **Ingesta Excel**: se lee con lector defensivo (esquema flexible, sin asumir
    columnas). Índices por NIF y pedido.
-3. **Extracción PDF**: cada factura pasa por PaddleOCR (servicio local),
+3. **Extracción PDF**: cada factura pasa por RapidOCR (servicio local),
    devolviendo líneas con texto y *confidence score*.
 4. **Parser**: extrae de las líneas los campos canónicos: NIF emisor, número de
    pedido, fecha, base, IVA, total.
@@ -101,11 +101,16 @@ existe + filas Excel relacionadas + conflictos detectados) y evalúa:
 
 ```toml
 tolerancia_importe = 0.02       # euros
-score_minimo_pdf   = 0.85       # confianza OCR mínima por campo crítico
+score_minimo       = 0.85       # confianza OCR mínima por campo crítico
 # reglas que Alberto puede añadir el sábado:
 # prohibido_pagar_proveedor = ["B12345678"]
 # retener_iva = true
 ```
+
+> Las claves de este bloque son las que existen **realmente** en `config/reglas.toml`.
+> Si el motor de reglas introduce un umbral nuevo, hay que añadirlo **en los dos
+> sitios a la vez**: un nombre que no exista en el fichero no da error, simplemente
+> no se aplica, y eso es un fallo silencioso.
 
 Este archivo es el punto de inyección para la **regla nueva del sábado**.
 
@@ -218,7 +223,7 @@ regla la disparó y qué evidencia había disponible.
   el código; (c) motor determinista con reglas parametrizadas en un fichero
   de configuración.
 - **Decisión:** (c). El motor es Rust puro, sin ML. Los parámetros
-  (`tolerancia_importe`, `score_minimo_pdf`, `prohibido_pagar_proveedor`,
+  (`tolerancia_importe`, `score_minimo`, `prohibido_pagar_proveedor`,
   `retener_iva`, etc.) viven en `config/reglas.toml` y se cargan al arrancar.
   La regla nueva se traduce a entradas en ese fichero.
 - **Consecuencias aceptadas:** reglas verdaderamente inesperadas (no
@@ -267,12 +272,20 @@ regla la disparó y qué evidencia había disponible.
 
 ## 4. Escalabilidad y coste
 
-**Coste unitario actual:** 0 € por factura. PaddleOCR es open-source y el ERP
+**Coste unitario actual:** 0 € por factura. RapidOCR es open-source y el ERP
 es local; no hay llamadas de pago en el pipeline.
 
-**Throughput medido** (portátil consumer, 4 workers OCR concurrentes):
-aproximadamente **X facturas/segundo** (medir y anotar el número real antes de
-la defensa). Cuello de botella: PaddleOCR.
+**Throughput de ingesta del ERP (medido, portátil consumer):** **516 asientos en
+4,8 s ≈ 107 asientos/s**, con 31 peticiones HTTP y paginación de 20. La descarga
+se hace **en serie a propósito**: hay que respetar el límite de 10 req/s del
+bridge. El cuello de botella es la latencia del ERP legado (≈0,12 s por petición),
+no el cómputo local; los `ORA-00600` del bridge se reintentan con backoff sin
+perder la página.
+
+**Throughput OCR (por medir):** el servicio `ocr_service/` todavía es un
+esqueleto, así que **aún no hay una cifra honesta de facturas/segundo**. Hay que
+medirlo sobre `data/facturas` y sustituir este párrafo antes de la defensa.
+Cuello de botella previsto: RapidOCR por CPU.
 
 **Cómo escala a 50 000 facturas:** el servicio Python es apátrida; se replica
 horizontalmente. El binario Rust reparte por sharding sobre el `file_id`. El
