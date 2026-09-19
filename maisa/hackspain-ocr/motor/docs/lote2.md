@@ -119,7 +119,7 @@ PYTHONPATH=src ../.venv/bin/python tools/valida_entrega.py ../entrega --publicab
   el validador solo mira que el fichero exista: un `outcomes_lote2.jsonl` con 3
   lineas de 40 pasaria.
 - `--publicable` anade lo que la spec exige del repositorio: raiz con **solo**
-  `la-caja-outcomes/`, los tres ficheros, y que no se haya colado codigo,
+  los tres ficheros de la entrega, y que no se haya colado codigo,
   ejecutables ni credenciales.
 - El lote 2 debe tener **una linea por factura**, sin duplicados, con `result`
   dentro del enum `PAGAR` / `NO_PAGAR` / `ESCALAR`.
@@ -157,7 +157,7 @@ porque la entrega se aprueba o se suspende de forma binaria y los motivos no pun
 
 1. `maisa/config/reglas.toml` con `version = "norma_v4"`: es el artefacto que explica
    el cambio, y va en el repositorio de trabajo (no en el de entrega).
-2. Commit en `entrega/` con los tres ficheros, y anotar en el mensaje la version de
+2. Commit en la raiz del repo con los tres ficheros, y anotar en el mensaje la version de
    la norma y el **sello de la traza** del lote 2 (`trace.sello`), que es el ancla
    que permite demostrar despues que la traza no se toco.
 3. Si el plan cambia (nueva regla = nuevo ADR), regenerar el PDF:
@@ -178,7 +178,7 @@ porque la entrega se aprueba o se suspende de forma binaria y los motivos no pun
 | 4 | Correr el lote 2 | `python -m maisa.procesa --lote 2 ...` | exit 0 y una linea por PDF |
 | 5 | Validar la entrega | `valida_entrega.py --publicable --corpus-lote2` | exit 0 |
 | 6 | Comprobar la traza | `trace.verifica(outcomes_lote2_traza.jsonl)` | sin problemas |
-| 7 | Commit | `git commit` en `entrega/` | raiz con solo `la-caja-outcomes/` |
+| 7 | Commit | `git commit` en la raiz del repo | raiz con los tres ficheros + `maisa/` |
 
 ---
 
