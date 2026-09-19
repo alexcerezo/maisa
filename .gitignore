@@ -38,10 +38,13 @@ asientos.ndjson
 snapshot_meta.json
 # --- Nada de reconocimiento de equipos rivales en el repo publico ---------
 # El trabajo de campo sobre los repos de los demas equipos vive SOLO en el
-# workspace local (`PaddleOCR/recon/`, `RECON_MAISA.md`) y en el watcher de
-# `~/.cache/maisa-watch/`. No es un artefacto de la entrega: si apareciera
-# aqui, publicariamos datos de terceros. Estas reglas son una red de
+# workspace local (`recon/`, con `RECON_MAISA.md` y `PLAN_VICTORIA.md` dentro) y
+# en el watcher de `~/.cache/maisa-watch/`. No es un artefacto de la entrega: si
+# apareciera aqui, publicariamos datos de terceros. Estas reglas son una red de
 # seguridad, no una invitacion a ignorar el criterio.
+#
+# `_scratch/` es la otra zona local: salidas de diagnostico, experimentos y
+# material del workspace viejo que no forma parte del proyecto.
 recon/
 RECON_*.md
 *rival*

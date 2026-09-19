@@ -31,9 +31,16 @@ el plazo, pero su análisis de dominio es el que fijó la semántica de los esta
 
 - `data/` — PDFs de entrada (`facturas/`, `facturas_lote2/`), Excel de contexto,
   snapshot cacheado del ERP (`erp_snapshot.json`) y etiquetas manuales (`golden/`).
+  - `data/corpus/` — el kit del reto tal cual lo reparte la organización
+    (`alberto_erp.py`, `MANUAL_ERP_2009.md`, `Makefile`, spec). Es lo que hace
+    reproducible el arranque del ERP sin depender de la wifi del evento.
 - `traces/` — una carpeta por factura con OCR, evidencia y decisión (trazabilidad).
 - `outputs/` — `outcomes.jsonl` y `outcomes_lote2.jsonl` (entregables).
-- `ocr_service/` — servicio Python (FastAPI + RapidOCR) con `POST /ocr`.
+- `ocr_service/` — servicio OCR real (FastAPI + RapidOCR/ONNX, endpoints
+  `/ocr`, `/ocr/text`, `/ocr/stream`, `/health`, `/cloud`): `app/` (servidor y
+  cliente de nube), `Dockerfile`, `docker-compose.yml` (`ocr-api` en el 8866),
+  `scripts/` de diagnóstico y `test_files/`. Ver `ocr_service/README.md`.
+- `docs/` — documentación de proyecto: `ENTREGA.md` (cómo se publica y qué no).
 - `motor/` — **el motor de decisión que se ejecuta** (Python): reglas, tests,
   banco de oro, herramientas y documentación. Ver `motor/README.md`.
 - `src/` — binario Rust (legado): `main.rs` (orquestación) + módulos `domain`,
@@ -61,7 +68,8 @@ PYTHONPATH=motor/src python -m maisa.procesa \
 
 Si aparece un PDF escaneado que no esté en la caché, el motor recurre al
 servicio de visión (por defecto `http://127.0.0.1:8866`) y rellena la caché.
-Para atender ese caso hace falta el contenedor `ocr-api` (`docker-compose.yml`).
+Para atender ese caso hace falta el contenedor `ocr-api`
+(`ocr_service/docker-compose.yml`).
 
 ### Legado: el binario Rust
 
@@ -72,8 +80,9 @@ python alberto_erp.py --rapido
 #    $env:ERP_BASE_URL = "http://127.0.0.1:8009"   (Windows PowerShell)
 #    export ERP_BASE_URL="http://127.0.0.1:8009"   (bash)
 
-# 2. Servicio de OCR (FastAPI + RapidOCR)
-cd ocr_service && uvicorn main:app --host 127.0.0.1 --port 8000
+# 2. Servicio de OCR (FastAPI + RapidOCR). Escucha en el 8866.
+cd ocr_service && uvicorn app.server:app --host 127.0.0.1 --port 8866
+#    O en contenedor: cd ocr_service && docker compose up -d --build
 
 # 3. Binario Rust (rutas relativas a la raiz de `maisa/`)
 cargo run --release -- --pdf-dir data/facturas --out outputs/outcomes.jsonl
@@ -85,13 +94,14 @@ cargo run --release -- --pdf-dir data/facturas --out outputs/outcomes.jsonl
 ## Configuración (variables de entorno)
 
 Todas las direcciones y credenciales se leen del entorno: no hay ninguna ruta
-de máquina ni contraseña fija en el código.
+de máquina ni contraseña fija en el código. La única excepción es `OCR_URL`, que
+el motor vivo lleva como constante.
 
 | Variable | Para qué | Por defecto |
 |---|---|---|
 | `ERP_BASE_URL` | dirección del bridge del ERP | `http://127.0.0.1:8009` |
 | `ERP_USUARIO` / `ERP_CLAVE` | credenciales del bridge (`descargar_erp.py`) | las del reto |
-| `OCR_URL` | endpoint del servicio de OCR | `http://127.0.0.1:8000/ocr` |
+| `OCR_URL` | endpoint del servicio de OCR (constante en `motor/src/maisa/lectura.py`; el legado Rust sí la lee del entorno) | `http://127.0.0.1:8866` |
 | `MONGO_URI` | conexión a MongoDB | `mongodb://localhost:27017` |
 | `MONGO_ROOT_USER` / `MONGO_ROOT_PASSWORD` / `MONGO_APP_PASSWORD` | Mongo (ver `.env`) | — |
 
