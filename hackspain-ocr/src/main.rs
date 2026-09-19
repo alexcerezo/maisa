@@ -5,15 +5,17 @@ use axum::{
     Json, Router,
 };
 use mongodb::{
-    bson::{doc, Bson, Document},
+    bson::{doc, Bson, DateTime, Decimal128, Document},
     options::ClientOptions,
     Client, Collection, Database,
 };
+use rust_decimal::Decimal;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -26,7 +28,9 @@ mod domain;
 mod reconciler;
 mod rules;
 
-use domain::{Asiento, Decision, Evidencia, Factura, FilaExcel, Huellas, Resultado};
+use domain::{
+    Asiento, Decision, EstadoAsiento, Evidencia, Factura, FilaExcel, Huellas, Nif, Resultado,
+};
 use reconciler::{conciliar, IndiceErp, IndiceExcel};
 use rules::{decidir, ReglasConfig};
 
@@ -37,6 +41,89 @@ pub struct InvoiceData {
     pub emisor: Option<String>,
     pub total: Option<f64>,
     pub raw_text: String,
+}
+
+// --- ADAPTADOR DE PERSISTENCIA: documento Mongo → tipo de dominio ---
+
+/// Espejo de los campos que el motor **consume** del documento `asientos` tal y
+/// como lo guarda Mongo.
+///
+/// Existe porque el tipo de dominio no puede —ni debe— deserializarse directo
+/// desde BSON. La colección guarda `fecha` como BSON **`date`** e `importe` como
+/// BSON **`decimal`**, y el deserializador de `bson` presenta los dos como un
+/// *mapa*; `domain::Asiento` los declara como `Option<String>` y
+/// `rust_decimal::Decimal`, que solo aceptan escalares. El resultado era un
+/// descarte **silencioso** de los 516 asientos: el servidor arrancaba en verde
+/// con el catálogo del ERP vacío y decidía `ESCALAR` para toda factura.
+///
+/// El coste de mantener este espejo es que un cambio de esquema hay que
+/// reflejarlo aquí; a cambio, `domain.rs` sigue siendo agnóstico al
+/// almacenamiento (no se le cuela ni un tipo de `bson`, así que no hay tipos
+/// Mongo-específicos en la lógica de decisión) y los tests de dominio siguen
+/// construyendo `Asiento` con tipos Rust corrientes.
+///
+/// Nota: la conversión es trabajo explícito de la capa de persistencia
+/// (TRASPASO.md §3.8), no un detalle que deba resolverse con atributos serde
+/// dentro del dominio.
+#[derive(Debug, Deserialize)]
+struct AsientoDoc {
+    asiento_id: String,
+    nif: String,
+    pedido: String,
+    importe: Decimal128,
+    estado: EstadoAsiento,
+    #[serde(default)]
+    proveedor: Option<String>,
+    #[serde(default)]
+    fecha: Option<DateTime>,
+}
+
+impl AsientoDoc {
+    /// Pasa el documento de Mongo al tipo de dominio.
+    ///
+    /// Un NIF en blanco **no** invalida el asiento: se traduce a `None` y el
+    /// asiento se conserva con su pedido, su importe y su estado. Descartarlo
+    /// —que es lo que hacía antes esta función— borraba la única prueba de que
+    /// el ERP *sí* tiene la factura, y la dejaba escalando como `sin_match`,
+    /// igual que una factura que no existe. Quien decide qué hacer con un
+    /// asiento sin NIF es el motor de reglas (`R10`), no el cargador: el
+    /// cargador solo transporta la evidencia tal y como está.
+    ///
+    /// Sigue siendo falible por el importe, que es lo único que no tiene
+    /// lectura segura: un `decimal` ilegible descarta la fila y se cuenta.
+    fn a_dominio(self) -> Result<Asiento, String> {
+        // Vía el texto (`Decimal128` implementa `Display`), no vía `f64`: el
+        // importe es dinero y un float perdería céntimos.
+        let importe = Decimal::from_str(&self.importe.to_string()).map_err(|e| {
+            format!(
+                "asiento {} con importe ilegible ({:?}): {e}",
+                self.asiento_id, self.importe
+            )
+        })?;
+
+        Ok(Asiento {
+            asiento_id: self.asiento_id,
+            nif: Nif::nuevo(&self.nif),
+            pedido: self.pedido,
+            importe,
+            estado: self.estado,
+            proveedor: self.proveedor,
+            fecha: self.fecha.map(formatear_fecha),
+        })
+    }
+}
+
+/// BSON `date` → `"YYYY-MM-DD"` en UTC.
+///
+/// Es la misma forma que usa la clave de factura del ERP
+/// (`proveedor|pedido|fecha|importe`), para que los dos caminos hablen del mismo
+/// día y la fecha sea comparable y auditable como texto.
+fn formatear_fecha(fecha: DateTime) -> String {
+    match fecha.try_to_rfc3339_string() {
+        Ok(rfc3339) => rfc3339.split('T').next().unwrap_or(&rfc3339).to_string(),
+        // Solo ocurre con años fuera del rango representable en RFC 3339.
+        Err(_) => fecha.timestamp_millis().to_string(),
+    }
 }
 
 // --- CATÁLOGO DEL ERP (en memoria) ---
@@ -62,8 +149,33 @@ impl Catalogo {
     /// por falta de evidencia, que es la respuesta segura). Un asiento que no
     /// encaje con el esquema se descarta y se registra; no puede tumbar el catálogo.
     async fn desde_mongo(db: &Database) -> Self {
-        let asientos =
-            leer_coleccion::<Asiento>(db, "asientos", doc! { "vigente": true }, "asiento").await;
+        // Se leen como `AsientoDoc` (la forma BSON real) y se convierten al
+        // dominio. Leer directo `Asiento` aquí no funciona: `fecha` llega como
+        // BSON `date` e `importe` como BSON `decimal`, y ninguno de los dos
+        // encaja con los tipos del dominio.
+        let documentos = leer_coleccion::<AsientoDoc>(
+            db,
+            "asientos",
+            doc! { "vigente": true },
+            "asiento",
+        )
+        .await;
+
+        let mut asientos = Vec::with_capacity(documentos.len());
+        let mut invalidos = 0usize;
+        for documento in documentos {
+            match documento.a_dominio() {
+                Ok(asiento) => asientos.push(asiento),
+                Err(e) => {
+                    invalidos += 1;
+                    tracing::warn!("asiento descartado al normalizar: {e}");
+                }
+            }
+        }
+        if invalidos > 0 {
+            tracing::warn!("'asientos': {invalidos} asiento(s) descartado(s) al pasar al dominio");
+        }
+
         let snapshot_id = snapshot_vigente(db)
             .await
             .unwrap_or_else(|| format!("local-{}", epoch_millis()));
@@ -842,7 +954,7 @@ mod tests {
     fn asiento(nif: &str, pedido: &str, importe: &str, estado: EstadoAsiento) -> Asiento {
         Asiento {
             asiento_id: "AS-00412".into(),
-            nif: Nif::nuevo(nif).expect("NIF de prueba válido"),
+            nif: Some(Nif::nuevo(nif).expect("NIF de prueba válido")),
             pedido: pedido.into(),
             importe: d(importe),
             estado,
@@ -1122,5 +1234,134 @@ mod tests {
             inexistente.is_empty(),
             "una carpeta que no existe no inventa facturas"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Adaptador BSON: la regresión del catálogo vacío
+    //
+    // Cuando el motor se apuntó por primera vez a Mongo **real** (no a un
+    // fixture), los 516 asientos se descartaron en silencio con
+    // `invalid type: map, expected a string`: `fecha` llega como BSON `date` e
+    // `importe` como BSON `decimal`, y los dos se exponen a serde como mapas.
+    // El servidor arrancaba en verde con el catálogo vacío y escalaba todas las
+    // facturas. Estos tests fijan el contrato para que no vuelva a pasar sin
+    // que nadie se entere.
+    // ---------------------------------------------------------------------
+
+    /// Documento con la misma forma que escribe `importar_asientos_mongo.py` y
+    /// que exige el validador de `02-schema-init.js`.
+    fn documento_asiento_bson() -> Document {
+        doc! {
+            "_id": "snap-1#AS-00412",
+            "asiento_id": "AS-00412",
+            "snapshot_id": "snap-1",
+            "nif": "B12345678",
+            "pedido": "PED-00123",
+            "importe": Decimal128::from_str("1234.50").expect("decimal BSON válido"),
+            "estado": "PENDIENTE",
+            "proveedor": "Suministros Ibéricos S.L.",
+            "fecha": DateTime::parse_rfc3339_str("2026-03-21T00:00:00Z").expect("fecha válida"),
+            "vigente": true,
+            "esquema_version": 1,
+        }
+    }
+
+    /// El fallo original: `date` y `decimal` tienen que llegar al dominio.
+    #[test]
+    fn un_asiento_de_mongo_con_date_y_decimal_llega_al_dominio() {
+        let documento = documento_asiento_bson();
+        let dto: AsientoDoc =
+            mongodb::bson::from_document(documento).expect("el documento de Mongo encaja");
+        let asiento = dto.a_dominio().expect("conversión al dominio");
+
+        assert_eq!(asiento.asiento_id, "AS-00412");
+        assert_eq!(asiento.nif.as_ref().map(Nif::as_str), Some("B12345678"));
+        assert_eq!(asiento.pedido, "PED-00123");
+        assert_eq!(asiento.importe, d("1234.50"));
+        assert_eq!(asiento.estado, EstadoAsiento::Pendiente);
+        assert_eq!(
+            asiento.fecha.as_deref(),
+            Some("2026-03-21"),
+            "la fecha BSON se normaliza a YYYY-MM-DD, igual que la clave del ERP"
+        );
+        assert_eq!(asiento.proveedor.as_deref(), Some("Suministros Ibéricos S.L."));
+    }
+
+    /// El importe tiene que llegar **exacto**: es dinero y los céntimos deciden
+    /// entre PAGAR y ESCALAR con la tolerancia de 0,01 EUR.
+    #[test]
+    fn el_importe_decimal128_llega_sin_perder_centimos() {
+        let mut documento = documento_asiento_bson();
+        documento.insert("importe", Decimal128::from_str("6199.54").expect("decimal"));
+        let dto: AsientoDoc = mongodb::bson::from_document(documento).expect("encaja");
+        let asiento = dto.a_dominio().expect("conversión");
+
+        // No 6199.539999999999: por eso la conversión va por texto y no por f64.
+        assert_eq!(asiento.importe, d("6199.54"));
+        assert_eq!(asiento.importe.to_string(), "6199.54");
+    }
+
+    /// Un asiento sin NIF utilizable se conserva con `nif: None`: el asiento
+    /// existe (tiene pedido, importe y estado) y tirarlo borraría la prueba de
+    /// que el ERP sí tiene la factura.
+    #[test]
+    fn un_asiento_sin_nif_se_conserva_sin_nif() {
+        let mut documento = documento_asiento_bson();
+        documento.insert("nif", "  --- ");
+        let dto: AsientoDoc = mongodb::bson::from_document(documento).expect("encaja");
+        let asiento = dto.a_dominio().expect("el asiento se conserva");
+
+        assert_eq!(asiento.nif, None, "un NIF que canoniza a vacío es 'sin NIF'");
+        assert_eq!(asiento.pedido, "PED-00123", "el pedido sobrevive");
+        assert_eq!(asiento.importe, d("1234.50"), "y el importe también");
+    }
+
+    /// Y ese asiento sin NIF **no** se paga en automático: escala diciendo por
+    /// qué, en vez de desaparecer y escalar como si el ERP no lo tuviera.
+    #[test]
+    fn el_asiento_sin_nif_escala_diciendo_que_falta_el_nif() {
+        let mut documento = documento_asiento_bson();
+        documento.insert("nif", "");
+        let dto: AsientoDoc = mongodb::bson::from_document(documento).expect("encaja");
+        let asiento = dto.a_dominio().expect("conversión");
+
+        let (evidencia, decision) =
+            decidir_factura(&factura(), &[asiento], &[], &ReglasConfig::default(), "snap-1");
+
+        // Lo importante: el match **existe**. La factura no es un "sin match".
+        assert_eq!(evidencia.match_por, MatchStrategy::ExactByPedido);
+        assert_eq!(decision.resultado, Resultado::Escalar);
+        assert!(
+            decision.motivo.contains("AS-00412") && decision.motivo.contains("sin NIF"),
+            "el motivo cita el asiento y la falta de NIF: {}",
+            decision.motivo
+        );
+        assert!(
+            decision
+                .reglas_evaluadas
+                .contains(&"R10_erp_sin_nif".to_string()),
+            "la traza nombra la regla aplicada: {:?}",
+            decision.reglas_evaluadas
+        );
+    }
+
+    /// Prueba de fuego: un asiento que viene de Mongo (no de un fixture) tiene
+    /// que producir la misma decisión que el motor da con un fixture.
+    #[test]
+    fn el_asiento_de_mongo_paga_por_el_camino_completo() {
+        let dto: AsientoDoc =
+            mongodb::bson::from_document(documento_asiento_bson()).expect("encaja");
+        let asiento = dto.a_dominio().expect("conversión");
+
+        let (evidencia, decision) = decidir_factura(
+            &factura(),
+            &[asiento],
+            &[],
+            &ReglasConfig::default(),
+            "snap-1",
+        );
+
+        assert_eq!(decision.resultado, Resultado::Pagar);
+        assert_eq!(evidencia.match_por, MatchStrategy::ExactByPedido);
     }
 }

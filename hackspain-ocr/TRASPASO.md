@@ -53,16 +53,42 @@ Lo que demuestra el lote, línea a línea:
 La línea 10 es la importante: un elemento que no encaja con el esquema produce
 una línea de entrega con el motivo, no un pánico. **El lote nunca se cae.**
 
+> **R10, la regla que el lote no demuestra.** Hay una décima regla cuyo caso no
+> depende de la factura sino del **ERP**: si el asiento con el que se ha
+> conciliado no trae NIF, la decisión es `ESCALAR` con el motivo
+> `"asiento AS-00507 sin NIF en el ERP: no se puede verificar el proveedor
+> contra la lista de pago prohibido"`. Sin NIF no se puede comprobar el
+> proveedor contra `prohibido_pagar_proveedor` (R2), y "no se pudo verificar" no
+> es "verificado".
+>
+> **No está en `lote_ejemplo.jsonl` a propósito**: añadirlo sería la línea 11 y
+> el lote es un artefacto entregado y comentado. Se prueba en tres sitios:
+> `rules.rs` (asiento `PENDIENTE` sin NIF ⇒ ESCALAR, y asiento `PAGADA` sin NIF ⇒
+> NO_PAGAR), `reconciler.rs` (un asiento sin NIF casa por pedido y **no** entra
+> en el índice por NIF) y `main.rs` (el documento BSON real, de punta a punta).
+>
+> Se evalúa **después de R5 y antes de R6**, así que no puede comerse la
+> dirección segura: un asiento ya `PAGADA` sigue devolviendo `NO_PAGAR` (R3)
+> aunque no traiga NIF. El 10 no sigue al orden a propósito: renumerar R6–R9
+> rompería la comparabilidad de los volcados ya emitidos.
+>
+> **De dónde sale.** El catálogo real trae **20 asientos de 516 con el NIF en
+> blanco** (2 por cada uno de los 10 proveedores, todos `PENDIENTE`; lo avisa el
+> propio snapshot: `avisos: ["nif vacio en 20/516: ..."]`). Antes de R10 esos
+> asientos se descartaban al cargar, así que una factura legítima caía en
+> `R9_sin_match` — indistinguible de "el ERP no tiene esta factura", que era
+> falso. Ahora el asiento se conserva y la traza dice la verdad.
+
 ---
 
 ## 1. Reparto
 
 | Módulo | Dueño | Estado |
 |---|---|---|
-| `src/domain.rs` | nosotros | **hecho** — 846 líneas, 9 tests |
-| `src/reconciler.rs` | nosotros | **hecho** — 804 líneas, 17 tests |
-| `src/rules.rs` | nosotros | **hecho** — 613 líneas, 20 tests |
-| `src/main.rs` (cableado) | nosotros | **hecho** — orquestador + modo lote, 11 tests |
+| `src/domain.rs` | nosotros | **hecho** — 855 líneas, 9 tests |
+| `src/reconciler.rs` | nosotros | **hecho** — 890 líneas, 19 tests |
+| `src/rules.rs` | nosotros | **hecho** — 740 líneas, 23 tests |
+| `src/main.rs` (cableado) | nosotros | **hecho** — orquestador + modo lote, 17 tests |
 | `docker/mongosh/02-schema-init.js` | nosotros | **hecho** — validadores y índices |
 | `diseño_conceptual.md` / `diseño_logico.md` | nosotros | **hecho** |
 | `src/parser.rs` | **a hacer** | 2 líneas (stub) |
@@ -115,7 +141,7 @@ pub struct Factura {
 // domain.rs — una fila del ERP
 pub struct Asiento {
     pub asiento_id: String,
-    pub nif: Nif,
+    pub nif: Option<Nif>,                    // None = el ERP no lo trae → R10 escala
     pub pedido: String,
     pub importe: Decimal,                    // siempre Decimal, nunca f64
     pub estado: EstadoAsiento,               // Pendiente | Pagada

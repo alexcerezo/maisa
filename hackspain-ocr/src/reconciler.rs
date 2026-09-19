@@ -57,12 +57,17 @@ impl<'a> IndiceErp<'a> {
                 .or_default()
                 .push(asiento);
             // `Asiento::nif` ya es un `Nif` canónico: indexar no normaliza nada,
-            // solo copia una clave que ya es comparable por construcción.
-            indice
-                .por_nif
-                .entry(asiento.nif.clone())
-                .or_default()
-                .push(asiento);
+            // solo copia una clave que ya es comparable por construcción. Un
+            // asiento sin NIF (`None`) no entra en este índice: solo puede
+            // casar por pedido. Meterlo bajo una clave inventada sería peor que
+            // omitirlo, porque lo haría casar con el NIF equivocado.
+            if let Some(nif) = asiento.nif.as_ref() {
+                indice
+                    .por_nif
+                    .entry(nif.clone())
+                    .or_default()
+                    .push(asiento);
+            }
         }
         indice
     }
@@ -207,11 +212,16 @@ pub fn conciliar(
     // --- Incoherencias PDF ↔ ERP ------------------------------------------
     if let Some(encontrado) = asiento {
         if match_por == MatchStrategy::ExactByPedido {
-            if let Some(nif) = nif_pdf {
-                if &encontrado.nif != nif {
+            // Solo hay contradicción si **las dos partes afirman** un NIF. Que
+            // el ERP no lo traiga no contradice al PDF: es una ausencia, y las
+            // ausencias no se denuncian como conflicto (mismo criterio que
+            // distingue `NoAparece` de `Ilegible` en `domain.rs`). De esa
+            // ausencia se ocupa `R10`, que es mucho más específica como motivo.
+            if let (Some(nif), Some(nif_erp)) = (nif_pdf, encontrado.nif.as_ref()) {
+                if nif_erp != nif {
                     conflictos.push(format!(
-                        "NIF PDF {nif} vs NIF ERP {} (asiento {})",
-                        encontrado.nif, encontrado.asiento_id
+                        "NIF PDF {nif} vs NIF ERP {nif_erp} (asiento {})",
+                        encontrado.asiento_id
                     ));
                 }
             }
@@ -323,7 +333,7 @@ mod tests {
     fn asiento(id: &str, nif_bruto: &str, pedido: &str, importe: &str, estado: EstadoAsiento) -> Asiento {
         Asiento {
             asiento_id: id.into(),
-            nif: nif(nif_bruto),
+            nif: Some(nif(nif_bruto)),
             pedido: pedido.into(),
             importe: d(importe),
             estado,
@@ -369,6 +379,52 @@ mod tests {
         assert_eq!(normalizar_clave("b-12345678"), "B12345678");
         assert_eq!(normalizar_texto("  Factura   nº 12 "), "FACTURA Nº 12");
         assert_eq!(normalizar_texto("gestión"), "GESTION");
+    }
+
+    /// Un asiento sin NIF (`None`) solo puede casar por pedido: no entra en el
+    /// índice por NIF y, por tanto, queda fuera de las estrategias 2 y 3. Es lo
+    /// correcto: casar por NIF un asiento que no lo trae sería inventárselo.
+    ///
+    /// Y una ausencia de NIF **no** se denuncia como conflicto: que el ERP no
+    /// identifique al proveedor no contradice al PDF. De eso se ocupa `R10`.
+    #[test]
+    fn un_asiento_sin_nif_casa_por_pedido_pero_no_por_nif() {
+        let asientos = vec![Asiento {
+            asiento_id: "AS-00507".into(),
+            nif: None,
+            pedido: "PO-2026-0546".into(),
+            importe: d("2738.78"),
+            estado: EstadoAsiento::Pendiente,
+            proveedor: Some("P005".into()),
+            fecha: Some("2026-01-22".into()),
+        }];
+        let erp = IndiceErp::nuevo(&asientos);
+        let excel = IndiceExcel::default();
+
+        // Por pedido se encuentra, y la estrategia fuerte no necesita el NIF.
+        let ev = conciliar(
+            &factura(None, Some("PO-2026-0546"), Some("2738.78")),
+            &erp,
+            &excel,
+            d(TOL),
+        );
+        assert_eq!(ev.match_por, MatchStrategy::ExactByPedido);
+        assert_eq!(ev.asiento_id.as_deref(), Some("AS-00507"));
+        assert!(
+            ev.conflictos.is_empty(),
+            "sin NIF no es un conflicto: {:?}",
+            ev.conflictos
+        );
+
+        // Pero un NIF del PDF no lo puede alcanzar por esa vía.
+        let ev = conciliar(
+            &factura(Some("A41220987"), None, Some("2738.78")),
+            &erp,
+            &excel,
+            d(TOL),
+        );
+        assert_eq!(ev.match_por, MatchStrategy::None);
+        assert!(ev.asiento_id.is_none());
     }
 
     #[test]
