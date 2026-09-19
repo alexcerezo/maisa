@@ -40,7 +40,14 @@ el plazo, pero su análisis de dominio es el que fijó la semántica de los esta
   `/ocr`, `/ocr/text`, `/ocr/stream`, `/health`, `/cloud`): `app/` (servidor y
   cliente de nube), `Dockerfile`, `docker-compose.yml` (`ocr-api` en el 8866),
   `scripts/` de diagnóstico y `test_files/`. Ver `ocr_service/README.md`.
-- `docs/` — documentación de proyecto: `ENTREGA.md` (cómo se publica y qué no).
+- `api/` — middleware/BFF (FastAPI): **la única superficie publicada a la LAN**
+  (`albertitos-api`, `0.0.0.0:8010`). Lee la traza y los PDFs, consulta Mongo en
+  solo lectura, hace de proxy del OCR y sirve el visor en el mismo origen. Ver
+  `api/README.md` y `docs/ADR-0001-middleware-bff.md`.
+- `docs/` — documentación de proyecto: `ENTREGA.md` (cómo se publica y qué no),
+  `ADR-0001-middleware-bff.md` (por qué la API/BFF es la única superficie publicada y
+  Mongo sigue en `127.0.0.1`) y `arranque_servicios.md` (runbook para levantar todo desde
+  cero).
 - `motor/` — **el motor de decisión que se ejecuta** (Python): reglas, tests,
   banco de oro, herramientas y documentación. Ver `motor/README.md`.
 - `src/` — binario Rust (legado): `main.rs` (orquestación) + módulos `domain`,
@@ -51,6 +58,48 @@ el plazo, pero su análisis de dominio es el que fijó la semántica de los esta
 - `validate_jsonl.py` — validador de entrega.
 
 ## Arranque
+
+### Servicios en Docker (MongoDB, OCR y API)
+
+Los proyectos de Compose son independientes, así que comparten una red externa
+con nombre fijo, `albertitos_net`. Se crea **una sola vez**:
+
+```
+docker network create albertitos_net
+```
+
+Después:
+
+```
+# MongoDB 7 (replica set de 1 nodo, autenticación obligatoria).
+# Publica el 27017 SOLO en 127.0.0.1: no se expone a la LAN.
+cd maisa
+cp .env.example .env        # y rellenar los secretos
+docker compose up -d mongo mongo-init
+python3 importar_asientos_mongo.py   # 516 asientos; idempotente
+
+# Servicio de OCR (FastAPI + RapidOCR) en el 8866.
+cd ocr_service
+cp .env.example .env        # si no existe: el compose declara env_file: .env
+docker compose up -d --build
+
+# API/BFF: la ÚNICA superficie publicada a la LAN (0.0.0.0:8010).
+cd ../api
+cp .env.example .env        # poner la contraseña real en MONGO_URI (entre comillas)
+docker compose up -d --build
+```
+
+Dentro de `albertitos_net` los servicios se alcanzan por DNS: `mongo:27017`,
+`ocr-api:8866` (alias `ocr:8866`). Desde la máquina anfitriona, en cambio,
+Mongo está en `127.0.0.1:27017` y el OCR en `127.0.0.1:8866`.
+
+**MongoDB no se expone nunca.** El frontend y el resto del equipo consumen la
+API (`http://<IP-DE-LA-MAQUINA>:8010`), que es de solo lectura sobre Mongo y
+sirve el visor en el mismo origen. El porqué está en
+`docs/ADR-0001-middleware-bff.md`; el arranque paso a paso, con las
+comprobaciones y los problemas conocidos, en `docs/arranque_servicios.md`.
+
+### Motor de decisión
 
 ```
 # Motor de decisión (Python). No necesita red ni servicios: la caché de OCR de

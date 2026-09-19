@@ -1,0 +1,7 @@
+# Dependencias SOLO para desarrollo y tests. No entran en la imagen Docker.
+#   uv pip install --python .venv-api/bin/python -r requirements.txt -r requirements-dev.txt
+#
+# httpx ya viene en requirements.txt (el proxy del OCR lo usa), pero se repite
+# aqui porque el TestClient de FastAPI tambien lo necesita.
+pytest==8.3.4
+httpx==0.28.1

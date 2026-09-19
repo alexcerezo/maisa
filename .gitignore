@@ -1,6 +1,7 @@
 target
 .vscode
 .venv
+.venv-api
 500-*/*.md
 /data
 
@@ -25,6 +26,9 @@ maisa/outputs/*_traza.jsonl
 # Restos de Python (el descargador del ERP y validate_jsonl.py son stdlib)
 __pycache__/
 *.pyc
+
+# Cache de pytest (tests de la API en maisa/api)
+.pytest_cache/
 
 # Zona de trabajo suelta: NO forma parte de la entrega (la entrega son
 # exactamente 3 ficheros en la raiz del repo publico). Se ignora para que un
@@ -57,3 +61,6 @@ digests/
 pending-delta.md
 latest-delta.md
 maisa-watch*
+
+# Claves API de OCI / certificados
+*.pem

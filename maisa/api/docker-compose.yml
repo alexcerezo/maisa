@@ -1,0 +1,116 @@
+# API/BFF de Albertitos: el UNICO servicio publicado a la LAN.
+#
+#   docker compose -f maisa/api/docker-compose.yml up -d --build
+#
+# Que queda expuesto y que no:
+#   * ESTE servicio publica 0.0.0.0:${API_PORT:-8010} -> es la unica puerta.
+#   * MongoDB NO se expone: sigue escuchando solo en 127.0.0.1:27017 en la
+#     maquina anfitriona (maisa/docker-compose.yml) y la API lo alcanza por el
+#     DNS interno `mongo` de la red compartida. Las credenciales de Mongo no
+#     salen del servidor: el navegador nunca las ve.
+#   * El OCR tampoco se publica aqui: se alcanza por su DNS interno `ocr-api`.
+#
+# Este fichero NO crea redes: se une a la red externa `albertitos_net`, que
+# levanta maisa/docker-compose.yml.
+name: albertitos-api
+
+services:
+  api:
+    build:
+      context: .
+    image: albertitos-api:latest
+    container_name: albertitos-api
+    restart: unless-stopped
+
+    # Red compartida: aqui viven `mongo` y `ocr-api`. `external: true` significa
+    # "ya existe, no la crees ni la borres tu".
+    networks:
+      - albertitos_net
+
+    # Unica publicacion a la LAN. 8009 es el ERP y 8866 el OCR: no se tocan.
+    ports:
+      - "0.0.0.0:${API_PORT:-8010}:8000"
+
+    # Credenciales: `maisa/.env` (no se versiona) entra como `env_file`, no
+    # como `environment`. Es la unica forma de que la contrasena de Mongo
+    # llegue al contenedor sin duplicarla en este fichero ni en la imagen.
+    #   * `required: false`: si alguien no tiene `.env`, compose no falla; la
+    #     API arranca y /health muestra `mongo` en rojo (degradacion, no caida).
+    #   * OJO con la precedencia: `environment` GANA sobre `env_file`. Por eso
+    #     las variables de abajo reescriben a proposito las que en `maisa/.env`
+    #     estan pensadas para la MAQUINA ANFITRIONA.
+    env_file:
+      - path: ../.env
+        required: false
+
+    # Valores por defecto pensados para la red Docker. Para sobrescribir
+    # cualquiera de ellos, copia .env.example a .env en esta misma carpeta (ese
+    # fichero no se versiona) o exportalo antes de lanzar compose.
+    environment:
+      # La API NO necesita una URI completa: la construye con las piezas
+      # (MONGO_APP_USER/MONGO_APP_PASSWORD de maisa/.env + MONGO_HOST/...).
+      # Se vacia a proposito porque la MONGO_URI de maisa/.env apunta a
+      # 127.0.0.1, y dentro del contenedor 127.0.0.1 es el propio contenedor.
+      # Para forzar una URI concreta, definela en `maisa/api/.env` o en el
+      # entorno antes de lanzar compose.
+      MONGO_URI: ${MONGO_URI:-}
+      MONGO_HOST: ${MONGO_HOST:-mongo}
+      MONGO_PORT: ${MONGO_PORT:-27017}
+      MONGO_REPLICA_SET: ${MONGO_REPLICA_SET:-rs0}
+      MONGO_DIRECT_CONNECTION: ${MONGO_DIRECT_CONNECTION:-true}
+      MONGO_DB: ${MONGO_DB:-albertitos}
+      MONGO_TIMEOUT_MS: ${MONGO_TIMEOUT_MS:-1500}
+      # `env_file` mete TODO maisa/.env, incluidas las credenciales de root,
+      # que este contenedor no administra. Se anulan aqui: la API es la unica
+      # superficie expuesta y no tiene por que llevar la clave de root encima.
+      MONGO_ROOT_USER: ""
+      MONGO_ROOT_PASSWORD: ""
+      OCR_URL: ${OCR_URL:-http://ocr-api:8866}
+      # El ERP solo escucha en el loopback del anfitrion: desde el contenedor se
+      # llega por el gateway del host (ver extra_hosts). Es informativo.
+      ERP_URL: ${ERP_URL:-http://host.docker.internal:8009}
+      OUTPUTS_DIR: /datos/outputs
+      FACTURAS_DIR: /datos/facturas
+      UI_DIR: /datos/ui
+      API_PORT: ${API_PORT:-8010}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8010,http://127.0.0.1:8010,http://localhost:5173,http://127.0.0.1:5173}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
+      # Sin API_KEY la API arranca en modo abierto. Definela antes de publicarla
+      # fuera de una LAN de confianza.
+      API_KEY: ${API_KEY:-}
+      CRITICAL_DEPS: ${CRITICAL_DEPS:-mongo,ocr}
+      HEALTH_TIMEOUT_S: ${HEALTH_TIMEOUT_S:-2.0}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+      DEFAULT_LIMIT: ${DEFAULT_LIMIT:-50}
+      MAX_LIMIT: ${MAX_LIMIT:-500}
+      MAX_QUERY_LEN: ${MAX_QUERY_LEN:-64}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    # Permite que el contenedor alcance el loopback del anfitrion (el ERP).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Datos del motor y visor: SOLO LECTURA. La API no escribe ni en los
+    # outputs, ni en los PDFs, ni en el frontend.
+    volumes:
+      - ../outputs:/datos/outputs:ro
+      - ../data/facturas:/datos/facturas:ro
+      - ../ui:/datos/ui:ro
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+networks:
+  # Red externa compartida con MongoDB y el OCR. Se declara como externa para
+  # que compose no la cree, no la recree ni se la lleve por delante.
+  albertitos_net:
+    external: true
+    name: albertitos_net

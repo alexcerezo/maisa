@@ -1,0 +1,10 @@
+# Dependencias de la API/BFF de Albertitos (maisa/api).
+# Instalacion:  uv pip install --python .venv-api/bin/python -r requirements.txt
+#
+# Versiones fijadas: la API es la unica superficie expuesta, asi que los builds
+# se reproducen al byte. Actualizar de forma consciente, nunca en caliente.
+fastapi==0.115.6
+uvicorn==0.34.0
+httpx==0.28.1
+pymongo==4.10.1
+python-multipart==0.0.20
