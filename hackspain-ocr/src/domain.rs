@@ -431,17 +431,23 @@ pub struct Asiento {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Factura {
     /// NIF del emisor. `NoAparece` es legítimo (la factura puede no traerlo, o
-    /// el OCR no verlo); `Ilegible` no lo es y fuerza una revisión humana.
+    /// el OCR no verlo); `Ilegible` no lo es y fuerza una revisión humana (R5).
+    ///
+    /// Hoy `Ilegible` solo sale cuando no hay ningún token que canonizar. El
+    /// dígito de control **no** se comprueba, porque los CIF del corpus son
+    /// sintéticos y no lo respetan: ver `parser::EXIGIR_DIGITO_DE_CONTROL_NIF`.
     #[serde(default)]
     pub nif_emisor: Identificador<Nif>,
     /// CIF/NIF del **cliente** (destinatario), tal y como lo imprime la factura.
     ///
     /// Un documento fiscal lleva los dos identificadores, el del emisor y el del
     /// destinatario, y hasta ahora el del cliente se descartaba. Es el mismo tipo
-    /// de dato que `nif_emisor`, pero **no se le exige el dígito de control**: en
-    /// estas facturas el cliente es el propio banco y su CIF no lo pasa, así que
-    /// aplicar `validators::nif_valido` degradaría a `Ilegible` un dato leído
-    /// perfectamente y mandaría a revisión facturas correctas.
+    /// de dato que `nif_emisor`, pero **tampoco** se le exige el dígito de
+    /// control: en estas facturas el cliente es el propio banco y su CIF no lo
+    /// pasa, así que aplicar `validators::nif_valido` degradaría a `Ilegible` un
+    /// dato leído perfectamente y mandaría a revisión facturas correctas. (El
+    /// emisor tampoco lo comprueba hoy, por otro motivo: los CIF del corpus son
+    /// sintéticos. Ver `parser::EXIGIR_DIGITO_DE_CONTROL_NIF`.)
     ///
     /// Tampoco entra en la conciliación —quien cobra es `nif_emisor`—: es
     /// trazabilidad fiscal. Lo que sí hace es bloquear el pago automático cuando

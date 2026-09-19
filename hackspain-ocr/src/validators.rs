@@ -49,6 +49,13 @@ const INICIALES_CIF: &[u8] = b"ABCDEFGHJNPQRSUVW";
 /// del contrato), donde un control que no cuadra es la firma de una errata de
 /// lectura (`8` ↔ `B`, `1` ↔ `l`, un dígito comido) y hay que escalar, no pagar.
 ///
+/// Y hoy **ni siquiera ahí se aplica**: las facturas del corpus también son
+/// sintéticas y sus CIF tampoco respetan el control (425 de 471 impresos), así
+/// que `parser.rs` la tiene desactivada con `EXIGIR_DIGITO_DE_CONTROL_NIF`
+/// hasta que haya documentos reales. La función se conserva intacta para poder
+/// volver a encenderla con una sola línea, y estas pruebas siguen fijando su
+/// contrato.
+///
 /// La comparación de identidad del ERP usa [`Nif`] a secas, que solo canoniza la
 /// forma y no valida nada: eso es deliberado.
 pub fn nif_valido(nif: &Nif) -> bool {

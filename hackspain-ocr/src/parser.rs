@@ -38,8 +38,9 @@
 //
 // * `nif_emisor` es el del emisor, y es el que decide a quién se paga. El del
 //   cliente **no** sirve para eso, así que las líneas del cliente se saltan al
-//   buscarlo. Un NIF que parece un NIF pero no pasa el dígito de control es
-//   `ilegible`, no `encontrado` (regla R5); ver `validators::nif_valido`.
+//   buscarlo. El dígito de control **no** se comprueba: ver
+//   `EXIGIR_DIGITO_DE_CONTROL_NIF` para el porqué y para cómo volver a
+//   encenderlo.
 //
 // * `cif_cliente` es el del **cliente**, y se busca **solo** en sus líneas. Ahí
 //   no se exige dígito de control —el CIF del banco no lo pasa— y por eso un
@@ -121,7 +122,12 @@ fn re_nif_etiqueta() -> &'static Regex {
 }
 
 /// Forma de un identificador fiscal: `B46102331`, `X1234567L`, `12345678Z`, y
-/// también `B1234567B` (que *parece* un CIF, para poder degradarlo a ilegible).
+/// también `B1234567B`, que *parece* un CIF aunque su control no cuadre.
+///
+/// Aquí solo se juzga la **forma**; el control se juzga más adelante, y hoy ni
+/// eso (`EXIGIR_DIGITO_DE_CONTROL_NIF`). Reconocer estas formas no es
+/// cosmético: [`primer_token_fiscal`] cae a «cualquier token con un dígito» si
+/// ninguna casa, y ahí el riesgo es coger la palabra de al lado.
 fn re_forma_fiscal() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
@@ -203,6 +209,27 @@ fn re_etiqueta_iva() -> &'static Regex {
 /// Importe: admite las dos convenciones (`2.967,25` y `1705.37`) y exige
 /// separador decimal, porque esto solo se usa sobre base/IVA/total y un entero
 /// suelto en esa línea (`21` de `IVA (21%)`, un año) no es un importe.
+///
+/// El `\s*` que sigue a cada separador decimal no es cosmético. PaddleOCR-VL
+/// mete un espacio detrás de la coma en algunas plantillas —el PDF dice
+/// `Base: 2.336,12` y el OCR entrega `Base: 2.336, 12`— y sin él la cifra casaba
+/// solo hasta el punto: `2.336` en vez de `2336,12`, y R6 escalaba la factura
+/// por un descuadre que no existía. Peor aún, en una cifra sin separador de
+/// miles (`490, 59`) no casaba **nada**, así que el importe se buscaba en la
+/// línea siguiente y se atribuía a la etiqueta equivocada.
+///
+/// El espacio se tolera **solo detrás del separador decimal**, que es donde el
+/// OCR lo mete y donde la alternativa ya sabe que ese separador es el decimal.
+/// Ponerlo en `\d+\.\s*\d{1,2}` (el caso de un solo punto) no vale: en
+/// `1. 144,70` casaba `1. 14` —1,14— y dejaba un `4,70` suelto que, por ser el
+/// último, acababa siendo el total. Un espacio dentro de un grupo de miles
+/// sigue sin tolerarse: no está medido, y adivinar si el punto era de miles es
+/// justo lo que `importe_a_decimal` no puede hacer con un fragmento.
+///
+/// Que el espacio sea tolerancia del parser y no ruido que haya que limpiar
+/// antes no es una preferencia: [`importe_a_decimal`] ya filtra
+/// `!c.is_whitespace() && *c != '\u{00a0}'`, o sea que la tolerancia estaba
+/// escrita en el puerto de destino y era esta puerta la que no la dejaba pasar.
 fn re_importe() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
@@ -211,7 +238,7 @@ fn re_importe() -> &'static Regex {
         // si va antes que la de decimal. Con `\d+\.\d{1,2}` por delante, `1.234`
         // casaba como `1.23` (1234 → 1,23) y el total salía mal sin fallar nada.
         Regex::new(
-            r"\d{1,3}(?:\.\d{3})+,\d{1,2}|\d{1,3}(?:,\d{3})+\.\d{1,2}|\d{1,3}(?:\.\d{3})+|\d+,\d{1,2}|\d+\.\d{1,2}",
+            r"\d{1,3}(?:\.\d{3})+,\s*\d{1,2}|\d{1,3}(?:,\d{3})+\.\s*\d{1,2}|\d{1,3}(?:\.\d{3})+|\d+,\s*\d{1,2}|\d+\.\d{1,2}",
         )
         .expect("regex de importe válida")
     })
@@ -347,9 +374,39 @@ fn primer_token_fiscal(resto: &str) -> Option<String> {
         .map(|token| (*token).to_string())
 }
 
+/// ¿Se exige que el dígito de control del NIF del emisor cuadre?
+///
+/// **Apagado a propósito.** Los NIF del corpus son sintéticos y no respetan el
+/// control: medido sobre las 500 facturas de `data/facturas/`, de los 471
+/// documentos que imprimen un CIF legible solo **46** lo cumplen (425 no; por
+/// inicial `A`: 108, `B`: 272, `J`: 45). `2026-01-18_P005.pdf`, por ejemplo,
+/// imprime `B96233419` y su control debería ser `H`. Encender esto degradaría
+/// `nif_emisor` a `Ilegible` en ~9 de cada 10 facturas, R5 las mandaría todas a
+/// revisión y el lote entero dejaría de pagarse por un rasgo del generador de
+/// datos, no por un problema de lectura.
+///
+/// Es la misma anomalía que `validators.rs` documenta del ERP (47 de 516
+/// asientos): el problema es del dato de origen, no del parser.
+///
+/// **Cómo volver a encenderlo:** ponerlo a `true` cuando las facturas sean
+/// reales, o cuando el corpus se regenere con controles válidos. Al hacerlo hay
+/// que darle la vuelta a dos pruebas, que fallan a propósito para que el cambio
+/// no pase inadvertido: `los_cif_sinteticos_del_corpus_se_leen_aunque_no_cumplan_el_control`
+/// y `un_nif_que_parece_real_pero_falla_el_control_se_lee_mientras_la_comprobacion_este_apagada`.
+///
+/// **Lo que se pierde mientras esté apagado:** un dígito mal leído (`8` ↔ `B`,
+/// `1` ↔ `l`) ya no lo detecta el control. Sigue detectándose por el `score` del
+/// OCR, que es lo otro que mira R5; pero un OCR confiado con una errata de un
+/// solo carácter pasaría. Es el precio de leer este corpus, y por eso la
+/// decisión se deja escrita aquí y no escondida dentro de un `if`.
+const EXIGIR_DIGITO_DE_CONTROL_NIF: bool = false;
+
 /// Canoniza el token y decide su estado. Un NIF que existe como forma pero no
 /// pasa el dígito de control es `ilegible`: hay texto, pero no se sabe a quién
 /// se está pagando.
+///
+/// Hoy esa comprobación está apagada, así que lo único que degrada es que no
+/// haya token que canonizar; ver `EXIGIR_DIGITO_DE_CONTROL_NIF`.
 fn canonizar_nif(
     token: &str,
     crudo: &str,
@@ -359,7 +416,7 @@ fn canonizar_nif(
     match Nif::nuevo(token) {
         None => Identificador::ilegible(crudo, score, origen),
         Some(nif) => {
-            if nif_valido(&nif) {
+            if !EXIGIR_DIGITO_DE_CONTROL_NIF || nif_valido(&nif) {
                 Identificador::encontrado(nif, crudo, score, origen)
             } else {
                 Identificador::ilegible(crudo, score, origen)
@@ -381,8 +438,9 @@ fn canonizar_nif(
 /// de cualquier línea posterior.
 const VENTANA_CLIENTE: usize = 3;
 
-/// Canoniza el CIF del cliente. **Sin** `nif_valido`, a diferencia de
-/// [`canonizar_nif`]: ver el comentario del campo en `domain.rs`.
+/// Canoniza el CIF del cliente. Tampoco comprueba el dígito de control, por lo
+/// mismo que [`canonizar_nif`]: ver `EXIGIR_DIGITO_DE_CONTROL_NIF` y el
+/// comentario del campo en `domain.rs`.
 fn canonizar_cliente(
     token: &str,
     crudo: &str,
@@ -908,8 +966,31 @@ mod tests {
         assert_eq!(factura.nif_emisor.score(), Some(0.99));
     }
 
+    /// El CIF que imprime el corpus no cumple el dígito de control y el parser
+    /// tiene que leerlo igual. `B96233419` es el de `2026-01-18_P005.pdf`: el PDF
+    /// lo imprime tal cual y su control debería ser `H`. Medido sobre las 500
+    /// facturas, 425 de los 471 CIF impresos son así.
+    ///
+    /// Si esta prueba falla, alguien ha encendido `EXIGIR_DIGITO_DE_CONTROL_NIF`:
+    /// entonces hay que decidir si el corpus se regenera con controles válidos —o
+    /// se sustituye por facturas reales— antes de volver a exigirlos, porque con
+    /// los documentos de hoy esto escalaría ~9 de cada 10 facturas.
     #[test]
-    fn un_nif_que_parece_real_pero_falla_el_control_es_ilegible_y_nunca_encontrado() {
+    fn los_cif_sinteticos_del_corpus_se_leen_aunque_no_cumplan_el_control() {
+        let factura = extraer(&[
+            linea(0, "Catering Hermanos Pico S.L.", 0.95),
+            linea(0, "NIF: B96233419", 0.62),
+        ]);
+
+        assert_eq!(factura.nif_emisor.estado(), EstadoCampo::Encontrado);
+        assert_eq!(
+            factura.nif_emisor.valor().map(|n| n.as_str()),
+            Some("B96233419")
+        );
+    }
+
+    #[test]
+    fn un_nif_que_parece_real_pero_falla_el_control_se_lee_mientras_la_comprobacion_este_apagada() {
         let lineas = vec![
             linea(0, "Papelería Ruzafa S.C.", 0.97),
             linea(0, "NIF: B1234567B", 0.62),
@@ -917,13 +998,21 @@ mod tests {
         ];
         let factura = extraer(&lineas);
 
-        assert!(factura.nif_emisor.es_ilegible(), "estado: {:?}", factura.nif_emisor.estado());
-        assert!(
-            !factura.nif_emisor.aparece(),
-            "un control que no cuadra no es un acierto, es R5"
-        );
-        assert_eq!(factura.nif_emisor.valor(), None);
-        // El crudo y el score se conservan para que la revisión sepa qué mirar.
+        // Las dos respuestas están escritas para que encender el control sea un
+        // cambio consciente y no una prueba que hay que adivinar.
+        if EXIGIR_DIGITO_DE_CONTROL_NIF {
+            assert!(factura.nif_emisor.es_ilegible(), "es R5");
+            assert!(!factura.nif_emisor.aparece(), "un control que no cuadra no es un acierto");
+            assert_eq!(factura.nif_emisor.valor(), None);
+        } else {
+            assert_eq!(factura.nif_emisor.estado(), EstadoCampo::Encontrado);
+            assert_eq!(
+                factura.nif_emisor.valor().map(|n| n.as_str()),
+                Some("B1234567B")
+            );
+        }
+        // El crudo y el score se conservan en los dos casos para que la revisión
+        // sepa qué mirar.
         assert_eq!(factura.nif_emisor.crudo(), Some("NIF: B1234567B"));
         assert_eq!(factura.nif_emisor.score(), Some(0.62));
     }
@@ -1019,23 +1108,15 @@ mod tests {
         assert_eq!(factura.nif_emisor.valor().map(|n| n.as_str()), Some("B46102331"));
     }
 
-    /// El CIF del cliente es **trazabilidad fiscal**, no la llave del pago, así
-    /// que no se le exige dígito de control: el mismo token que como emisor
-    /// sería `Ilegible` aquí es `Encontrado`. Cambiar esto degradaría a revisión
-    /// facturas perfectamente legibles, porque el CIF del banco no lo pasa.
+    /// El CIF del cliente es **trazabilidad fiscal**, no la llave del pago: no
+    /// se le exige dígito de control —con o sin `EXIGIR_DIGITO_DE_CONTROL_NIF`—
+    /// porque el CIF del banco no lo pasa y degradarlo mandaría a revisión
+    /// facturas perfectamente legibles.
     #[test]
     fn el_cif_del_cliente_no_exige_digito_de_control() {
         let token = "B1234567B";
-
-        // El mismo token en la línea del emisor sí se degrada (regla R5).
-        assert_eq!(
-            extraer(&[linea(0, &format!("NIF: {token}"), 0.9)])
-                .nif_emisor
-                .estado(),
-            EstadoCampo::Ilegible
-        );
-
         let factura = extraer(&[linea(0, &format!("Cliente: Banco Miralmar · CIF: {token}"), 0.9)]);
+
         assert_eq!(factura.cif_cliente.estado(), EstadoCampo::Encontrado);
         assert_eq!(factura.cif_cliente.valor().map(|n| n.as_str()), Some(token));
     }
@@ -1397,5 +1478,415 @@ mod tests {
 
         assert_eq!(factura.pedido.estado(), EstadoCampo::NoAparece);
         assert!(!factura.sin_identificadores());
+    }
+
+    // -- Puente con la salida real de PaddleOCR-VL ---------------------------
+
+    /// Un espacio que el OCR mete **dentro** de un importe no puede cambiar la
+    /// cifra ni hacer que el importe se busque en la línea siguiente.
+    #[test]
+    fn un_espacio_del_ocr_dentro_del_importe_no_cambia_la_cifra() {
+        for (etiqueta, esperado) in [
+            // El caso real: el PDF dice `2.336,12` y PaddleOCR-VL entrega esto.
+            ("Base: 2.336, 12", "2336.12"),
+            ("Base: 2.336,12", "2336.12"),
+            ("TOTAL: 2.826, 71", "2826.71"),
+            ("TOTAL: 1.144, 70", "1144.70"),
+            ("TOTAL: 1.144,70", "1144.70"),
+            // Sin separador de miles: aquí el espacio hacía que no casara nada.
+            ("IVA (21%): 490, 59", "490.59"),
+            ("IVA (21%): 490,59", "490.59"),
+        ] {
+            let factura = extraer(&[linea(0, etiqueta, 0.75)]);
+            let leido = if etiqueta.starts_with("Base") {
+                factura.base.valor().copied()
+            } else if etiqueta.starts_with("IVA") {
+                factura.iva.valor().copied()
+            } else {
+                factura.total.valor().copied()
+            };
+            assert_eq!(leido, Some(dec(esperado)), "texto: {etiqueta:?}");
+        }
+    }
+
+    /// El mismo espacio no puede hacerse pasar por signo ni inventarse una
+    /// negatividad: el importe sigue positivo.
+    #[test]
+    fn un_espacio_del_ocr_no_convierte_el_importe_en_un_abono() {
+        let factura = extraer(&[linea(0, "TOTAL: 2.826, 71", 0.75)]);
+        assert_eq!(factura.total.valor(), Some(&dec("2826.71")));
+    }
+
+    /// Convierte la respuesta cruda de PaddleOCR-VL en las líneas que consume
+    /// [`extraer`].
+    ///
+    /// PaddleOCR-VL no entrega "líneas", entrega **bloques de layout**
+    /// (`prunedResult.parsing_res_list`): el texto va en `block_content` y la
+    /// caja en `block_bbox`. El score de layout vive aparte, en
+    /// `prunedResult.layout_det_res.boxes`, indexado por `order`, que es el
+    /// `block_order` del bloque. Ese puente es trabajo del servicio
+    /// (`ocr_service/main.py`), **no** del parser: aquí solo se usa para poder
+    /// probar el parser con una salida real.
+    fn lineas_de_paddleocr_vl(crudo: &str) -> Vec<LineaOcr> {
+        let raiz: serde_json::Value = serde_json::from_str(crudo).expect("JSON válido");
+        let pruned = &raiz[0]["prunedResult"];
+
+        let mut puntuaciones = std::collections::HashMap::new();
+        if let Some(cajas) = pruned["layout_det_res"]["boxes"].as_array() {
+            for caja in cajas {
+                if let (Some(orden), Some(score)) =
+                    (caja["order"].as_u64(), caja["score"].as_f64())
+                {
+                    puntuaciones.insert(orden, score);
+                }
+            }
+        }
+
+        pruned["parsing_res_list"]
+            .as_array()
+            .expect("bloques de layout")
+            .iter()
+            .map(|bloque| {
+                let caja = bloque["block_bbox"].as_array().expect("caja del bloque");
+                let mut bbox = [0.0f64; 4];
+                for (posicion, valor) in caja.iter().take(4).enumerate() {
+                    bbox[posicion] = valor.as_f64().expect("coordenada numérica");
+                }
+                let orden = bloque["block_order"].as_u64().unwrap_or(0);
+                LineaOcr {
+                    pagina: 0,
+                    texto: bloque["block_content"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    bbox,
+                    score: puntuaciones.get(&orden).copied().unwrap_or(0.0),
+                }
+            })
+            .collect()
+    }
+
+    /// Diagnóstico, no aserción: imprime la `Factura` que produce un JSON real
+    /// de PaddleOCR-VL. Se salta sin fallar si el fichero no está, porque vive
+    /// en `_scratch/`, que no se versiona.
+    #[test]
+    fn diag_salida_real_de_paddleocr_vl() {
+        let ruta =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("_scratch/paddleocr/p005.json");
+        let Ok(crudo) = std::fs::read_to_string(&ruta) else {
+            eprintln!("(se salta) no está {}", ruta.display());
+            return;
+        };
+
+        let lineas = lineas_de_paddleocr_vl(&crudo);
+        let factura = extraer(&lineas);
+
+        println!("--- {} líneas de OCR ---", lineas.len());
+        for (indice, linea) in lineas.iter().enumerate() {
+            println!("  [{indice:>2}] {:.3} {:?}", linea.score, linea.texto);
+        }
+        println!("--- factura ---");
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&factura).expect("serializable")
+        );
+
+        // Lo que después comprobará R6 (coherencia base + IVA = total).
+        if let (Some(base), Some(iva), Some(total)) = (
+            factura.base.valor().copied(),
+            factura.iva.valor().copied(),
+            factura.total.valor().copied(),
+        ) {
+            println!("--- coherencia ---");
+            println!("base        = {base}");
+            println!("iva         = {iva}");
+            println!("base + iva  = {}", base + iva);
+            println!("total       = {total}");
+            println!("descuadre   = {}", total - (base + iva));
+        }
+    }
+
+    // -- Qué estado cambia al quitar cada dato del OCR real ------------------
+
+    /// Las 13 líneas que PaddleOCR-VL devolvió para `2026-01-18_P005.pdf`.
+    ///
+    /// Los textos son **verbatim** y los scores son los que el puente
+    /// [`lineas_de_paddleocr_vl`] entrega de verdad. Ese puente no siempre puede
+    /// cruzar un bloque con su caja de layout: el pie viene etiquetado `footer`,
+    /// **no trae `block_order`**, y sin `order` no hay forma de encontrar su
+    /// score, así que llega con `0.0` aunque el layout le hubiera dado `0.797`.
+    /// Da igual —el pie es prosa y ningún campo sale de ahí—, pero esta fixture
+    /// reproduce lo que el **parser recibe**, no lo que el servicio quiso decir.
+    ///
+    /// `la_factura_de_prueba_coincide_con_el_json_real_cuando_esta` es lo que
+    /// impide que esto se desvíe del fichero real sin que nadie lo note.
+    fn factura_p005() -> Vec<LineaOcr> {
+        [
+            ("## FACTURA", 0.5182958245277405),
+            ("Factura: FA-2247 Fecha: 18/01/2026", 0.5058019161224365),
+            ("Pedido: PO-2026-0161", 0.5520004034042358),
+            ("Catering Hermanos Pico S.L.", 0.5153137445449829),
+            ("NIF: B96233419", 0.6206668615341187),
+            ("IBAN: ES18 0081 5290 0700 0123 4567", 0.5704403519630432),
+            (
+                "Cliente: Banco Miralmar S.A. · CIF: A58231074",
+                0.6901509165763855,
+            ),
+            ("Consumibles ..... 1.144,70", 0.7059952020645142),
+            ("Transporte urgente ..... 1.191,42", 0.7133252620697021),
+            ("Base: 2.336, 12", 0.7540645599365234),
+            ("IVA (21%): 490,59", 0.7362048625946045),
+            ("TOTAL: 2.826,71", 0.7463081479072571),
+            (
+                "Documento generado por el sistema de facturacion del proveedor.",
+                0.0,
+            ),
+        ]
+        .into_iter()
+        .map(|(texto, score)| linea(0, texto, score))
+        .collect()
+    }
+
+    /// La misma factura sin ninguna de las líneas que contengan alguna `aguja`.
+    /// Es quitar el dato del papel, no estropear la lectura.
+    fn sin_lineas(lineas: &[LineaOcr], agujas: &[&str]) -> Vec<LineaOcr> {
+        lineas
+            .iter()
+            .filter(|linea| !agujas.iter().any(|aguja| linea.texto.contains(aguja)))
+            .cloned()
+            .collect()
+    }
+
+    fn sin_linea(lineas: &[LineaOcr], aguja: &str) -> Vec<LineaOcr> {
+        sin_lineas(lineas, &[aguja])
+    }
+
+    /// La misma factura con `aguja` sustituido por `nuevo` **dentro** del texto
+    /// de la primera línea que la contenga.
+    ///
+    /// Sustituye el trozo, no la línea entera: lo que se simula es un OCR que
+    /// leyó mal ese dato, y borrar el resto de la línea cambiaría el documento
+    /// por otro distinto (p. ej. eliminaría la etiqueta `Cliente:`, que es la
+    /// que abre la ventana de búsqueda). Se conservan score, caja y página: lo
+    /// que cambia es el dato, no la calidad de la lectura.
+    fn con_texto(lineas: &[LineaOcr], aguja: &str, nuevo: &str) -> Vec<LineaOcr> {
+        let mut copia = lineas.to_vec();
+        if let Some(linea) = copia.iter_mut().find(|linea| linea.texto.contains(aguja)) {
+            linea.texto = linea.texto.replace(aguja, nuevo);
+        }
+        copia
+    }
+
+    /// Nombres de los campos en el orden en el que los devuelve [`estados`].
+    const CAMPOS: [&str; 8] = [
+        "nif_emisor",
+        "cif_cliente",
+        "pedido",
+        "numero_factura",
+        "fecha",
+        "base",
+        "iva",
+        "total",
+    ];
+
+    fn estados(factura: &Factura) -> [EstadoCampo; 8] {
+        [
+            factura.nif_emisor.estado(),
+            factura.cif_cliente.estado(),
+            factura.pedido.estado(),
+            factura.numero_factura.estado(),
+            factura.fecha.estado(),
+            factura.base.estado(),
+            factura.iva.estado(),
+            factura.total.estado(),
+        ]
+    }
+
+    fn abreviatura(estado: EstadoCampo) -> &'static str {
+        match estado {
+            EstadoCampo::Encontrado => "ENC",
+            EstadoCampo::NoAparece => "AUS",
+            EstadoCampo::Ilegible => "ILE",
+        }
+    }
+
+    /// **El entregable:** qué campo cambia de estado al quitar cada dato del OCR.
+    ///
+    /// Cada variante declara qué campo debe moverse y a qué estado. La mitad
+    /// interesante de la aserción es la otra: **todo lo demás tiene que seguir en
+    /// `Encontrado`**. Quitar el NIF no puede llevarse por delante el CIF del
+    /// cliente (el emisor se usa para descartarlo en su línea), ni quitar el
+    /// TOTAL el IVA, ni el IBAN colarse como CIF del cliente cuando el cliente
+    /// desaparece. Sin esa mitad, un parser que rellenara campos de más pasaría
+    /// la prueba con nota.
+    ///
+    /// Se lee con `--nocapture`: imprime la tabla antes de comprobar nada.
+    #[test]
+    fn que_campo_cambia_de_estado_al_quitar_cada_dato_del_ocr() {
+        let real = factura_p005();
+
+        // (nombre, líneas, posiciones que deben moverse, estado que deben tomar)
+        let variantes: Vec<(&str, Vec<LineaOcr>, Vec<usize>, EstadoCampo)> = vec![
+            // La factura tal cual: los ocho campos se leen.
+            (
+                "la real (nada quitado)",
+                real.clone(),
+                vec![],
+                EstadoCampo::Encontrado,
+            ),
+            // El dato no está impreso en el PDF.
+            (
+                "sin NIF del emisor",
+                sin_linea(&real, "NIF: "),
+                vec![0],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin CIF del cliente",
+                sin_linea(&real, "Cliente:"),
+                vec![1],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin pedido",
+                sin_linea(&real, "Pedido:"),
+                vec![2],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin nº de factura ni fecha",
+                sin_linea(&real, "Factura: FA-2247 Fecha"),
+                vec![3, 4],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin fecha (deja el nº)",
+                con_texto(&real, "Fecha: 18/01/2026", "Factura: FA-2247"),
+                vec![4],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin nº (deja la fecha)",
+                con_texto(&real, "Factura: FA-2247 ", "Fecha: 18/01/2026"),
+                vec![3],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin base",
+                sin_linea(&real, "Base:"),
+                vec![5],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin IVA",
+                sin_linea(&real, "IVA (21%)"),
+                vec![6],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin TOTAL",
+                sin_linea(&real, "TOTAL:"),
+                vec![7],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin ningún importe",
+                sin_lineas(&real, &["Base:", "IVA (21%)", "TOTAL:"]),
+                vec![5, 6, 7],
+                EstadoCampo::NoAparece,
+            ),
+            (
+                "sin NIF ni CIF del cliente",
+                sin_lineas(&real, &["NIF: ", "Cliente:"]),
+                vec![0, 1],
+                EstadoCampo::NoAparece,
+            ),
+            // Impreso pero ilegible: el tercer estado, que **no** es lo mismo que
+            // ausente. Ausente es un caso normal (se concilia por pedido);
+            // ilegible obliga a escalar.
+            (
+                "NIF impreso e ilegible",
+                con_texto(&real, "NIF: B96233419", "NIF: ~~~"),
+                vec![0],
+                EstadoCampo::Ilegible,
+            ),
+            (
+                "CIF del cliente impreso e ilegible",
+                con_texto(&real, "· CIF: A58231074", "· CIF: ~~~"),
+                vec![1],
+                EstadoCampo::Ilegible,
+            ),
+            (
+                "TOTAL en negativo (abono)",
+                con_texto(&real, "TOTAL: 2.826,71", "TOTAL: -2.826,71"),
+                vec![7],
+                EstadoCampo::Ilegible,
+            ),
+        ];
+
+        let leidos: Vec<[EstadoCampo; 8]> = variantes
+            .iter()
+            .map(|(_, lineas, _, _)| estados(&extraer(lineas)))
+            .collect();
+
+        // La tabla. Se imprime entera antes de comprobar: es lo que se viene a ver.
+        println!();
+        println!("--- estados (ENC=ENCONTRADO, AUS=NO_APARECE, ILE=ILEGIBLE) ---");
+        let mut cabecera = format!("{:<16}", "campo");
+        for numero in 1..=variantes.len() {
+            cabecera.push_str(&format!("{numero:>4}"));
+        }
+        println!("{cabecera}");
+        for (posicion, campo) in CAMPOS.iter().enumerate() {
+            let mut fila = format!("{campo:<16}");
+            for leido in &leidos {
+                fila.push_str(&format!("{:>4}", abreviatura(leido[posicion])));
+            }
+            println!("{fila}");
+        }
+        println!("leyenda:");
+        for (numero, (nombre, _, _, _)) in variantes.iter().enumerate() {
+            println!("  {:>2}. {nombre}", numero + 1);
+        }
+
+        for (indice, (nombre, _, mover, esperado)) in variantes.iter().enumerate() {
+            for (posicion, campo) in CAMPOS.iter().enumerate() {
+                let leido = leidos[indice][posicion];
+                if mover.contains(&posicion) {
+                    assert_eq!(
+                        leido, *esperado,
+                        "«{nombre}»: {campo} debería quedar {esperado:?}"
+                    );
+                } else {
+                    assert_eq!(
+                        leido,
+                        EstadoCampo::Encontrado,
+                        "«{nombre}»: quitar un dato no puede tocar {campo}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// La fixture tiene que ser **la misma factura** que el JSON real, o la tabla
+    /// estaría describiendo un documento inventado. Se salta sin fallar si el
+    /// fichero no está, porque vive en `_scratch/`, que no se versiona.
+    #[test]
+    fn la_factura_de_prueba_coincide_con_el_json_real_cuando_esta() {
+        let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("_scratch/paddleocr/p005.json");
+        let Ok(crudo) = std::fs::read_to_string(&ruta) else {
+            eprintln!("(se salta) no está {}", ruta.display());
+            return;
+        };
+
+        let reales = lineas_de_paddleocr_vl(&crudo);
+        let fixture = factura_p005();
+
+        assert_eq!(reales.len(), fixture.len(), "número de líneas");
+        for (indice, (real, propuesta)) in reales.iter().zip(&fixture).enumerate() {
+            assert_eq!(real.texto, propuesta.texto, "texto de la línea {indice}");
+            assert_eq!(real.score, propuesta.score, "score de la línea {indice}");
+        }
     }
 }
