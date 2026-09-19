@@ -1,0 +1,19 @@
+# El motor no necesita ningun servicio para reproducir el lote: los PDFs
+# escaneados llevan su texto cacheado en `.cache/ocr/`, indexado por sha256 del
+# PDF. Esa cache SI se versiona (120 KB) porque es lo que hace reproducible el
+# lote completo sin levantar el contenedor de vision. Todo lo demas de `.cache/`
+# es basura de ejecucion.
+.cache/*
+!.cache/ocr/
+.cache/ocr/*.tmp
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Salidas de ejecucion: el unico outcomes.jsonl que se versiona es el de
+# `hackspain-ocr/outputs/`. Cualquier otro sitio es un experimento.
+*.jsonl.tmp

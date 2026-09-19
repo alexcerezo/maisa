@@ -3,6 +3,27 @@
 Estructura de proyecto según `spec_y_plan.md`. Conciliación a tres bandas
 (PDF ↔ ERP ↔ Excel) para decidir `PAGAR` / `NO_PAGAR` / `ESCALAR`.
 
+## Dónde está el motor que se ejecuta
+
+> **El motor vivo es `motor/` (Python). El binario Rust de `src/` es legado.**
+
+El motor Rust llegó a tener las reglas R1–R9 y sus tests en verde, pero los
+módulos que leen el mundo (`parser.rs`, `validators.rs`, `ocr.rs`, `erp.rs`,
+`excel.rs`, `obs.rs`) se quedaron en esqueleto: `outputs/outcomes.jsonl` nunca
+llegó a llenarse. Para entregar el domingo hacía falta un motor que **ejecute
+sobre el corpus real**, así que se integró `motor/`, que resuelve las 500
+facturas en ~3,6 s y sin red.
+
+- `motor/README.md` — cómo se ejecuta y qué decide.
+- `motor/docs/fusion_motores.md` — qué se conservó del diseño Rust y por qué.
+- `TRASPASO.md` — se mantiene íntegro como documentación de ese diseño: sus
+  contratos (los tres fallos distintos del ERP, el enum cerrado de eventos, la
+  trampa de `Decimal` en BSON, el XML en ISO-8859-1) siguen siendo válidos y
+  están implementados en `motor/`.
+
+El Rust **no se borra**: no compila sobre el corpus y reescribirlo no cabía en
+el plazo, pero su análisis de dominio es el que fijó la semántica de los estados.
+
 ## Estructura
 
 - `data/` — PDFs de entrada (`facturas/`, `facturas_lote2/`), Excel de contexto,
@@ -10,14 +31,36 @@ Estructura de proyecto según `spec_y_plan.md`. Conciliación a tres bandas
 - `traces/` — una carpeta por factura con OCR, evidencia y decisión (trazabilidad).
 - `outputs/` — `outcomes.jsonl` y `outcomes_lote2.jsonl` (entregables).
 - `ocr_service/` — servicio Python (FastAPI + RapidOCR) con `POST /ocr`.
-- `src/` — binario Rust: `main.rs` (orquestación) + módulos `domain`, `erp`,
-  `ocr`, `excel`, `parser`, `validators`, `reconciler`, `rules`, `obs`.
-- `config/reglas.toml` — umbrales y reglas del motor de decisión (punto de
-  inyección de la regla nueva del sábado).
+- `motor/` — **el motor de decisión que se ejecuta** (Python): reglas, tests,
+  banco de oro, herramientas y documentación. Ver `motor/README.md`.
+- `src/` — binario Rust (legado): `main.rs` (orquestación) + módulos `domain`,
+  `erp`, `ocr`, `excel`, `parser`, `validators`, `reconciler`, `rules`, `obs`.
+- `config/reglas.toml` — reglas del motor Rust (legado). Las del motor vivo
+  están en `motor/config/reglas.toml`.
 - `ui/` — visor HTML estático de trazas (bonus).
 - `validate_jsonl.py` — validador de entrega.
 
 ## Arranque
+
+```
+# Motor de decisión (Python). No necesita red ni servicios: la caché de OCR de
+# los 29 escaneados va versionada en motor/.cache/ocr/.
+python -m pip install -r motor/requirements.txt
+cd hackspain-ocr
+PYTHONPATH=motor/src python -m maisa.procesa \
+  --facturas data/facturas \
+  --xlsx     data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
+  --snapshot data/erp_snapshot.json \
+  --config   motor/config/reglas.toml \
+  --lote 1 --trabajadores 4 \
+  --salida   outputs/outcomes.jsonl
+```
+
+Si aparece un PDF escaneado que no esté en la caché, el motor recurre al
+servicio de visión (por defecto `http://127.0.0.1:8866`) y rellena la caché.
+Para atender ese caso hace falta el contenedor `ocr-api` (`docker-compose.yml`).
+
+### Legado: el binario Rust
 
 ```
 # 1. Bridge del ERP del reto (servicio externo, puerto 8009 por defecto)
@@ -32,6 +75,9 @@ cd ocr_service && uvicorn main:app --host 127.0.0.1 --port 8000
 # 3. Binario Rust (rutas relativas a la raiz de `hackspain-ocr/`)
 cargo run --release -- --pdf-dir data/facturas --out outputs/outcomes.jsonl
 ```
+
+> El paso 3 **no completa** el lote: los módulos de lectura siguen en esqueleto.
+> Se conserva para no perder el diseño y sus 57 tests.
 
 ## Configuración (variables de entorno)
 

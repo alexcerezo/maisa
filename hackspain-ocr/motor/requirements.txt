@@ -1,0 +1,15 @@
+# Dependencias del motor de decision. Todas son stdlib o paquetes puros:
+# no hace falta compilar nada y la instalacion son segundos.
+#
+# El motor NO necesita servicio de OCR para reproducir el lote: los 29 PDFs
+# escaneados tienen su texto ya cacheado en `.cache/ocr/` (120 KB, indexado por
+# sha256 del PDF). Por eso la CI puede reproducir las 500 decisiones sin red y
+# sin contenedor. Si aparece un PDF nuevo, se cae al contenedor `ocr-api` del
+# puerto 8866 y se rellena la cache.
+openpyxl==3.1.5      # Excel de control (14 hojas, incluidas las rotas)
+pypdf==6.19.0        # capa de texto de los PDF + metadatos (/Keywords, /Subject)
+requests==2.34.2     # ERP 2009 y servicio de vision
+fpdf2==2.8.8         # albertitos_plan.md -> albertitos_plan.pdf
+Markdown==3.10.3     # idem
+pytest==9.1.1        # suite de tests
+ruff==0.16.8         # lint (mismo ruleset que la CI)

@@ -1,0 +1,17 @@
+[project]
+name = "maisa-motor"
+version = "1.0.0"
+description = "Motor de decision de la norma de pagos v3 (track Maisa, HackSpain 2026)"
+requires-python = ">=3.11"
+
+# La configuracion de pytest vive en `pytest.ini`, que tiene precedencia sobre
+# este fichero: alli estan los marcadores y el `-m "not lento"` que deja fuera
+# las pruebas que necesitan OCR o recorrer el corpus entero.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Solo errores reales: E9 = sintaxis, F = pyflakes (nombres sin usar, imports
+# muertos, variables no definidas). No discutimos estilo.
+select = ["E9", "F"]

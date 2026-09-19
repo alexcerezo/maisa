@@ -1,5 +1,15 @@
 # Traspaso: qué está hecho, qué falta y cómo probarlo
 
+> **Aviso (unificación).** Este documento describe el motor **Rust**, que quedó
+> como legado: sus módulos de lectura siguen en esqueleto y nunca llegó a
+> resolver el lote. El motor que se ejecuta y se entrega es `motor/` (Python);
+> ver `motor/README.md` y `motor/docs/fusion_motores.md`.
+>
+> Lo que sigue siendo vigente de aquí: los **contratos de dominio** (§3.7 y
+> siguientes) — los tres fallos distintos del ERP, el enum cerrado de eventos de
+> observabilidad, la trampa de `Decimal` en BSON y el XML en ISO-8859-1 — porque
+> están implementados en el motor vivo.
+
 Este documento existe para una cosa: que los módulos que quedan se puedan hacer
 **en paralelo** sin tener que esperarse unos a otros, y que nadie tenga que
 adivinar qué forma tiene un dato que ya está decidido.

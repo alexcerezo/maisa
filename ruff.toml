@@ -1,0 +1,14 @@
+# Configuracion de lint del motor Maisa.
+#
+# Deliberadamente estrecha: solo errores reales (E9 = sintaxis, F = pyflakes:
+# nombres sin usar, imports muertos, variables no definidas). El objetivo no es
+# discutir estilo, es que un fallo de verdad rompa la CI. El estilo del repo ya
+# lo fija la convencion (espanol sin tildes, comentarios explicativos).
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E9", "F"]
+# El corpus trae nombres con tildes y mayusculas raras a proposito (son las
+# trampas del reto), asi que no tocamos los ficheros de datos.
+exclude = ["corpus", ".venv", "entrega", "recon", "**/_scratch*", "*.cache"]

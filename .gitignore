@@ -17,6 +17,10 @@ backups/
 # (`outputs/outcomes.jsonl` sí se versiona: esa SÍ es la entrega.)
 hackspain-ocr/outputs/outcomes_ejemplo.jsonl
 
+# Traza encadenada: material de auditoría que se regenera en cada pasada y
+# lleva marca de tiempo, así que versionarla ensuciaría el repo en cada run.
+hackspain-ocr/outputs/*_traza.jsonl
+
 
 # Restos de Python (el descargador del ERP y validate_jsonl.py son stdlib)
 __pycache__/
