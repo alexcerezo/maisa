@@ -394,19 +394,28 @@ pub enum EstadoAsiento {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Asiento {
     pub asiento_id: String,
-    /// NIF del proveedor, **obligatorio** y ya canónico.
+    /// NIF del proveedor, ya canónico. `None` cuando el ERP no lo trae.
     ///
-    /// Se deja obligatorio a propósito: el ERP es la fuente de verdad, así que
-    /// todo asiento tiene proveedor identificable. El tipo estricto obliga a
-    /// `erp.rs` a decidir explícitamente qué hacer con una fila sucia (saltarla
-    /// contándola en `obs`, en vez de dejar que un NIF roto se propague en
-    /// silencio hasta la comparación con la lista de pago prohibido).
+    /// **No es un caso hipotético**: el catálogo real trae 20 de 516 asientos
+    /// con el NIF en blanco (2 por cada uno de los 10 proveedores, todos
+    /// PENDIENTE). Se representan como `None` en vez de descartar el asiento
+    /// porque el asiento *sí* existe: tiene pedido, importe y estado, y sirve
+    /// para conciliar por pedido. Tirarlo convertía una factura legítima en un
+    /// `sin_match` indistinguible de "el ERP no tiene esta factura", que es
+    /// una mentira sobre la evidencia.
     ///
-    /// Efecto colateral valioso: como un asiento emparejado *siempre* aporta su
-    /// NIF, la regla `R2` puede verificar la prohibición de pago incluso cuando
-    /// el PDF no trajo NIF. El agujero "PDF sin NIF → paga a proveedor
+    /// Lo que `None` **no** hace es autorizar el pago: sin NIF no se puede
+    /// comprobar el proveedor contra la lista de pago prohibido, así que el
+    /// motor escala con motivo explícito (regla `R10` en `rules.rs`). El tipo
+    /// sigue obligando a tratar la fila sucia de forma explícita; lo que cambia
+    /// es la respuesta: de "descartar en silencio" a "escalar diciendo por qué".
+    ///
+    /// Efecto colateral valioso que se conserva: cuando el asiento *sí* trae
+    /// NIF, la regla `R2` puede verificar la prohibición de pago incluso si el
+    /// PDF no trajo NIF, y el agujero "PDF sin NIF → paga a proveedor
     /// prohibido" queda cerrado sin ninguna regla extra.
-    pub nif: Nif,
+    #[serde(default)]
+    pub nif: Option<Nif>,
     pub pedido: String,
     pub importe: Decimal,
     pub estado: EstadoAsiento,

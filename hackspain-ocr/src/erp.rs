@@ -19,9 +19,13 @@
 //! * **`por_pagina` no es constante.** Lo declara el ERP en `<meta>` y la
 //!   última página trae menos filas (16 de 20 en el snapshot real de 516
 //!   asientos). Nada de asumir 20 para calcular la última página.
-//! * **`nif` es obligatorio en `domain::Asiento`.** Una fila sin NIF no se
-//!   puede representar: se salta y se cuenta en `avisos` (hoy son 20 de 516),
-//!   en vez de dejar que un NIF roto se propague en silencio.
+//! * **`nif` es opcional en `domain::Asiento`.** Una fila sin NIF se
+//!   representa con `nif: None` y **se conserva**: tiene pedido, importe y
+//!   estado, asi que sirve para conciliar por pedido. Se anota ademas en
+//!   `avisos` (hoy son 20 de 516) porque el recuento de filas sucias es
+//!   informacion de operacion. Descartarla convertia una factura legitima en
+//!   un `sin_match` que mentia sobre la evidencia; quien decide no pagarla es
+//!   la regla `R10`, no el cargador.
 //! * **Nada de `f64` para dinero.** Los importes son `Decimal` y en el
 //!   snapshot se emiten como **número JSON** conservando los ceros finales
 //!   (`9872.00`), porque el validador de Mongo declara `importe` como
@@ -258,7 +262,8 @@ pub struct Descarga {
     pub asientos: Vec<Asiento>,
     /// Cabecera lista para `escribir_snapshot`.
     pub meta: MetaSnapshot,
-    /// Una entrada por fila saltada.
+    /// Avisos de la última descarga: filas del ERP que no se pudieron mapear
+    /// del todo (una sin `id`, o una con el NIF en blanco).
     pub avisos: Vec<Aviso>,
     /// Facturas repetidas que se colapsaron.
     pub duplicados: Vec<Duplicado>,
@@ -354,7 +359,8 @@ pub struct ClienteErp {
     transporte: Transporte,
     /// Filas leídas del ERP en esta descarga.
     filas_leidas: u32,
-    /// Filas saltadas, aún sin agrupar (se agrupan al construir los avisos).
+    /// Avisos de la descarga en curso, aún sin agrupar (se agrupan al construir
+    /// la cabecera del snapshot).
     avisos_fila: Vec<Aviso>,
 }
 
@@ -448,7 +454,7 @@ impl ClienteErp {
         self.filas_leidas
     }
 
-    /// Filas saltadas en la última descarga.
+    /// Avisos de la última descarga.
     //
     // El binario lee `descarga.avisos` (que es esta misma lista ya copiada al
     // resultado), así que aquí solo entran las pruebas. Se conserva porque es
@@ -726,13 +732,18 @@ impl ClienteErp {
         let cuerpo = self.consultar(&ruta).await?;
         let raiz = analizar(&cuerpo)?;
 
-        // Las filas leidas cuentan las utiles MAS las saltadas: es el numero que
-        // se compara con `<meta><total>`, y saltarse filas no puede parecer que
-        // el ERP devolvio menos.
-        let avisos_antes = self.avisos_fila.len();
+        // Las filas leidas son las que **envio** el ERP (nodos `<asiento>`), no
+        // las que sobrevivieron al mapeo: es el numero que se compara con
+        // `<meta><total>`, y una fila que no se puede mapear no puede parecer
+        // que el ERP no la mando. Se cuentan los nodos directamente, sin sumar
+        // avisos, porque desde que una fila sin NIF se conserva con `nif: None`
+        // un aviso ya no implica una fila perdida: contarla dos veces inflaria
+        // el recuento y pondria el snapshot en `PARCIAL` sin motivo.
+        let filas = raiz
+            .hijo("asientos")
+            .map_or(0, |contenedor| contenedor.hijos_con("asiento").len());
         let pagina = pagina_desde_nodo(&raiz, &ruta, &mut self.avisos_fila)?;
-        let saltadas = self.avisos_fila.len() - avisos_antes;
-        self.filas_leidas += pagina.asientos.len() as u32 + saltadas as u32;
+        self.filas_leidas += filas as u32;
         Ok(pagina)
     }
 
@@ -798,6 +809,9 @@ impl ClienteErp {
         }
 
         let leidas = self.filas_leidas;
+        // Filas que el ERP envió y que no llegaron a ser un `Asiento`. Con el
+        // contrato actual solo puede ser una fila **sin `id`**, que no se puede
+        // ni identificar; las de NIF en blanco sí se conservan (`nif: None`).
         let saltadas = leidas.saturating_sub(asientos.len() as u32);
         // Dos filas con el mismo `asiento_id` darian dos documentos con el mismo
         // `_id` (`<snapshot_id>#<asiento_id>`) y Mongo rechazaria la importacion
@@ -818,7 +832,9 @@ impl ClienteErp {
             ));
         }
         if saltadas > 0 {
-            problemas.push(format!("filas saltadas: {saltadas} de {leidas} (ver `avisos`)"));
+            problemas.push(format!(
+                "filas sin mapear: {saltadas} de {leidas} (ver `avisos`)"
+            ));
         }
         if !duplicados.is_empty() {
             problemas.push(format!("facturas duplicadas colapsadas: {}", duplicados.len()));
@@ -1275,8 +1291,9 @@ fn pagina_desde_nodo(raiz: &Nodo, ruta: &str, avisos: &mut Vec<Aviso>) -> Result
 
 /// Un `<asiento>` → `domain::Asiento`, o `None` si la fila se salta.
 ///
-/// Se salta (con aviso) la fila sin NIF porque `Asiento::nif` es obligatorio; se
-/// falla si el `estado` es desconocido, porque un estado nuevo tratado como
+/// Se salta (con aviso) la fila **sin id**, que no se puede ni identificar; se
+/// **conserva** la que no trae NIF, con `nif: None` y su aviso correspondiente.
+/// Se falla si el `estado` es desconocido, porque un estado nuevo tratado como
 /// pendiente acabaría en un pago.
 fn asiento_desde_nodo(nodo: &Nodo, avisos: &mut Vec<Aviso>) -> Result<Option<Asiento>, ErpError> {
     let asiento_id = nodo.texto_o_vacio("id").trim().to_string();
@@ -1288,18 +1305,23 @@ fn asiento_desde_nodo(nodo: &Nodo, avisos: &mut Vec<Aviso>) -> Result<Option<Asi
         return Ok(None);
     }
 
+    // Un NIF que no se puede canonizar **no** invalida la fila: se conserva con
+    // `nif: None` y es `R10` quien decide no pagarla. Se anota igualmente en
+    // `avisos` —distinguiendo "vacio" de "ilegible"— porque el recuento de filas
+    // sucias es información de operación: el snapshot real lo publica
+    // ("nif vacio en 20/516") y dejar de contarlo sería perder trazabilidad.
     let crudo_nif = nodo.texto_o_vacio("nif");
-    let Some(nif) = Nif::nuevo(&crudo_nif) else {
+    let nif = Nif::nuevo(&crudo_nif);
+    if nif.is_none() {
         avisos.push(Aviso {
-            asiento_id,
+            asiento_id: asiento_id.clone(),
             motivo: if crudo_nif.trim().is_empty() {
                 String::from("nif vacio")
             } else {
                 format!("nif ilegible ({crudo_nif:?})")
             },
         });
-        return Ok(None);
-    };
+    }
 
     let crudo_importe = nodo.texto_o_vacio("importe");
     let Some(importe) = importe_a_decimal(&crudo_importe) else {
@@ -1400,8 +1422,11 @@ fn colapsar_duplicados(asientos: Vec<Asiento>) -> (Vec<Asiento>, Vec<Duplicado>)
     (conservados, traza)
 }
 
-/// Agrupa las filas saltadas por motivo y las presenta para `obs`: un aviso por
+/// Agrupa los avisos por motivo y los presenta para `obs`: una línea por
 /// motivo, con recuento y muestra (`"nif vacio en 20/516: ['AS-00499', ...]"`).
+///
+/// El denominador es el total de filas leídas, no el de avisos: así `20/516` se
+/// lee como "20 filas sucias de 516", que es la información útil.
 fn lineas_de_presentacion(avisos: &[Aviso], denominador: u32) -> Vec<String> {
     let mut grupos: Vec<(String, Vec<String>)> = Vec::new();
     for aviso in avisos {
@@ -1584,7 +1609,13 @@ pub fn asiento_a_snapshot(asiento: &Asiento, snapshot_id: &str) -> AsientoSnapsh
         clave_factura: clave_factura(asiento),
         fecha: asiento.fecha.clone(),
         proveedor: asiento.proveedor.clone(),
-        nif: asiento.nif.as_str().to_string(),
+        // Sin NIF se guarda cadena vacía, que es exactamente lo que escribe la
+        // referencia en Python: el documento dice "el ERP no lo trae", no
+        // inventa un NIF. En la vuelta, `Nif::nuevo("")` es `None` otra vez.
+        nif: asiento
+            .nif
+            .as_ref()
+            .map_or_else(String::new, |nif| nif.as_str().to_string()),
         pedido: asiento.pedido.clone(),
         importe: asiento.importe,
         estado: asiento.estado.clone(),
@@ -1606,10 +1637,11 @@ pub struct Snapshot {
     /// Cuántos asientos lleva el documento. Coincide con `asientos.len()` en un
     /// snapshot bien formado; no es el total del ERP.
     pub total_asientos: u32,
-    /// El `<total>` que anunció el ERP, **incluidas** las filas saltadas (las
-    /// que no tenían NIF). Es `≥ total_asientos`, y es intencionado: si se
-    /// guardase el recuento de útiles, el snapshot no podría demostrar contra
-    /// qué se verificó. En la descarga de referencia: 516 aquí, 496 asientos.
+    /// El `<total>` que anunció el ERP. Con `nif: None` representable, **no se
+    /// salta ninguna fila**: coincide con `total_asientos` (516 y 516 en la
+    /// descarga de referencia). Antes era `≥` porque las 20 filas sin NIF se
+    /// tiraban; el campo se mantiene para poder detectar un snapshot que sí
+    /// haya perdido filas y para comparar contra lo que anuncia el ERP.
     pub asientos_descargados: u32,
     pub paginas: u32,
     pub vigente: bool,
@@ -1695,22 +1727,26 @@ pub fn asientos_del_snapshot(snapshot: &Snapshot) -> Vec<Asiento> {
         .asientos
         .iter()
         .filter(|documento| documento.vigente)
-        .filter_map(asiento_desde_snapshot)
+        .map(asiento_desde_snapshot)
         .collect()
 }
 
-/// Documento del snapshot → `domain::Asiento`. `None` si el NIF del documento
-/// no se puede normalizar (un snapshot manipulado a mano).
-fn asiento_desde_snapshot(documento: &AsientoSnapshot) -> Option<Asiento> {
-    Some(Asiento {
+/// Documento del snapshot → `domain::Asiento`.
+///
+/// Un `nif` vacío en el documento (los 20 del snapshot real) significa "el ERP no
+/// lo trae", no "documento roto": se traduce a `None` y el asiento se conserva.
+/// Descartarlo aquí devolvía 496 asientos en vez de 516 y convertía 20 facturas
+/// legítimas en un `sin_match` indistinguible de "el ERP no tiene esta factura".
+fn asiento_desde_snapshot(documento: &AsientoSnapshot) -> Asiento {
+    Asiento {
         asiento_id: documento.asiento_id.clone(),
-        nif: Nif::nuevo(&documento.nif)?,
+        nif: Nif::nuevo(&documento.nif),
         pedido: documento.pedido.clone(),
         importe: documento.importe,
         estado: documento.estado.clone(),
         proveedor: documento.proveedor.clone(),
         fecha: documento.fecha.clone(),
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1793,7 +1829,7 @@ mod tests {
         assert_eq!(primero.asiento_id, "AS-00084");
         assert_eq!(primero.fecha.as_deref(), Some("2026-03-21"));
         assert_eq!(primero.proveedor.as_deref(), Some("P002"));
-        assert_eq!(primero.nif.as_str(), "A41220987");
+        assert_eq!(primero.nif.as_ref().map(Nif::as_str), Some("A41220987"));
         assert_eq!(primero.pedido, "PO-2026-0084");
         assert_eq!(primero.importe, Decimal::from_str("6199.54").unwrap());
         assert_eq!(primero.estado, EstadoAsiento::Pendiente);
@@ -1933,7 +1969,7 @@ mod tests {
     fn la_clave_de_factura_junta_proveedor_pedido_fecha_importe() {
         let asiento = Asiento {
             asiento_id: String::from("AS-00084"),
-            nif: Nif::nuevo("A41220987").unwrap(),
+            nif: Nif::nuevo("A41220987"),
             pedido: String::from("PO-2026-0084"),
             importe: Decimal::from_str("6199.54").unwrap(),
             estado: EstadoAsiento::Pendiente,
@@ -1959,14 +1995,21 @@ mod tests {
     }
 
     #[test]
-    fn una_fila_con_nif_vacio_se_salta_y_se_cuenta() {
-        // Hoy son 20 de 516. `domain::Asiento` exige NIF, asi que la fila no se
-        // puede representar: se salta y se cuenta en vez de propagar un NIF roto.
+    fn una_fila_con_nif_vacio_se_conserva_y_se_cuenta() {
+        // Hoy son 20 de 516. La fila se conserva con `nif: None` —tiene pedido,
+        // importe y estado, y sirve para conciliar por pedido— y ademas se
+        // cuenta en `avisos`, que es lo que publica el snapshot real.
         let pagina = "<?xml version=\"1.0\"?><respuesta><meta><total>1</total><paginas>1</paginas><pagina>1</pagina><por_pagina>20</por_pagina><generado>19/09/2026 11:53:33</generado></meta><asientos><asiento><id>AS-00499</id><fecha>01/02/2026</fecha><proveedor>P003</proveedor><nif></nif><pedido>PO-2026-1</pedido><importe>1,00</importe><estado>PENDIENTE</estado></asiento></asientos></respuesta>";
         let raiz = analizar(pagina).unwrap();
         let mut avisos = Vec::new();
         let resultado = pagina_desde_nodo(&raiz, "/erp/asientos?pagina=1", &mut avisos).unwrap();
-        assert!(resultado.asientos.is_empty(), "la fila sin NIF no entra");
+        assert_eq!(resultado.asientos.len(), 1, "la fila sin NIF si entra");
+        let asiento = &resultado.asientos[0];
+        assert_eq!(asiento.asiento_id, "AS-00499");
+        assert_eq!(asiento.nif, None, "sin NIF, pero con todo lo demas");
+        assert_eq!(asiento.pedido, "PO-2026-1");
+        assert_eq!(asiento.importe, Decimal::from_str("1.00").unwrap());
+        assert_eq!(asiento.estado, EstadoAsiento::Pendiente);
         assert_eq!(
             avisos,
             vec![Aviso {
@@ -2109,7 +2152,7 @@ mod tests {
 
     /// `filas_leidas` y `avisos` cuentan la última descarga y solo la última: si
     /// se acumularan, la segunda descarga del proceso declararía el doble de
-    /// filas saltadas que la primera y el snapshot mentiría.
+    /// avisos que la primera y el snapshot mentiría.
     #[tokio::test]
     async fn los_contadores_de_la_descarga_arrancan_a_cero() {
         let cliente = cliente_simulado(vec![]);
@@ -2343,7 +2386,7 @@ mod tests {
 
         let conciliables = asientos_del_snapshot(&releido);
         assert_eq!(conciliables.len(), 20);
-        assert_eq!(conciliables[0].nif.as_str(), "A41220987");
+        assert_eq!(conciliables[0].nif.as_ref().map(Nif::as_str), Some("A41220987"));
         assert_eq!(conciliables[0].importe, Decimal::from_str("6199.54").unwrap());
         assert_eq!(conciliables[0].estado, EstadoAsiento::Pendiente);
 
@@ -2370,7 +2413,7 @@ mod tests {
         let texto = r#"{"_id":"s#AS-1","asiento_id":"AS-1","snapshot_id":"s","clave_factura":"P|PO|2026-01-01|1.00","fecha":"2026-01-01","proveedor":"P","nif":"A41220987","pedido":"PO","importe":"1.00","estado":"PENDIENTE","vigente":true,"esquema_version":1}"#;
         let documento: AsientoSnapshot = serde_json::from_str(texto).expect("se lee");
         assert_eq!(documento.importe, Decimal::from_str("1.00").unwrap());
-        let asiento = asiento_desde_snapshot(&documento).expect("NIF valido");
+        let asiento = asiento_desde_snapshot(&documento);
         assert_eq!(asiento.asiento_id, "AS-1");
     }
 
@@ -2388,30 +2431,25 @@ mod tests {
         assert_eq!(snapshot.estado, "COMPLETO");
         assert!(snapshot.avisos.iter().any(|aviso| aviso.contains("nif vacio en 20/516")));
 
-        // `snapshot.asientos` NO tiene el mismo tamano segun quien lo escribio, y
-        // el test no debe depender de eso:
-        //   - la referencia en Python guarda las 516 filas, incluidas las 20 sin
-        //     NIF (un string vacio pasa el $jsonSchema de Mongo);
-        //   - `escribir_snapshot` de Rust guarda solo lo que cabe en un
-        //     `AsientoSnapshot` con NIF: 496.
-        // El contrato (§4.1) manda SALTAR la fila sin NIF y anotarla en `avisos`;
-        // que ademas se guarde o no es una decision de cada escritor. Lo que si
-        // tiene que cumplirse en los dos casos -- y es lo que se comprueba aqui --
-        // es que el lector saque siempre los mismos 496 asientos utilizables.
-        assert!(
-            snapshot.asientos.len() == 516 || snapshot.asientos.len() == 496,
-            "el snapshot trae {} documentos: ni la forma de la referencia (516) ni la de Rust (496)",
+        // `snapshot.asientos` lleva las 516 filas, incluidas las 20 sin NIF
+        // (tanto la referencia en Python como `escribir_snapshot` guardan la
+        // cadena vacia, que es un valor valido del esquema). El aviso de arriba
+        // documenta cuantas son.
+        assert_eq!(
+            snapshot.asientos.len(),
+            516,
+            "el snapshot trae {} documentos, y el real son 516",
             snapshot.asientos.len()
         );
 
         let asientos = asientos_del_snapshot(&snapshot);
-        // Las 20 filas sin NIF no pueden ser un `domain::Asiento` (el NIF es
-        // obligatorio) y por eso no entran en la conciliacion. El aviso de arriba
-        // las documenta.
-        assert_eq!(asientos.len(), 496, "las 20 filas sin NIF no son asientos");
+        // Las 20 filas sin NIF **entran** con `nif: None`: sin ellas, esas 20
+        // facturas escalarian como `sin_match`, que es decir que el ERP no las
+        // tiene cuando si las tiene. Quien no autoriza el pago es `R10`.
+        assert_eq!(asientos.len(), 516, "las 20 filas sin NIF tambien son asientos");
         let primero = &asientos[0];
         assert_eq!(primero.asiento_id, "AS-00084");
-        assert_eq!(primero.nif.as_str(), "A41220987");
+        assert_eq!(primero.nif.as_ref().map(Nif::as_str), Some("A41220987"));
         assert_eq!(primero.importe, Decimal::from_str("6199.54").unwrap());
         assert_eq!(clave_factura(primero), "P002|PO-2026-0084|2026-03-21|6199.54");
         // 9 PAGADA y 507 PENDIENTE en el snapshot real.
@@ -2450,7 +2488,7 @@ mod tests {
         assert_eq!(descarga.meta.paginas, 26);
         assert_eq!(descarga.meta.asientos_descargados, 516);
         assert_eq!(descarga.meta.estado, "COMPLETO");
-        assert_eq!(descarga.asientos.len(), 516 - 20, "los NIF vacios no entran");
+        assert_eq!(descarga.asientos.len(), 516, "las 20 sin NIF tambien entran");
         assert_eq!(descarga.avisos.len(), 20);
         assert_eq!(clave_factura(&descarga.asientos[0]), "P002|PO-2026-0084|2026-03-21|6199.54");
     }

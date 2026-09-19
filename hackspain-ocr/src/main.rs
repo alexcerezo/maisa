@@ -5,15 +5,17 @@ use axum::{
     Json, Router,
 };
 use mongodb::{
-    bson::{doc, Bson, Document},
+    bson::{doc, Bson, DateTime, Decimal128, Document},
     options::ClientOptions,
     Client, Collection, Database,
 };
+use rust_decimal::Decimal;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,17 +36,94 @@ mod ocr;
 mod parser;
 mod validators;
 
-use domain::{Asiento, Decision, Evidencia, Factura, FilaExcel, Huellas, Resultado};
+use domain::{
+    Asiento, Decision, EstadoAsiento, Evidencia, Factura, FilaExcel, Huellas, Nif, Resultado,
+};
 use reconciler::{conciliar, IndiceErp, IndiceExcel};
 use rules::{decidir, ReglasConfig};
 
-// --- MODELOS ---
+// --- ADAPTADOR DE PERSISTENCIA: documento Mongo → tipo de dominio ---
 
-// Aquí vivía `InvoiceData` (`emisor` / `total` / `raw_text`), el modelo del
-// scaffold que devolvía el OCR en crudo. Se ha eliminado (TRASPASO.md §3.3): la
-// forma real de una factura extraída es `domain::Factura` —ocho campos
-// canónicos, cada uno con su estado y su rastro— y mantener los dos modelos
-// obligaba a traducir de uno a otro perdiendo el `crudo` por el camino.
+/// Espejo de los campos que el motor **consume** del documento `asientos` tal y
+/// como lo guarda Mongo.
+///
+/// Existe porque el tipo de dominio no puede —ni debe— deserializarse directo
+/// desde BSON. La colección guarda `fecha` como BSON **`date`** e `importe` como
+/// BSON **`decimal`**, y el deserializador de `bson` presenta los dos como un
+/// *mapa*; `domain::Asiento` los declara como `Option<String>` y
+/// `rust_decimal::Decimal`, que solo aceptan escalares. El resultado era un
+/// descarte **silencioso** de los 516 asientos: el servidor arrancaba en verde
+/// con el catálogo del ERP vacío y decidía `ESCALAR` para toda factura.
+///
+/// El coste de mantener este espejo es que un cambio de esquema hay que
+/// reflejarlo aquí; a cambio, `domain.rs` sigue siendo agnóstico al
+/// almacenamiento (no se le cuela ni un tipo de `bson`, así que no hay tipos
+/// Mongo-específicos en la lógica de decisión) y los tests de dominio siguen
+/// construyendo `Asiento` con tipos Rust corrientes.
+///
+/// Nota: la conversión es trabajo explícito de la capa de persistencia
+/// (TRASPASO.md §3.8), no un detalle que deba resolverse con atributos serde
+/// dentro del dominio.
+#[derive(Debug, Deserialize)]
+struct AsientoDoc {
+    asiento_id: String,
+    nif: String,
+    pedido: String,
+    importe: Decimal128,
+    estado: EstadoAsiento,
+    #[serde(default)]
+    proveedor: Option<String>,
+    #[serde(default)]
+    fecha: Option<DateTime>,
+}
+
+impl AsientoDoc {
+    /// Pasa el documento de Mongo al tipo de dominio.
+    ///
+    /// Un NIF en blanco **no** invalida el asiento: se traduce a `None` y el
+    /// asiento se conserva con su pedido, su importe y su estado. Descartarlo
+    /// —que es lo que hacía antes esta función— borraba la única prueba de que
+    /// el ERP *sí* tiene la factura, y la dejaba escalando como `sin_match`,
+    /// igual que una factura que no existe. Quien decide qué hacer con un
+    /// asiento sin NIF es el motor de reglas (`R10`), no el cargador: el
+    /// cargador solo transporta la evidencia tal y como está.
+    ///
+    /// Sigue siendo falible por el importe, que es lo único que no tiene
+    /// lectura segura: un `decimal` ilegible descarta la fila y se cuenta.
+    fn a_dominio(self) -> Result<Asiento, String> {
+        // Vía el texto (`Decimal128` implementa `Display`), no vía `f64`: el
+        // importe es dinero y un float perdería céntimos.
+        let importe = Decimal::from_str(&self.importe.to_string()).map_err(|e| {
+            format!(
+                "asiento {} con importe ilegible ({:?}): {e}",
+                self.asiento_id, self.importe
+            )
+        })?;
+
+        Ok(Asiento {
+            asiento_id: self.asiento_id,
+            nif: Nif::nuevo(&self.nif),
+            pedido: self.pedido,
+            importe,
+            estado: self.estado,
+            proveedor: self.proveedor,
+            fecha: self.fecha.map(formatear_fecha),
+        })
+    }
+}
+
+/// BSON `date` → `"YYYY-MM-DD"` en UTC.
+///
+/// Es la misma forma que usa la clave de factura del ERP
+/// (`proveedor|pedido|fecha|importe`), para que los dos caminos hablen del mismo
+/// día y la fecha sea comparable y auditable como texto.
+fn formatear_fecha(fecha: DateTime) -> String {
+    match fecha.try_to_rfc3339_string() {
+        Ok(rfc3339) => rfc3339.split('T').next().unwrap_or(&rfc3339).to_string(),
+        // Solo ocurre con años fuera del rango representable en RFC 3339.
+        Err(_) => fecha.timestamp_millis().to_string(),
+    }
+}
 
 // --- CATÁLOGO DEL ERP (en memoria) ---
 
@@ -69,8 +148,33 @@ impl Catalogo {
     /// por falta de evidencia, que es la respuesta segura). Un asiento que no
     /// encaje con el esquema se descarta y se registra; no puede tumbar el catálogo.
     async fn desde_mongo(db: &Database) -> Self {
-        let asientos =
-            leer_coleccion::<Asiento>(db, "asientos", doc! { "vigente": true }, "asiento").await;
+        // Se leen como `AsientoDoc` (la forma BSON real) y se convierten al
+        // dominio. Leer directo `Asiento` aquí no funciona: `fecha` llega como
+        // BSON `date` e `importe` como BSON `decimal`, y ninguno de los dos
+        // encaja con los tipos del dominio.
+        let documentos = leer_coleccion::<AsientoDoc>(
+            db,
+            "asientos",
+            doc! { "vigente": true },
+            "asiento",
+        )
+        .await;
+
+        let mut asientos = Vec::with_capacity(documentos.len());
+        let mut invalidos = 0usize;
+        for documento in documentos {
+            match documento.a_dominio() {
+                Ok(asiento) => asientos.push(asiento),
+                Err(e) => {
+                    invalidos += 1;
+                    tracing::warn!("asiento descartado al normalizar: {e}");
+                }
+            }
+        }
+        if invalidos > 0 {
+            tracing::warn!("'asientos': {invalidos} asiento(s) descartado(s) al pasar al dominio");
+        }
+
         let snapshot_id = snapshot_vigente(db)
             .await
             .unwrap_or_else(|| format!("local-{}", epoch_millis()));
@@ -346,14 +450,15 @@ fn cargar_reglas(ruta: &Path) -> Result<ReglasConfig, Box<dyn std::error::Error>
 
 /// Los avisos que trae un snapshot, en voz alta.
 ///
-/// Las filas sucias del ERP (hoy 20 de 516 vienen sin NIF) son filas que **no**
-/// van a poder conciliarse: callarlas convertiría un dato sucio en un ESCALAR
-/// sin explicación. Se resumen en el log de arranque porque el snapshot es una
-/// foto del despliegue y sus defectos son los mismos para todo el lote.
+/// Las filas sucias del ERP (hoy 20 de 516 vienen sin NIF) siguen siendo un dato
+/// sucio y se publican: **entran** en el catálogo —se pueden conciliar por pedido—
+/// pero no se pueden pagar en automático, así que un ESCALAR por R10 tiene que
+/// poder explicarse leyendo el arranque. Se resumen en el log porque el snapshot
+/// es una foto del despliegue y sus defectos son los mismos para todo el lote.
 fn avisar_de_snapshot(snapshot: &erp::Snapshot) {
     if !snapshot.estado.eq_ignore_ascii_case("COMPLETO") {
         tracing::warn!(
-            "el snapshot {} viene {} ({} fila(s) del ERP, {} asiento(s) utilizable(s)): conviene \
+            "el snapshot {} viene {} ({} fila(s) del ERP, {} asiento(s) leído(s)): conviene \
              repetir la descarga con --refetch-erp antes de fiarse del lote",
             snapshot.snapshot_id,
             snapshot.estado,
@@ -405,8 +510,16 @@ async fn cargar_erp(args: &Args) -> Result<(Vec<Asiento>, String), Box<dyn std::
             )
         })?;
         let asientos = erp::asientos_del_snapshot(&snapshot);
+        // Un asiento sin NIF **entra** en el catálogo: se concilia por pedido y
+        // es `R10` quien lo escala con motivo. Se cuenta aparte porque es el
+        // número que explica los ESCALAR del lote.
+        let sin_nif = asientos
+            .iter()
+            .filter(|asiento| asiento.nif.is_none())
+            .count();
         tracing::info!(
-            "ERP: snapshot {} ({}) → {} asiento(s) utilizable(s) de {} fila(s), {} página(s)",
+            "ERP: snapshot {} ({}) → {} asiento(s) de {} fila(s) ({sin_nif} sin NIF, escalan por \
+             R10), {} página(s)",
             snapshot.snapshot_id,
             ruta.display(),
             asientos.len(),
@@ -469,7 +582,7 @@ async fn cargar_erp(args: &Args) -> Result<(Vec<Asiento>, String), Box<dyn std::
     erp::escribir_snapshot(&ruta, &snapshot)?;
 
     tracing::info!(
-        "ERP: {} asiento(s) utilizable(s) de {} fila(s) leída(s) en {} página(s) — {} peticione(s), \
+        "ERP: {} asiento(s) de {} fila(s) leída(s) en {} página(s) — {} peticione(s), \
          {} reintento(s) (ORA {}, SES {}, 429 {}), {} ms → {}",
         descarga.asientos.len(),
         cliente.filas_leidas(),
@@ -483,8 +596,12 @@ async fn cargar_erp(args: &Args) -> Result<(Vec<Asiento>, String), Box<dyn std::
         ruta.display()
     );
     avisar_de_snapshot(&snapshot);
+    // Los avisos no son filas perdidas: una fila sin NIF se conserva con
+    // `nif: None` y escala por `R10`. Solo desaparecen las que no traen id, que
+    // no se pueden ni identificar. Se registran igualmente porque el recuento de
+    // suciedad del ERP es información de operación.
     for aviso in &descarga.avisos {
-        tracing::warn!("ERP: fila {} saltada ({})", aviso.asiento_id, aviso.motivo);
+        tracing::warn!("ERP: fila {} anotada ({})", aviso.asiento_id, aviso.motivo);
     }
     for duplicado in &descarga.duplicados {
         tracing::warn!(
@@ -1182,7 +1299,7 @@ mod tests {
     fn asiento(nif: &str, pedido: &str, importe: &str, estado: EstadoAsiento) -> Asiento {
         Asiento {
             asiento_id: "AS-00412".into(),
-            nif: Nif::nuevo(nif).expect("NIF de prueba válido"),
+            nif: Some(Nif::nuevo(nif).expect("NIF de prueba válido")),
             pedido: pedido.into(),
             importe: d(importe),
             estado,
@@ -1464,31 +1581,6 @@ mod tests {
         );
     }
 
-    /// La ruta del snapshot tiene que poder cambiarse por bandera: el snapshot es
-    /// un dato del despliegue —hay uno por entorno— y un binario que solo sabe
-    /// leer `data/erp_snapshot.json` obliga a editar código para desplegarlo.
-    #[test]
-    fn el_snapshot_del_erp_tiene_ruta_por_defecto_y_se_puede_cambiar() {
-        let por_defecto = Args::parse_from(["hackspain-ocr", "--fixture", "lote.jsonl"]);
-        assert_eq!(
-            por_defecto.erp_snapshot,
-            PathBuf::from("data/erp_snapshot.json"),
-            "el caso dorado del motor sigue apuntando al snapshot de siempre"
-        );
-
-        let con_bandera = Args::parse_from([
-            "hackspain-ocr",
-            "--fixture",
-            "lote.jsonl",
-            "--erp-snapshot",
-            "/etc/maisa/erp_snapshot.json",
-        ]);
-        assert_eq!(
-            con_bandera.erp_snapshot,
-            PathBuf::from("/etc/maisa/erp_snapshot.json")
-        );
-    }
-
     /// Un `--pdf-dir` sin PDFs no es un lote vacío: es un lote mal montado. Si
     /// se dejara pasar, la entrega saldría con cero líneas y el recuento
     /// (PAGAR 0, NO_PAGAR 0, ESCALAR 0) parecería un resultado limpio en vez del
@@ -1520,6 +1612,244 @@ mod tests {
         assert!(
             inexistente.is_err(),
             "una carpeta que no existe tampoco es un lote"
+        );
+    }
+
+    /// La ruta del snapshot tiene que poder cambiarse por bandera: el snapshot es
+    /// un dato del despliegue —hay uno por entorno— y un binario que solo sabe
+    /// leer `data/erp_snapshot.json` obliga a editar código para desplegarlo.
+    #[test]
+    fn el_snapshot_del_erp_tiene_ruta_por_defecto_y_se_puede_cambiar() {
+        let por_defecto = Args::parse_from(["hackspain-ocr", "--fixture", "lote.jsonl"]);
+        assert_eq!(
+            por_defecto.erp_snapshot,
+            PathBuf::from("data/erp_snapshot.json"),
+            "el caso dorado del motor sigue apuntando al snapshot de siempre"
+        );
+
+        let con_bandera = Args::parse_from([
+            "hackspain-ocr",
+            "--fixture",
+            "lote.jsonl",
+            "--erp-snapshot",
+            "/etc/maisa/erp_snapshot.json",
+        ]);
+        assert_eq!(
+            con_bandera.erp_snapshot,
+            PathBuf::from("/etc/maisa/erp_snapshot.json")
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Adaptador BSON: la regresión del catálogo vacío
+    //
+    // Cuando el motor se apuntó por primera vez a Mongo **real** (no a un
+    // fixture), los 516 asientos se descartaron en silencio con
+    // `invalid type: map, expected a string`: `fecha` llega como BSON `date` e
+    // `importe` como BSON `decimal`, y los dos se exponen a serde como mapas.
+    // El servidor arrancaba en verde con el catálogo vacío y escalaba todas las
+    // facturas. Estos tests fijan el contrato para que no vuelva a pasar sin
+    // que nadie se entere.
+    // ---------------------------------------------------------------------
+
+    /// Documento con la misma forma que escribe `importar_asientos_mongo.py` y
+    /// que exige el validador de `02-schema-init.js`.
+    fn documento_asiento_bson() -> Document {
+        doc! {
+            "_id": "snap-1#AS-00412",
+            "asiento_id": "AS-00412",
+            "snapshot_id": "snap-1",
+            "nif": "B12345678",
+            "pedido": "PED-00123",
+            "importe": Decimal128::from_str("1234.50").expect("decimal BSON válido"),
+            "estado": "PENDIENTE",
+            "proveedor": "Suministros Ibéricos S.L.",
+            "fecha": DateTime::parse_rfc3339_str("2026-03-21T00:00:00Z").expect("fecha válida"),
+            "vigente": true,
+            "esquema_version": 1,
+        }
+    }
+
+    /// El fallo original: `date` y `decimal` tienen que llegar al dominio.
+    #[test]
+    fn un_asiento_de_mongo_con_date_y_decimal_llega_al_dominio() {
+        let documento = documento_asiento_bson();
+        let dto: AsientoDoc =
+            mongodb::bson::from_document(documento).expect("el documento de Mongo encaja");
+        let asiento = dto.a_dominio().expect("conversión al dominio");
+
+        assert_eq!(asiento.asiento_id, "AS-00412");
+        assert_eq!(asiento.nif.as_ref().map(Nif::as_str), Some("B12345678"));
+        assert_eq!(asiento.pedido, "PED-00123");
+        assert_eq!(asiento.importe, d("1234.50"));
+        assert_eq!(asiento.estado, EstadoAsiento::Pendiente);
+        assert_eq!(
+            asiento.fecha.as_deref(),
+            Some("2026-03-21"),
+            "la fecha BSON se normaliza a YYYY-MM-DD, igual que la clave del ERP"
+        );
+        assert_eq!(asiento.proveedor.as_deref(), Some("Suministros Ibéricos S.L."));
+    }
+
+    /// El importe tiene que llegar **exacto**: es dinero y los céntimos deciden
+    /// entre PAGAR y ESCALAR con la tolerancia de 0,01 EUR.
+    #[test]
+    fn el_importe_decimal128_llega_sin_perder_centimos() {
+        let mut documento = documento_asiento_bson();
+        documento.insert("importe", Decimal128::from_str("6199.54").expect("decimal"));
+        let dto: AsientoDoc = mongodb::bson::from_document(documento).expect("encaja");
+        let asiento = dto.a_dominio().expect("conversión");
+
+        // No 6199.539999999999: por eso la conversión va por texto y no por f64.
+        assert_eq!(asiento.importe, d("6199.54"));
+        assert_eq!(asiento.importe.to_string(), "6199.54");
+    }
+
+    /// Un asiento sin NIF utilizable se conserva con `nif: None`: el asiento
+    /// existe (tiene pedido, importe y estado) y tirarlo borraría la prueba de
+    /// que el ERP sí tiene la factura.
+    #[test]
+    fn un_asiento_sin_nif_se_conserva_sin_nif() {
+        let mut documento = documento_asiento_bson();
+        documento.insert("nif", "  --- ");
+        let dto: AsientoDoc = mongodb::bson::from_document(documento).expect("encaja");
+        let asiento = dto.a_dominio().expect("el asiento se conserva");
+
+        assert_eq!(asiento.nif, None, "un NIF que canoniza a vacío es 'sin NIF'");
+        assert_eq!(asiento.pedido, "PED-00123", "el pedido sobrevive");
+        assert_eq!(asiento.importe, d("1234.50"), "y el importe también");
+    }
+
+    /// Y ese asiento sin NIF **no** se paga en automático: escala diciendo por
+    /// qué, en vez de desaparecer y escalar como si el ERP no lo tuviera.
+    #[test]
+    fn el_asiento_sin_nif_escala_diciendo_que_falta_el_nif() {
+        let mut documento = documento_asiento_bson();
+        documento.insert("nif", "");
+        let dto: AsientoDoc = mongodb::bson::from_document(documento).expect("encaja");
+        let asiento = dto.a_dominio().expect("conversión");
+
+        let (evidencia, decision) =
+            decidir_factura(&factura(), &[asiento], &[], &ReglasConfig::default(), "snap-1");
+
+        // Lo importante: el match **existe**. La factura no es un "sin match".
+        assert_eq!(evidencia.match_por, MatchStrategy::ExactByPedido);
+        assert_eq!(decision.resultado, Resultado::Escalar);
+        assert!(
+            decision.motivo.contains("AS-00412") && decision.motivo.contains("sin NIF"),
+            "el motivo cita el asiento y la falta de NIF: {}",
+            decision.motivo
+        );
+        assert!(
+            decision
+                .reglas_evaluadas
+                .contains(&"R10_erp_sin_nif".to_string()),
+            "la traza nombra la regla aplicada: {:?}",
+            decision.reglas_evaluadas
+        );
+    }
+
+    /// Prueba de fuego: un asiento que viene de Mongo (no de un fixture) tiene
+    /// que producir la misma decisión que el motor da con un fixture.
+    #[test]
+    fn el_asiento_de_mongo_paga_por_el_camino_completo() {
+        let dto: AsientoDoc =
+            mongodb::bson::from_document(documento_asiento_bson()).expect("encaja");
+        let asiento = dto.a_dominio().expect("conversión");
+
+        let (evidencia, decision) = decidir_factura(
+            &factura(),
+            &[asiento],
+            &[],
+            &ReglasConfig::default(),
+            "snap-1",
+        );
+
+        assert_eq!(decision.resultado, Resultado::Pagar);
+        assert_eq!(evidencia.match_por, MatchStrategy::ExactByPedido);
+    }
+
+    /// Prueba de fuego del contrato del ERP, de punta a punta y contra el
+    /// snapshot real: una factura que casa con uno de los 20 asientos **sin NIF**
+    /// tiene que salir `ESCALAR` por `R10`, no `ESCALAR` por «sin match».
+    ///
+    /// Antes de que `Asiento::nif` fuera opcional, esos 20 asientos se tiraban en
+    /// el cargador y estas facturas caían en `R9_sin_match`: el motivo decía que
+    /// el ERP no tenía la factura cuando el ERP sí la tenía. Es la diferencia
+    /// entre «falta un dato» y «el dato se perdió» — y solo la primera se puede
+    /// auditar.
+    #[test]
+    fn una_factura_que_casa_con_un_asiento_sin_nif_del_erp_escala_por_r10() {
+        let ruta = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/erp_snapshot.json");
+        if !ruta.exists() {
+            // El snapshot se descarga aparte y no tiene por qué estar en el
+            // árbol de trabajo; si no está, no hay nada que comprobar.
+            return;
+        }
+        let snapshot = erp::leer_snapshot(&ruta).expect("el snapshot commitado se lee");
+        let catalogo = erp::asientos_del_snapshot(&snapshot);
+        let sin_nif: Vec<&Asiento> = catalogo
+            .iter()
+            .filter(|asiento| asiento.nif.is_none())
+            .collect();
+        assert_eq!(
+            sin_nif.len(),
+            20,
+            "el snapshot real trae 20 asientos sin NIF; si no, este test no prueba nada"
+        );
+
+        let asiento = sin_nif[0];
+        assert_eq!(
+            asiento.estado,
+            EstadoAsiento::Pendiente,
+            "los 20 sin NIF del snapshot están todos PENDIENTE: el motivo del \
+             ESCALAR tiene que ser el NIF, no el estado"
+        );
+
+        // La factura del papel: mismo pedido y mismo total que el asiento, pero
+        // **con** NIF de emisor, porque el NIF del proveedor lo trae el PDF y no
+        // el ERP. Es exactamente el caso que el cargador tiraba.
+        let con_pedido = Factura {
+            pedido: leido(asiento.pedido.clone(), "Pedido del PDF"),
+            total: leido(asiento.importe, "TOTAL del PDF"),
+            ..factura()
+        };
+
+        let (evidencia, decision) = decidir_factura(
+            &con_pedido,
+            &catalogo,
+            &[],
+            &ReglasConfig::default(),
+            &snapshot.snapshot_id,
+        );
+
+        // Lo que cambia con el merge: el match **existe**. Sin él, R10 no podría
+        // dar un motivo útil y la factura sería indistinguible de una que el ERP
+        // no tiene.
+        assert_eq!(
+            evidencia.match_por,
+            MatchStrategy::ExactByPedido,
+            "el asiento sin NIF se concilia igual: el pedido es la llave"
+        );
+        assert_eq!(decision.resultado, Resultado::Escalar);
+        assert!(
+            !decision
+                .reglas_evaluadas
+                .contains(&"R9_sin_match".to_string()),
+            "no es un «sin match»: el ERP sí tiene la factura ({:?})",
+            decision.reglas_evaluadas
+        );
+        assert!(
+            decision
+                .reglas_evaluadas
+                .contains(&"R10_erp_sin_nif".to_string()),
+            "la traza nombra la regla aplicada: {:?}",
+            decision.reglas_evaluadas
+        );
+        assert!(
+            decision.motivo.contains(&asiento.asiento_id) && decision.motivo.contains("sin NIF"),
+            "el motivo cita el asiento y la falta de NIF: {}",
+            decision.motivo
         );
     }
 }

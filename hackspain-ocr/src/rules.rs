@@ -10,11 +10,17 @@
 //   R3  asiento ERP PAGADA                -> NO_PAGAR   (el ERP manda)
 //   R4  conflicto PDF/ERP/Excel           -> ESCALAR    (bloquea el pago auto)
 //   R5  baja confianza OCR                -> ESCALAR    (bloquea el pago auto)
+//   R10 asiento ERP sin NIF               -> ESCALAR    (evidencia incompleta)
 //   R6  asiento ERP PENDIENTE conciliado  -> PAGAR
 //   R7  asiento ERP PENDIENTE descuadrado -> ESCALAR
 //   R8  sin asiento ERP pero con Excel    -> ESCALAR
 //   R9  sin match en ninguna fuente       -> ESCALAR
 //
+// `R10` se añadió después, cuando el catálogo real reveló 20 asientos con el NIF
+// en blanco. Se conserva el número 10 —en vez de renumerar— porque `R6`–`R9` ya
+// aparecen en los volcados y en las trazas entregadas, y cambiarlos rompería la
+// comparabilidad de lo ya emitido. La lista de arriba va en **orden de
+// evaluación**, que es lo que importa para leer una decisión.
 // Nota de diseño: R4/R5 se evalúan *después* de R3 pero *antes* de R6. Un
 // conflicto no impide bloquear un pago ya liquidado (dirección segura), pero sí
 // impide ejecutar un pago en automático (dirección de riesgo). Así se concilia
@@ -155,11 +161,15 @@ pub fn decidir(
     // el que se ha conciliado. Sin este respaldo, una factura con el NIF
     // ilegible pasaría la criba y se pagaría a un proveedor vetado: R2 es la
     // única regla que no puede depender de que el OCR se porte bien.
+    //
+    // El respaldo puede faltar: hay asientos del ERP sin NIF (ver
+    // `domain::Asiento`). En ese caso R2 no tiene con qué vetar, y de que eso no
+    // acabe en un pago se encarga `R10`.
     evaluadas.push("R2_prohibido_pagar_proveedor".into());
     let nif_conocido: Option<&Nif> = factura
         .nif_emisor
         .valor()
-        .or_else(|| evidencia.asiento.as_ref().map(|a| &a.nif));
+        .or_else(|| evidencia.asiento.as_ref().and_then(|a| a.nif.as_ref()));
     if let Some(nif) = nif_conocido {
         if reglas.prohibido_pagar_proveedor.contains(nif) {
             return Decision::new(
@@ -209,6 +219,33 @@ pub fn decidir(
             return Decision::new(
                 Resultado::Escalar,
                 format!("extracción dudosa en {}", dudosos.join(", ")),
+                evaluadas,
+                huellas,
+            );
+        }
+
+        // R10 — el asiento casado no trae NIF: evidencia incompleta.
+        //
+        // Va justo antes de R6 porque es el último punto en el que la falta de
+        // NIF importa de verdad: R2 y R3 ya han tenido su oportunidad (un
+        // asiento PAGADA sigue devolviendo NO_PAGAR aunque no traiga NIF, y el
+        // NIF del propio PDF se comprueba contra la lista prohibida), así que
+        // llegar hasta aquí significa que nadie ha podido descartar el pago
+        // por otra vía y lo único que falta es poder verificar al proveedor.
+        //
+        // Se conserva el asiento —y con él el match, el importe y el estado— en
+        // lugar de descartarlo al cargar: así la traza dice "hay un asiento
+        // PENDIENTE que cuadra, pero el ERP no lo identifica", que es una
+        // verdad accionable, y no un genérico "sin match" que ocultaría que el
+        // ERP sí tiene la factura.
+        evaluadas.push("R10_erp_sin_nif".into());
+        if asiento.nif.is_none() {
+            return Decision::new(
+                Resultado::Escalar,
+                format!(
+                    "asiento {} sin NIF en el ERP: no se puede verificar el proveedor contra la lista de pago prohibido",
+                    asiento.asiento_id
+                ),
                 evaluadas,
                 huellas,
             );
@@ -375,7 +412,7 @@ mod tests {
     fn asiento(estado: EstadoAsiento, importe: &str) -> Asiento {
         Asiento {
             asiento_id: "AS-00412".into(),
-            nif: nif("B12345678"),
+            nif: Some(nif("B12345678")),
             pedido: "PED-2024-0912".into(),
             importe: d(importe),
             estado,
@@ -487,6 +524,48 @@ mod tests {
         let dec = decidir(&factura_base(), &ev, &ReglasConfig::default(), huellas());
         assert_eq!(dec.resultado, Resultado::Pagar);
         assert!(dec.motivo.contains("importes conciliados"));
+    }
+
+    /// Un asiento PENDIENTE que cuadra pero **sin NIF en el ERP** no se paga en
+    /// automático: sin NIF no hay forma de comprobar el proveedor contra la
+    /// lista de pago prohibido, y "no se pudo verificar" no es "verificado".
+    ///
+    /// Es el caso real de 20 de los 516 asientos del catálogo.
+    #[test]
+    fn asiento_sin_nif_no_se_paga_en_automatico() {
+        let mut a = asiento(EstadoAsiento::Pendiente, "1234.50");
+        a.nif = None;
+        let dec = decidir(
+            &factura_base(),
+            &evidencia(Some(a), &[], &[]),
+            &ReglasConfig::default(),
+            huellas(),
+        );
+        assert_eq!(dec.resultado, Resultado::Escalar);
+        assert!(
+            dec.motivo.contains("AS-00412") && dec.motivo.contains("sin NIF"),
+            "el motivo cita el asiento y el NIF que falta: {}",
+            dec.motivo
+        );
+        assert!(dec.reglas_evaluadas.iter().any(|r| r == "R10_erp_sin_nif"));
+    }
+
+    /// La regla nueva no puede comerse la dirección segura: si el ERP ya la dio
+    /// por pagada, un NIF ausente sigue devolviendo NO_PAGAR (R3 manda), porque
+    /// "puede que sea un duplicado" pesa más que "no puedo verificar el
+    /// proveedor".
+    #[test]
+    fn asiento_pagada_sin_nif_sigue_devolviendo_no_pagar() {
+        let mut a = asiento(EstadoAsiento::Pagada, "1234.50");
+        a.nif = None;
+        let dec = decidir(
+            &factura_base(),
+            &evidencia(Some(a), &[], &[]),
+            &ReglasConfig::default(),
+            huellas(),
+        );
+        assert_eq!(dec.resultado, Resultado::NoPagar);
+        assert!(dec.motivo.contains("PAGADA"), "motivo: {}", dec.motivo);
     }
 
     /// Tolerancia de producción = 1 céntimo, y el límite es **inclusivo**
