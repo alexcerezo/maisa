@@ -1,0 +1,27 @@
+{
+  "name": "maisa-jev",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clasificacion de paginas de documentos (facturas, abonos, albaranes...) con Jev, el modelo System One de TypeSafe, a traves del AI SDK de Vercel.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "build-criterios": "tsx scripts/build-criterios.ts",
+    "eval": "tsx eval/run.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/gateway": "^4.0.87",
+    "@ai-sdk/typesafe-ai": "^3.0.4",
+    "ai": "^7.0.107",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
