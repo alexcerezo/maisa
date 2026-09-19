@@ -30,6 +30,15 @@ __pycache__/
 # Cache de pytest (tests de la API en maisa/api)
 .pytest_cache/
 
+# Artefactos de Node (maisa/ui): dependencias instaladas y bundle compilado.
+# NUNCA se versionan. Se colaron una vez en el commit del lote 2: un
+# `git add -A` arrastro 2.224 ficheros de node_modules y los 505 del build de
+# vite, y hubo que rehacer el commit antes de publicarlo. Estas reglas son la
+# red que lo impide la proxima vez.
+node_modules/
+dist/
+*.log
+
 # Zona de trabajo suelta: NO forma parte de la entrega (la entrega son
 # exactamente 3 ficheros en la raiz del repo publico). Se ignora para que un
 # `git add -A` no la arrastre nunca.
