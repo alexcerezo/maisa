@@ -2,3 +2,4 @@ target
 .vscode
 .venv
 500-*/*.md
+/data
