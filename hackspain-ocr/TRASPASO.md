@@ -1,5 +1,19 @@
 # Traspaso: qué está hecho, qué falta y cómo probarlo
 
+> **Aviso (unificación).** Este documento describe el motor **Rust**, que se
+> conserva como legado documental. No es un esqueleto —tiene las reglas
+> implementadas y sus tests en verde—, pero **nunca llegó a emitir la entrega**:
+> `outputs/outcomes.jsonl` sigue a 0 bytes desde el commit inicial y su modo lote
+> solo se ha ejecutado contra el lote de ejemplo de 10 líneas, porque el lector
+> del maestro (`src/excel.rs`) es un placeholder de dos líneas. El motor que se
+> ejecuta, se mide y se entrega es `motor/` (Python); ver `motor/README.md` y
+> `motor/docs/albertitos_plan.md`.
+>
+> Lo que sigue siendo vigente de aquí: los **contratos de dominio** (§3.7 y
+> siguientes) — los tres fallos distintos del ERP, el enum cerrado de eventos de
+> observabilidad, la trampa de `Decimal` en BSON y el XML en ISO-8859-1 — porque
+> están implementados en el motor vivo.
+
 Este documento existe para una cosa: que los módulos que quedan se puedan hacer
 **en paralelo** sin tener que esperarse unos a otros, y que nadie tenga que
 adivinar qué forma tiene un dato que ya está decidido.

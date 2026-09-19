@@ -1,0 +1,38 @@
+{
+ "facturas": 500,
+ "reparto": {
+  "ESCALAR": 48,
+  "NO_PAGAR": 9,
+  "PAGAR": 443
+ },
+ "huella": "39e17fd9f6dc5df28eb9d1405fe6c52157eefc8f55cde5d1207c19d510bffd2b",
+ "cobertura_reglas": {
+  "R1_identidad": {
+   "ok": 478,
+   "falla": 18,
+   "informativo": 1
+  },
+  "R2_pedido": {
+   "ok": 471,
+   "falla": 29
+  },
+  "R3_iva": {
+   "ok": 476,
+   "falla": 15,
+   "informativo": 6
+  },
+  "R4_fecha": {
+   "ok": 489,
+   "falla": 8
+  },
+  "R5_estado": {
+   "ok": 488,
+   "falla": 9,
+   "duro": 9
+  },
+  "R6_anomalia": {
+   "falla": 14,
+   "informativo": 20
+  }
+ }
+}

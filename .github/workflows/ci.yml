@@ -1,0 +1,137 @@
+# CI del track Maisa (HackSpain 2026) - equipo "De Despeñaperros Pabajo".
+#
+# Cuatro puertas, de mas barata a mas cara:
+#   1. lint    ruff sobre todo el Python del repo. Segundos, sin dependencias.
+#   2. tests   la suite del motor. Sintetica: no toca corpus ni OCR.
+#   3. lote    reproduce las 500 decisiones DOS veces y exige el mismo md5.
+#   4. entrega el outcomes.jsonl versionado tiene que ser exactamente lo que
+#              produce el motor hoy, y el banco de oro no puede haberse movido.
+#
+# La puerta 3 es la que de verdad protege: no comprobamos que el codigo "hace
+# algo", comprobamos que **decide lo mismo dos veces**. Un motor de pagos que
+# cambia de opinion entre ejecuciones no es un motor, es una moneda al aire.
+#
+# Todo corre sin red: los 29 PDFs escaneados llevan su texto ya cacheado en
+# `motor/.cache/ocr/` (indexado por sha256 del PDF), asi que no hace falta
+# levantar el contenedor de vision.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: hackspain-ocr
+
+env:
+  PYTHONPATH: motor/src
+
+jobs:
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip ruff
+      - name: ruff
+        run: ruff check .
+
+  tests:
+    name: tests (pytest)
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip -r motor/requirements.txt
+      # `motor/pytest.ini` declara `pythonpath = src`, `testpaths = tests` y
+      # `-m "not lento"`, asi que esto funciona recien clonado sin exportar nada.
+      - name: pytest
+        working-directory: hackspain-ocr/motor
+        run: python -m pytest
+
+  lote:
+    name: lote (determinismo x2)
+    runs-on: ubuntu-latest
+    needs: [tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip -r motor/requirements.txt
+      - name: dos pasadas, mismo md5
+        run: |
+          set -e
+          COMUN="--facturas data/facturas \
+                 --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
+                 --snapshot data/erp_snapshot.json \
+                 --config motor/config/reglas.toml \
+                 --lote 1 --trabajadores 4"
+          python -m maisa.procesa $COMUN --salida /tmp/a.jsonl
+          python -m maisa.procesa $COMUN --salida /tmp/b.jsonl
+          md5sum /tmp/a.jsonl /tmp/b.jsonl
+          cmp /tmp/a.jsonl /tmp/b.jsonl
+          echo "determinismo OK: $(wc -l < /tmp/a.jsonl) decisiones"
+
+  entrega:
+    name: entrega (outcomes versionado + banco de oro)
+    runs-on: ubuntu-latest
+    needs: [lote]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip -r motor/requirements.txt
+
+      - name: el outcomes.jsonl versionado es el que produce el motor
+        run: |
+          set -e
+          python -m maisa.procesa \
+            --facturas data/facturas \
+            --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
+            --snapshot data/erp_snapshot.json \
+            --config motor/config/reglas.toml \
+            --lote 1 --trabajadores 4 \
+            --salida /tmp/outcomes.jsonl
+          if ! cmp /tmp/outcomes.jsonl outputs/outcomes.jsonl; then
+            echo "::error::outputs/outcomes.jsonl esta DESACTUALIZADO."
+            echo "Regeneralo con: python -m maisa.procesa ... --salida outputs/outcomes.jsonl"
+            diff <(head -20 /tmp/outcomes.jsonl) <(head -20 outputs/outcomes.jsonl) || true
+            exit 1
+          fi
+          echo "outputs/outcomes.jsonl al dia ($(wc -l < outputs/outcomes.jsonl) lineas)"
+
+      # `|` y no escalar plegado: sin el bloque, YAML junta las lineas en una
+      # sola y los `\` de continuacion se comen los argumentos de oro.py.
+      - name: banco de oro (500 decisiones congeladas)
+        run: |
+          python motor/tools/oro.py --comprobar \
+            --facturas data/facturas \
+            --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
+            --snapshot data/erp_snapshot.json \
+            --config motor/config/reglas.toml
+
+      - name: cobertura por regla
+        run: |
+          python motor/tools/oro.py --cobertura \
+            --facturas data/facturas \
+            --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
+            --snapshot data/erp_snapshot.json \
+            --config motor/config/reglas.toml

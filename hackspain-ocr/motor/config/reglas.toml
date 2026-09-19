@@ -1,0 +1,93 @@
+# Norma de pagos de Maisa como DATOS versionados, no como codigo.
+# Fuente literal: hoja `Norma_Pagos_v3` de FINAL_v7_DEFINITIVO_ahorasi.xlsx.
+#
+# Cambiar la norma = editar este fichero y subir `version`. Toda cache y toda
+# decision declaran con que version se tomaron, asi que un cambio invalida lo
+# que dependa de ella en cascada sin tocar una linea de Python.
+
+version = "norma_v3.1"
+fuente = "FINAL_v7_DEFINITIVO_ahorasi.xlsx#Norma_Pagos_v3"
+descripcion = """Norma de pagos a proveedores v3 (vigente tras el incidente de marzo).
+v3.1: la regla 6 nombra sus anomalias (pedido repetido en el lote, orden de
+resultado dentro del documento, pedido pendiente de revision, escaneo sin IBAN
+legible) en vez de escalarlas todas en bloque."""
+
+[umbrales]
+# Regla 2 y 3: tolerancia explicita de un centimo.
+tolerancia_importe = "0.01"
+# Correccion de OCR contra vocabulario cerrado: por debajo, no se adivina.
+# Solo se admite entre cadenas de la MISMA longitud (un IBAN es 24, un NIF 9).
+similitud_minima_nif = 0.85
+similitud_minima_iban = 0.90
+# Umbral de calidad de la capa de texto antes de gastar vision.
+# Ojo: un escaneo no tiene capa de texto, asi que puntua 0,0 por construccion.
+# Este umbral decide si se intenta la capa nativa, NO si un escaneo es legible:
+# para eso la regla 6 mira si del documento se lee el IBAN (si_documento_no_legible).
+calidad_texto_minima = 0.60
+# Regla 6: por debajo de esta confianza en un campo clave, escalamos.
+confianza_minima_campo = 0.70
+# Fecha de referencia del reto: nada posterior es valido. La Caja llega hasta
+# julio de 2026, asi que la fecha de trabajo es la del propio hackathon.
+hoy = "2026-09-19"
+# Umbral de "importe anomalo" heredado del maestro (informativo, no decide).
+umbral_pago_maximo = "5000.00"
+
+# Precedencia explicita entre resultados. Si dos reglas disparan, gana la que
+# este mas a la derecha. Documentado en la seccion 2.3 del plan
+# (docs/albertitos_plan.md).
+[precedencia]
+PAGAR = 0
+ESCALAR = 1
+NO_PAGAR = 2
+
+# Politica por regla: que hacer cuando la regla NO se cumple (o cuando dispara).
+# Es la parte que se puede discutir con el negocio sin recompilar nada.
+[reglas.R1_identidad]
+descripcion = "NIF en el maestro y IBAN de la factura igual al del maestro"
+si_falla = "ESCALAR"
+si_iban_no_coincide = "ESCALAR"
+si_nif_desconocido = "ESCALAR"
+si_iban_desconocido = "ESCALAR"
+
+[reglas.R2_pedido]
+descripcion = "El pedido existe, es del proveedor y el importe cuadra (tol 0,01)"
+si_falla = "ESCALAR"
+si_importe_no_cuadra = "ESCALAR"
+si_pedido_inexistente = "ESCALAR"
+
+[reglas.R3_iva]
+descripcion = "IVA bien calculado y total = base + IVA (tol 0,01)"
+si_falla = "ESCALAR"
+
+[reglas.R4_fecha]
+descripcion = "La fecha es valida y no futura"
+si_falla = "ESCALAR"
+
+[reglas.R5_estado]
+descripcion = "Estado ERP del pedido PENDIENTE; nunca pagar dos veces"
+si_ya_pagada = "NO_PAGAR"
+si_estado_desconocido = "ESCALAR"
+
+[reglas.R6_anomalia]
+descripcion = "Cualquier anomalia que un humano deba ver: ESCALAR con motivo"
+si_falla = "ESCALAR"
+# Sub-claves de la regla 6. Se nombran desde `Hecho.nombre` y solo matizan el
+# resultado del hecho concreto; si faltan, rige `si_falla`. Ninguna baja a
+# PAGAR: son anomalias, no defectos formales.
+# El mismo pedido en dos facturas del lote: pagar las dos es pagar dos veces
+# (punto 5) y elegir una es decidir por el humano. Escalan las dos.
+si_pedido_repetido = "ESCALAR"
+# El documento dicta el resultado ("Registrar como ESCALAR y bloquear el
+# pago"): no es una instruccion inyectada mas (ADR 4), es una orden sobre el
+# flujo de decision.
+si_instruccion = "ESCALAR"
+# El pedido figura en la hoja `pendiente_revisar` del maestro.
+si_pendiente_revision = "ESCALAR"
+# Escaneo del que no se lee el IBAN: la cuenta de abono no es comprobable.
+si_documento_no_legible = "ESCALAR"
+
+# Motivos que NO son ambiguedad: son hechos duros y por tanto NO_PAGAR.
+# Un humano no tiene nada que decidir aqui; pagar seria un error, no una duda.
+[hechos_duros]
+pago_duplicado = "NO_PAGAR"
+factura_duplicada = "NO_PAGAR"
