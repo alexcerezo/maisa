@@ -15,5 +15,5 @@ __pycache__/
 venv/
 
 # Salidas de ejecucion: el unico outcomes.jsonl que se versiona es el de
-# `maisa/hackspain-ocr/outputs/`. Cualquier otro sitio es un experimento.
+# `maisa/outputs/`. Cualquier otro sitio es un experimento.
 *.jsonl.tmp

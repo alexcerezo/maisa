@@ -5,7 +5,7 @@ Se lanza el validador como subproceso real para comprobar codigos de salida y
 la salida impresa de verdad. Los fixtures se crean en un directorio temporal,
 nunca dentro del repositorio.
 
-Ejecucion (desde maisa/hackspain-ocr):
+Ejecucion (desde maisa):
     python -m unittest tests.test_validate_jsonl -v
     python tests\\test_validate_jsonl.py -v
 """

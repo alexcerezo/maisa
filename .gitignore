@@ -7,7 +7,7 @@ target
 
 # Credenciales de MongoDB (nunca versionar)
 .env
-maisa/hackspain-ocr/.env
+maisa/.env
 
 # Copias de seguridad de la base de datos
 backups/
@@ -15,11 +15,11 @@ backups/
 
 # Salida del lote de ejemplo: se regenera y NO es una entrega.
 # (`outputs/outcomes.jsonl` sí se versiona: esa SÍ es la entrega.)
-maisa/hackspain-ocr/outputs/outcomes_ejemplo.jsonl
+maisa/outputs/outcomes_ejemplo.jsonl
 
 # Traza encadenada: material de auditoría que se regenera en cada pasada y
 # lleva marca de tiempo, así que versionarla ensuciaría el repo en cada run.
-maisa/hackspain-ocr/outputs/*_traza.jsonl
+maisa/outputs/*_traza.jsonl
 
 
 # Restos de Python (el descargador del ERP y validate_jsonl.py son stdlib)
