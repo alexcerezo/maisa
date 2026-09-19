@@ -129,27 +129,19 @@ PYTHONPATH=src ../.venv/bin/python tools/valida_entrega.py ../entrega --publicab
 
 ---
 
-## 5. La forma de la linea: decidirla, no heredarla
+## 5. La forma de la linea: decidida, dos claves
 
-El motor emite `{"file_id": ..., "result": ...}` y **anade `motivos` cuando los hay**.
-Medido sobre la entrega actual del lote 1:
+La entrega lleva **exactamente `file_id` + `result`**, en las 500 lineas del lote 1
+y en las del lote 2. Antes el motor anadia `motivos` cuando los habia y la entrega
+mezclaba dos formas (439 lineas de dos claves y 61 de tres); eso ya no ocurre:
+`emit.linea()` no acepta campos extra, asi que la mezcla no puede volver por
+descuido.
 
-| forma | lineas |
-|---|---|
-| `file_id` + `result` | 439 |
-| `file_id` + `result` + `motivos` | 61 |
-| **total** | **500** |
-
-Las dos formas son validas (el jurado valida `file_id` y `result`), pero la mezcla
-es una decision que nadie tomo. Para el lote 2 hay que elegir una:
-
-- **Uniformar a `file_id` + `result`**: lo mas parecido a "exactamente lo que pide
-  la spec" y lo mas facil de comparar con un verificador binario.
-- **Dejar `motivos`**: se gana explicabilidad, se pierde uniformidad.
-
-Lo que no se puede es no decidirlo. Recomendacion: **uniformar a dos claves** en los
-dos ficheros de entrega y dejar los motivos donde no estorban (la traza del pitch),
-porque la entrega se aprueba o se suspende de forma binaria y los motivos no puntuan ahi.
+La explicabilidad no se pierde: los motivos, los hechos y los campos leidos siguen
+en la traza (`outputs/outcomes_traza.jsonl`, y con `--traza-hash` la version
+encadenada por hash), que es material de auditoria y del pitch. Se separa asi lo que
+se **valida** (la entrega, de forma binaria) de lo que se **explica** (la traza),
+que es justo lo que pide la spec: `file_id` y `result` son lo unico obligatorio.
 
 ---
 

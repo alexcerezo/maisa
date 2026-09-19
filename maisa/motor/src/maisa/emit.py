@@ -6,6 +6,12 @@ ADRs, pitch) suma, pero esto es lo que aprueba o suspende. Por eso el
 `file_id` se emite **tal cual sale del fichero**, sin normalizar: si el
 validador del jurado compara cadenas, cualquier `strip()`/`casefold()` nuestro
 seria un fallo silencioso e irrecuperable.
+
+La linea de entrega lleva **exactamente dos claves**: `file_id` y `result`. La
+explicabilidad (los motivos, los hechos, los campos leidos) no va aqui: vive en
+la traza (`outcomes_traza.jsonl` / `trace`), que es material de auditoria y no
+de entrega. `linea()` no admite campos extra a proposito, para que la entrega
+no vuelva a mezclar formas por descuido.
 """
 
 from __future__ import annotations
@@ -30,16 +36,18 @@ def normaliza_file_id(valor: str) -> str:
     return unicodedata.normalize("NFKC", valor).strip().casefold()
 
 
-def linea(file_id: str, resultado: str, motivos: list[str] | None = None, **extra) -> dict:
+def linea(file_id: str, resultado: str) -> dict:
+    """La linea de entrega: **solo** `file_id` y `result`.
+
+    Los motivos y demas explicabilidad no se emiten aqui; van a la traza. La
+    firma no acepta nada mas para que la entrega no recupere la mezcla de
+    formas que tenia (439 lineas de dos claves y 61 de tres).
+    """
     if resultado not in RESULTADOS:
         raise ValueError(f"resultado fuera del enum: {resultado!r}")
     if not file_id or file_id != file_id.strip():
         raise ValueError(f"file_id sospechoso (vacio o con espacios): {file_id!r}")
-    fila = {"file_id": file_id, "result": resultado}
-    if motivos:
-        fila["motivos"] = motivos
-    fila.update(extra)
-    return fila
+    return {"file_id": file_id, "result": resultado}
 
 
 def escribe_jsonl(rutas: list[Path], filas: list[dict]) -> Path:

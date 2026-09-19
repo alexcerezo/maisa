@@ -1009,11 +1009,24 @@ def _primer_resultado(salida: Path) -> str:
 
 
 def _motivos(salida: Path) -> list[str]:
-    if not salida.exists():
+    """Motivos de la primera factura, leidos de la **traza**, no de la entrega.
+
+    Desde que la entrega solo lleva `file_id` y `result`, los motivos viven en
+    la traza: la encadenada por hash que escribe `corre_en_proceso`
+    (`<salida>_traza.jsonl`, con los datos bajo `datos` y un `tipo` por evento).
+    """
+    ruta_traza = salida.with_name(salida.stem + "_traza.jsonl")
+    if not ruta_traza.exists():
         return []
-    for linea in salida.read_text(encoding="utf-8").splitlines():
-        if linea.strip():
-            return list(json.loads(linea).get("motivos") or [])
+    for linea in ruta_traza.read_text(encoding="utf-8").splitlines():
+        if not linea.strip():
+            continue
+        evento = json.loads(linea)
+        if evento.get("tipo") not in (None, "decision"):
+            continue
+        datos = evento.get("datos", evento)
+        if "motivos" in datos:
+            return list(datos["motivos"] or [])
     return []
 
 

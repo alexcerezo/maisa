@@ -38,10 +38,11 @@ RESULTADOS = (PAGAR, NO_PAGAR, ESCALAR)
 def euros(valor: object) -> str:
     """Formatea un importe con dos decimales fijos.
 
-    Los motivos y las notas acaban en la traza y en el entregable, asi que su
-    texto tiene que ser estable: sin esto, ``Decimal('2795.10')`` y el float
-    ``2795.1`` producen cadenas distintas y el hash del entregable dependeria
-    del formato numerico del snapshot de entrada.
+    Los motivos y las notas acaban en la traza (nunca en el entregable, que solo
+    lleva `file_id` y `result`), asi que su texto tiene que ser estable: sin
+    esto, ``Decimal('2795.10')`` y el float ``2795.1`` producen cadenas
+    distintas y el hash de la traza dependeria del formato numerico del
+    snapshot de entrada.
     """
     if valor is None:
         return "?"

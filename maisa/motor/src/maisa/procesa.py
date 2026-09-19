@@ -122,7 +122,9 @@ def procesa(
     escalones: collections.Counter = collections.Counter()
     for doc in docs:
         dec = decisor.decide(doc.lectura)
-        filas.append(emit.linea(doc.lectura.file_id, dec.resultado, dec.motivos))
+        # La entrega lleva solo file_id + result; los motivos y los hechos van
+        # a la traza (abajo), que es donde se explica la decision.
+        filas.append(emit.linea(doc.lectura.file_id, dec.resultado))
         contador[dec.resultado] += 1
         escalones[doc.escalon] += 1
         entrada = dec.como_dict()
