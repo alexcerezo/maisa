@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<error>
+  <codigo>ERP-404</codigo>
+  <mensaje>El asiento AS-99999 no consta en el sistema.</mensaje>
+</error>

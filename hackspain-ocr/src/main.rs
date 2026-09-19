@@ -28,20 +28,19 @@ mod domain;
 mod reconciler;
 mod rules;
 
+// Módulos de la vía real de datos: el ERP (XML/ISO-8859-1 con reintentos), el
+// OCR (HTTP multipart) y el parser/validador que convierte líneas en `Factura`.
+// Ver TRASPASO.md y _scratch/ERP-RUST-CONTRATO.md.
+mod erp;
+mod ocr;
+mod parser;
+mod validators;
+
 use domain::{
     Asiento, Decision, EstadoAsiento, Evidencia, Factura, FilaExcel, Huellas, Nif, Resultado,
 };
 use reconciler::{conciliar, IndiceErp, IndiceExcel};
 use rules::{decidir, ReglasConfig};
-
-// --- MODELOS ---
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InvoiceData {
-    pub emisor: Option<String>,
-    pub total: Option<f64>,
-    pub raw_text: String,
-}
 
 // --- ADAPTADOR DE PERSISTENCIA: documento Mongo → tipo de dominio ---
 
@@ -321,7 +320,9 @@ fn nuevo_run_id() -> String {
 // Estado compartido para inyectar MongoDB en las rutas de Axum
 #[derive(Clone)]
 struct AppState {
-    db_collection: Collection<InvoiceData>,
+    /// Facturas subidas por HTTP, tal y como se extrajeron del PDF: con su
+    /// estado y su rastro, que es lo único que permite auditar la decisión.
+    db_collection: Collection<Factura>,
     /// Reglas cargadas de `config/reglas.toml` al arranque.
     reglas: Arc<ReglasConfig>,
     /// Asientos del ERP vigentes, en memoria.
@@ -350,16 +351,18 @@ struct AppState {
 struct Args {
     /// Carpeta con los PDFs del lote (modo lote de producción).
     ///
-    /// Depende de `ocr.rs` y `parser.rs`, que aún no existen: hoy falla con un
-    /// mensaje que lo dice, en vez de producir un lote vacío.
+    /// El camino real: PDF → OCR (`ocr.rs`) → `Factura` (`parser.rs`) → decisión
+    /// contra los asientos del snapshot del ERP.
     #[arg(long, value_name = "DIR", conflicts_with = "fixture")]
     pdf_dir: Option<PathBuf>,
 
     /// Lote de entrada **ya extraído**: una factura JSON por línea.
     ///
-    /// Sustituye a `--pdf-dir` mientras `parser.rs` no exista. Es el mismo
-    /// trabajo que tendrá que hacer el parser, así que sirve para comprobar el
-    /// motor contra datos realistas sin depender del OCR.
+    /// Es el mismo trabajo que hace `parser.rs`, pero escrito a mano, así que
+    /// sirve para comprobar el motor contra datos realistas sin depender del
+    /// OCR ni del ERP. Un fixture es autocontenido a propósito: sus líneas traen
+    /// sus propios `asientos`, para que el caso dorado no cambie según lo que
+    /// haya hoy en el ERP.
     #[arg(long, value_name = "JSONL")]
     fixture: Option<PathBuf>,
 
@@ -375,9 +378,14 @@ struct Args {
     #[arg(long, value_name = "XLSX")]
     excel: Option<PathBuf>,
 
-    /// Ignora el snapshot de ERP guardado y vuelve a descargarlo.
+    /// Ignora el snapshot de ERP guardado y vuelve a descargarlo del bridge.
     #[arg(long)]
     refetch_erp: bool,
+
+    /// Snapshot del ERP con el que se decide: el lote lo lee y `--refetch-erp`
+    /// lo reescribe. `ERP_SNAPSHOT` (entorno) tiene prioridad sobre el flag.
+    #[arg(long, value_name = "JSON", default_value = "data/erp_snapshot.json")]
+    erp_snapshot: PathBuf,
 }
 
 impl Args {
@@ -410,6 +418,17 @@ fn ruta_reglas(args: &Args) -> PathBuf {
         .unwrap_or_else(|_| args.reglas.clone())
 }
 
+/// Ruta del snapshot del ERP, dando prioridad al entorno (`ERP_SNAPSHOT`).
+///
+/// Es configurable a propósito: el snapshot es un dato del despliegue (hay uno
+/// por entorno) y no una constante del binario, así que la ruta por defecto
+/// tiene que funcionar en cualquier máquina sin que nadie edite código.
+fn ruta_snapshot(args: &Args) -> PathBuf {
+    std::env::var("ERP_SNAPSHOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| args.erp_snapshot.clone())
+}
+
 /// Carga las reglas del motor, negándose a arrancar si no son válidas.
 ///
 /// Arrancar con las reglas por defecto sería peor que fallar: una regla
@@ -423,6 +442,217 @@ fn cargar_reglas(ruta: &Path) -> Result<ReglasConfig, Box<dyn std::error::Error>
         Err(e) => {
             tracing::error!("no se pudo cargar {}: {e}", ruta.display());
             Err(format!("reglas inválidas en {}: {e}", ruta.display()).into())
+        }
+    }
+}
+
+// --- EL ERP: SNAPSHOT EN DISCO O DESCARGA REAL ---
+
+/// Los avisos que trae un snapshot, en voz alta.
+///
+/// Las filas sucias del ERP (hoy 20 de 516 vienen sin NIF) siguen siendo un dato
+/// sucio y se publican: **entran** en el catálogo —se pueden conciliar por pedido—
+/// pero no se pueden pagar en automático, así que un ESCALAR por R10 tiene que
+/// poder explicarse leyendo el arranque. Se resumen en el log porque el snapshot
+/// es una foto del despliegue y sus defectos son los mismos para todo el lote.
+fn avisar_de_snapshot(snapshot: &erp::Snapshot) {
+    if !snapshot.estado.eq_ignore_ascii_case("COMPLETO") {
+        tracing::warn!(
+            "el snapshot {} viene {} ({} fila(s) del ERP, {} asiento(s) leído(s)): conviene \
+             repetir la descarga con --refetch-erp antes de fiarse del lote",
+            snapshot.snapshot_id,
+            snapshot.estado,
+            snapshot.asientos_descargados,
+            snapshot.total_asientos
+        );
+    }
+    for aviso in &snapshot.avisos {
+        tracing::warn!("ERP: {aviso}");
+    }
+    // Un snapshot descargado a base de reintentos no es sospechoso por sí solo
+    // (el bridge inyecta fallos a propósito), pero sí es la explicación de un
+    // recuento raro, así que se deja anotado junto a la foto.
+    if snapshot.reintentos.hubo_fallos() {
+        tracing::warn!(
+            "el snapshot {} se descargó con {} reintento(s) (ORA {}, SES {}, 429 {}): si el \
+             recuento no cuadra, empieza por aquí",
+            snapshot.snapshot_id,
+            snapshot.reintentos.total(),
+            snapshot.reintentos.ora_00600,
+            snapshot.reintentos.ses_401,
+            snapshot.reintentos.erp_429
+        );
+    }
+}
+
+/// Los asientos del ERP con los que decide este proceso, y de qué foto salieron.
+///
+/// Dos caminos y solo dos (TRASPASO.md §3.5):
+///
+/// * **snapshot en disco** (lo normal): se lee y no se toca la red. Es lo que
+///   hace reproducible la decisión —la misma foto da el mismo JSONL— y lo que
+///   permite decidir aunque el bridge no esté levantado.
+/// * **`--refetch-erp`**: se descarga del bridge (en serie y con reintentos
+///   porque el ERP lo pide así), se escribe el snapshot y se decide con lo
+///   recién bajado.
+///
+/// El id que se devuelve es el `snapshot_id` real, no un literal: es la huella
+/// con la que después se reconstruye a qué foto del ERP se apuntó cada pago
+/// (INV-9).
+async fn cargar_erp(args: &Args) -> Result<(Vec<Asiento>, String), Box<dyn std::error::Error>> {
+    let ruta = ruta_snapshot(args);
+
+    if !args.refetch_erp {
+        let snapshot = erp::leer_snapshot(&ruta).map_err(|e| {
+            format!(
+                "sin asientos del ERP no se puede decidir: {e}. Baja el snapshot con \
+                 `--refetch-erp`, o apunta `--erp-snapshot` / `ERP_SNAPSHOT` al bueno"
+            )
+        })?;
+        let asientos = erp::asientos_del_snapshot(&snapshot);
+        // Un asiento sin NIF **entra** en el catálogo: se concilia por pedido y
+        // es `R10` quien lo escala con motivo. Se cuenta aparte porque es el
+        // número que explica los ESCALAR del lote.
+        let sin_nif = asientos
+            .iter()
+            .filter(|asiento| asiento.nif.is_none())
+            .count();
+        tracing::info!(
+            "ERP: snapshot {} ({}) → {} asiento(s) de {} fila(s) ({sin_nif} sin NIF, escalan por \
+             R10), {} página(s)",
+            snapshot.snapshot_id,
+            ruta.display(),
+            asientos.len(),
+            snapshot.asientos_descargados,
+            snapshot.paginas
+        );
+        avisar_de_snapshot(&snapshot);
+        return Ok((asientos, snapshot.snapshot_id));
+    }
+
+    let mut cliente = erp::ClienteErp::desde_entorno();
+    if let Some(aviso) = cliente.aviso_de_credenciales() {
+        tracing::warn!("{aviso}");
+    }
+
+    // Antes de bajarse 516 filas se pregunta quién es: `GET /erp/estado` no pide
+    // token y devuelve la versión del bridge y cuántos asientos declara tener.
+    // Es la única forma de que el log de un despliegue diga que se está hablando
+    // con el ERP de verdad y no con cualquier cosa que escuche en la URL.
+    //
+    // Si no contesta no se aborta: la descarga tiene sus propios reintentos y es
+    // ella la que decide si el ERP está utilizable; el estado es información,
+    // no una puerta.
+    match cliente.estado().await {
+        Ok(estado) => tracing::info!(
+            "ERP: {} · activo {} s · {} asiento(s) declarados{} · «{}»",
+            estado.version,
+            estado.activo_segundos,
+            estado.asientos,
+            if estado.actualizacion_cargada {
+                " · actualización cargada"
+            } else {
+                ""
+            },
+            estado.animo
+        ),
+        Err(e) => {
+            tracing::warn!("ERP: no se pudo leer el estado ({e}); se intenta la descarga igual")
+        }
+    }
+
+    tracing::info!(
+        "ERP: descargando de {} como `{}` …",
+        cliente.base_url(),
+        cliente.usuario()
+    );
+
+    let intentos = cliente.max_intentos();
+    let descarga = cliente.descargar(intentos).await?;
+
+    // El snapshot se escribe **antes** de decidir: si el lote muere a mitad, la
+    // foto con la que se decidieron las primeras facturas sigue en disco y el
+    // fallo es reproducible.
+    let snapshot = erp::construir_snapshot(
+        &descarga.asientos,
+        &descarga.meta.snapshot_id,
+        &descarga.meta.descargado_en,
+        &descarga.meta,
+    );
+    erp::escribir_snapshot(&ruta, &snapshot)?;
+
+    tracing::info!(
+        "ERP: {} asiento(s) de {} fila(s) leída(s) en {} página(s) — {} peticione(s), \
+         {} reintento(s) (ORA {}, SES {}, 429 {}), {} ms → {}",
+        descarga.asientos.len(),
+        cliente.filas_leidas(),
+        descarga.meta.paginas,
+        cliente.peticiones(),
+        descarga.meta.reintentos.total(),
+        descarga.meta.reintentos.ora_00600,
+        descarga.meta.reintentos.ses_401,
+        descarga.meta.reintentos.erp_429,
+        descarga.meta.duracion_ms,
+        ruta.display()
+    );
+    avisar_de_snapshot(&snapshot);
+    // Los avisos no son filas perdidas: una fila sin NIF se conserva con
+    // `nif: None` y escala por `R10`. Solo desaparecen las que no traen id, que
+    // no se pueden ni identificar. Se registran igualmente porque el recuento de
+    // suciedad del ERP es información de operación.
+    for aviso in &descarga.avisos {
+        tracing::warn!("ERP: fila {} anotada ({})", aviso.asiento_id, aviso.motivo);
+    }
+    for duplicado in &descarga.duplicados {
+        tracing::warn!(
+            "ERP: factura {} repetida: se conserva {} y se descartan {:?}",
+            duplicado.clave_factura,
+            duplicado.conservado,
+            duplicado.descartados
+        );
+    }
+
+    Ok((descarga.asientos, descarga.meta.snapshot_id))
+}
+
+/// Catálogo del servidor: el snapshot del ERP si está en disco, y si no los
+/// asientos vigentes de Mongo.
+///
+/// El snapshot manda porque es *lo que dijo el ERP*, sin pasar por una
+/// importación intermedia: si Mongo está vacío o desincronizado, el servidor
+/// sigue decidiendo con la foto correcta. Mongo queda como red de seguridad
+/// para un despliegue al que todavía no se le ha copiado el snapshot.
+async fn catalogo_inicial(
+    args: &Args,
+    db: &Database,
+) -> Result<Catalogo, Box<dyn std::error::Error>> {
+    if args.refetch_erp {
+        let (asientos, snapshot_id) = cargar_erp(args).await?;
+        return Ok(Catalogo { asientos, snapshot_id });
+    }
+
+    let ruta = ruta_snapshot(args);
+    match erp::leer_snapshot(&ruta) {
+        Ok(snapshot) => {
+            let asientos = erp::asientos_del_snapshot(&snapshot);
+            tracing::info!(
+                "catálogo del ERP desde {} ({}): {} asiento(s) vigente(s)",
+                ruta.display(),
+                snapshot.snapshot_id,
+                asientos.len()
+            );
+            avisar_de_snapshot(&snapshot);
+            Ok(Catalogo {
+                asientos,
+                snapshot_id: snapshot.snapshot_id,
+            })
+        }
+        Err(e) => {
+            tracing::warn!(
+                "no se pudo leer {} ({e}); se usa Mongo como respaldo del catálogo",
+                ruta.display()
+            );
+            Ok(Catalogo::desde_mongo(db).await)
         }
     }
 }
@@ -455,14 +685,14 @@ async fn servidor(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     // `asientos`, `expedientes`, `reglas_versiones`... Configurable por env.
     let nombre_db = std::env::var("MONGO_DB").unwrap_or_else(|_| "albertitos".into());
     let db = client.database(&nombre_db);
-    let collection = db.collection::<InvoiceData>("invoices");
+    let collection = db.collection::<Factura>("invoices");
 
     // 2. Reglas del motor: se leen una vez al arranque; inyectar la regla del
     //    sábado es editar el TOML y reiniciar, sin recompilar.
     let reglas = cargar_reglas(&ruta_reglas(&args))?;
 
-    // 3. Catálogo del ERP en memoria (asientos vigentes del snapshot actual).
-    let catalogo = Catalogo::desde_mongo(&db).await;
+    // 3. Catálogo del ERP en memoria (ver `catalogo_inicial`).
+    let catalogo = catalogo_inicial(&args, &db).await?;
     tracing::info!(
         "catálogo del ERP listo: {} asiento(s) vigente(s), snapshot {}",
         catalogo.asientos.len(),
@@ -559,31 +789,39 @@ async fn ejecutar_lote(fuente: FuenteLote, args: &Args) -> Result<(), Box<dyn st
     if args.excel.is_some() {
         tracing::warn!("--excel ignorado: `excel.rs` aún no existe (ver TRASPASO.md)");
     }
-    if args.refetch_erp {
-        tracing::warn!("--refetch-erp ignorado: `erp.rs` aún no existe (ver TRASPASO.md)");
-    }
 
     let etiqueta = match &fuente {
         FuenteLote::Fixture(_) => "fixture",
         FuenteLote::PdfDir(_) => "pdf-dir",
     };
 
+    let es_lote_de_pdfs = matches!(fuente, FuenteLote::PdfDir(_));
+
+    // El ERP se resuelve **antes** de mirar la fuente: es el contexto con el que
+    // se decide cada factura, y si no se puede tener, mejor saberlo ahora que a
+    // mitad del lote con el JSONL ya empezado.
+    //
+    // Con `--fixture` el snapshot es opcional a propósito: sus líneas ya traen
+    // sus propios asientos, porque el caso dorado del motor tiene que poder
+    // correrse en un clon recién bajado, donde `data/` —que está en
+    // `.gitignore`— todavía no tiene snapshot del ERP.
+    let (asientos_erp, erp_snapshot_id) = match cargar_erp(args).await {
+        Ok(par) => par,
+        Err(e) if !es_lote_de_pdfs => {
+            tracing::warn!(
+                "lote `--fixture` sin snapshot del ERP ({e}): se decide con los asientos que \
+                 traiga cada línea"
+            );
+            (Vec::new(), String::from("sin-erp"))
+        }
+        Err(e) => return Err(e),
+    };
+
     let entradas = match &fuente {
         FuenteLote::Fixture(ruta) => leer_fixture(ruta)?,
-        FuenteLote::PdfDir(dir) => {
-            // Fallar aquí es deliberado. Devolver un lote vacío sería peor: el
-            // JSONL saldría sin una sola línea y parecería que no hay facturas
-            // que decidir, cuando lo que falta es la mitad del pipeline.
-            return Err(format!(
-                "`--pdf-dir {}` todavía no puede funcionar: hay {} PDF(s), pero obtener la \
-                 `Factura` de cada uno necesita `ocr.rs` (llamar al servicio OCR) y `parser.rs` \
-                 (líneas → Factura), que aún no existen. Usa `--fixture` mientras tanto \
-                 (ver TRASPASO.md).",
-                dir.display(),
-                listar_pdfs(dir).len()
-            )
-            .into());
-        }
+        // El lote real: PDF → OCR → `Factura`, con los asientos del snapshot
+        // del ERP como contexto común de todas.
+        FuenteLote::PdfDir(dir) => lote_de_pdfs(dir, &asientos_erp).await?,
     };
 
     tracing::info!(
@@ -602,10 +840,13 @@ async fn ejecutar_lote(fuente: FuenteLote, args: &Args) -> Result<(), Box<dyn st
         let (resultado, motivo) = match elemento {
             Ok(el) => {
                 // La huella dice de dónde salieron los asientos con los que se
-                // decidió (INV-9). Sin asientos propios el lote todavía no puede
-                // citar una foto del ERP —`erp.rs` no existe—, así que lo dice en
-                // vez de inventarse un id de snapshot que nadie podrá resolver.
-                let snapshot = if el.asientos.is_empty() {
+                // decidió (INV-9). Un lote de PDFs decide con el snapshot del
+                // ERP, así que su huella *es* el `snapshot_id`; un `--fixture`
+                // trae los suyos (y si no trae ninguno, se dice, en vez de
+                // inventarse un id de snapshot que nadie podrá resolver).
+                let snapshot = if es_lote_de_pdfs {
+                    erp_snapshot_id.clone()
+                } else if el.asientos.is_empty() {
                     format!("sin-erp:{etiqueta}")
                 } else {
                     format!("{etiqueta}:entrada")
@@ -737,43 +978,171 @@ fn listar_pdfs(dir: &Path) -> Vec<String> {
     pdfs
 }
 
+/// Convierte una carpeta de PDFs en el lote de entrada: OCR → parser → factura.
+///
+/// El OCR es la parte lenta del pipeline (renderiza a 250 DPI y pasa un modelo
+/// ONNX por CPU), así que hay varios documentos en vuelo a la vez, pero **como
+/// máximo** `ocr::CONCURRENCIA_MAXIMA`: por encima de ese techo las peticiones
+/// no van más rápido, solo se estorban entre ellas.
+///
+/// El orden de la lista de salida es el de `listar_pdfs` (ordenado), no el de
+/// llegada del OCR: si dependiera de quién termina antes, dos ejecuciones del
+/// mismo lote darían ficheros distintos y el JSONL de entrega dejaría de ser
+/// comparable.
+async fn lote_de_pdfs(
+    dir: &Path,
+    asientos: &[Asiento],
+) -> Result<Vec<(String, Result<ElementoLote, String>)>, Box<dyn std::error::Error>> {
+    let pdfs = listar_pdfs(dir);
+    if pdfs.is_empty() {
+        // Fallar es deliberado: un lote vacío produciría un JSONL sin una sola
+        // línea y parecería que no hay nada que decidir.
+        return Err(format!(
+            "`--pdf-dir {}` no tiene ningún PDF: no hay lote que entregar",
+            dir.display()
+        )
+        .into());
+    }
+
+    let cliente = reqwest::Client::new();
+    let semaforo = Arc::new(tokio::sync::Semaphore::new(ocr::CONCURRENCIA_MAXIMA as usize));
+    let mut en_vuelo = tokio::task::JoinSet::new();
+
+    for (indice, nombre) in pdfs.iter().enumerate() {
+        let cliente = cliente.clone();
+        let semaforo = Arc::clone(&semaforo);
+        let ruta = dir.join(nombre);
+        let nombre = nombre.clone();
+        let asientos = asientos.to_vec();
+        en_vuelo.spawn(async move {
+            // El permiso se suelta solo al salir del bloque: es lo que mantiene
+            // el número de documentos en vuelo por debajo del techo.
+            let Ok(_permiso) = semaforo.acquire().await else {
+                return (indice, nombre.clone(), Err(String::from("el semáforo del OCR se cerró")));
+            };
+            let lineas = match ocr::extraer_pdf(&cliente, &ruta).await {
+                Ok(lineas) => lineas,
+                // Una factura que no se puede leer no aborta el lote: sale como
+                // ESCALAR con el motivo (spec_y_plan.md Bloque 5).
+                Err(e) => return (indice, nombre.clone(), Err(format!("OCR: {e}"))),
+            };
+            let factura = parser::extraer(&lineas);
+            (
+                indice,
+                nombre.clone(),
+                Ok(ElementoLote {
+                    file_id: nombre,
+                    factura,
+                    asientos,
+                    filas_excel: Vec::new(),
+                }),
+            )
+        });
+    }
+
+    let mut terminadas: Vec<Option<(String, Result<ElementoLote, String>)>> =
+        (0..pdfs.len()).map(|_| None).collect();
+    while let Some(terminado) = en_vuelo.join_next().await {
+        match terminado {
+            Ok((indice, nombre, resultado)) => terminadas[indice] = Some((nombre, resultado)),
+            // Una tarea que revienta solo puede ser un fallo de programación,
+            // y se dice como tal en vez de dejar huecos en la entrega.
+            Err(e) => tracing::error!("una tarea de OCR murió antes de devolver nada: {e}"),
+        }
+    }
+
+    Ok(pdfs
+        .iter()
+        .enumerate()
+        .map(|(indice, nombre)| match terminadas[indice].take() {
+            Some(par) => par,
+            None => (
+                nombre.clone(),
+                Err(String::from("la tarea de OCR no llegó a terminar (ver los logs)")),
+            ),
+        })
+        .collect())
+}
+
 // --- HANDLER (Controlador HTTP) ---
 
+/// `POST /api/upload-invoice`: un PDF → una `Factura` extraída.
+///
+/// Es el mismo camino que `--pdf-dir` (OCR → parser) y devuelve el mismo tipo:
+/// antes devolvía un `InvoiceData` con el texto crudo del OCR, que no es lo que
+/// decide nada. La subida no decide —eso es `/api/decidir`— porque una factura
+/// subida a mano todavía tiene que pasar por el motor con el snapshot vigente.
 async fn handle_upload(
     State(state): State<AppState>,
     mut multipart: Multipart,
-) -> Result<Json<InvoiceData>, (StatusCode, String)> {
-    
-    // 1. Extraer el archivo PDF/Imagen del form-data
-    let mut file_bytes = Vec::new();
-    while let Some(field) = multipart.next_field().await.unwrap() {
-        if field.name() == Some("file") {
-            file_bytes = field.bytes().await.unwrap().to_vec();
-            break;
+) -> Result<Json<Factura>, (StatusCode, String)> {
+    // 1. El PDF del form-data. El nombre del fichero es lo que después aparece
+    //    en la entrega, así que se respeta tal cual llega; si el cliente no lo
+    //    manda se usa uno sintético, porque perder el nombre no puede impedir
+    //    leer la factura.
+    let mut nombre = String::from("subida.pdf");
+    let mut bytes: Option<Vec<u8>> = None;
+    loop {
+        let campo = match multipart.next_field().await {
+            Ok(Some(campo)) => campo,
+            Ok(None) => break,
+            Err(e) => return Err((StatusCode::BAD_REQUEST, format!("form-data ilegible: {e}"))),
+        };
+        if campo.name() != Some("file") {
+            continue;
         }
-    }
-
-    if file_bytes.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "No se envió ningún archivo".into()));
-    }
-
-    // 2. Procesar con PaddleOCR (Intentar API principal, si falla usar Local)
-    let invoice_data = match process_ocr(&file_bytes).await {
-        Ok(data) => data,
-        Err(e) => {
-            tracing::error!("Fallo catastrófico en OCR: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Fallo en el OCR".into()));
+        if let Some(fichero) = campo.file_name() {
+            nombre = fichero.to_string();
         }
+        bytes = Some(
+            campo
+                .bytes()
+                .await
+                .map_err(|e| (StatusCode::BAD_REQUEST, format!("no se pudo leer `{nombre}`: {e}")))?
+                .to_vec(),
+        );
+        break;
+    }
+    let Some(bytes) = bytes else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            String::from("no se envió ningún archivo en el campo `file`"),
+        ));
     };
 
-    // 3. Guardar en MongoDB
-    match state.db_collection.insert_one(&invoice_data, None).await {
-        Ok(insert_result) => tracing::info!("✅ Factura guardada con ID: {:?}", insert_result.inserted_id),
-        Err(e) => tracing::error!("❌ Error guardando en Mongo: {}", e),
+    // 2. OCR → parser: la misma pareja que usa el lote.
+    let cliente_ocr = reqwest::Client::new();
+    let lineas = ocr::extraer_bytes(&cliente_ocr, &nombre, bytes)
+        .await
+        .map_err(|e| {
+            tracing::error!("OCR de {nombre}: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("OCR no disponible para `{nombre}`: {e}"),
+            )
+        })?;
+    let factura = parser::extraer(&lineas);
+
+    tracing::info!(
+        "factura `{nombre}`: {} línea(s) de OCR — nif_emisor {:?}, cif_cliente {:?}, pedido {:?}, total {:?}",
+        lineas.len(),
+        factura.nif_emisor.estado(),
+        factura.cif_cliente.estado(),
+        factura.pedido.estado(),
+        factura.total.estado()
+    );
+
+    // 3. Guardar en Mongo (la decisión la toma `/api/decidir`).
+    match state.db_collection.insert_one(&factura, None).await {
+        Ok(insertado) => tracing::info!(
+            "factura `{nombre}` guardada con id {:?}",
+            insertado.inserted_id
+        ),
+        Err(e) => tracing::error!("no se pudo guardar `{nombre}` en Mongo: {e}"),
     }
 
-    // 4. Devolver la respuesta al Frontend
-    Ok(Json(invoice_data))
+    // 4. Devolver la factura extraída al frontend.
+    Ok(Json(factura))
 }
 
 // --- HANDLER: decisión (motor de conciliación) ---
@@ -824,6 +1193,17 @@ async fn handle_decidir(
         );
     }
 
+    // Lo mismo con el CIF del cliente: que no aparezca es una decisión (R1 bis →
+    // ESCALAR), no un documento inválido. Se avisa aparte porque el motivo es
+    // otro —aquí sí hay con qué conciliar, lo que falta es que la factura esté
+    // completa— y confundir los dos casos en el log escondería cuál se revisa.
+    if factura.sin_cif_cliente() {
+        tracing::warn!(
+            "factura sin CIF del cliente (cif_cliente: {:?}): la escala R1 por incompleta, no un 400",
+            factura.cif_cliente.estado()
+        );
+    }
+
     // Si la petición aporta datos propios, mandan los suyos: no se mezclan con el
     // catálogo, porque mezclar dos fotos del ERP es justo lo que rompe la huella.
     let trae_datos_propios = !peticion.asientos.is_empty() || !peticion.filas_excel.is_empty();
@@ -863,54 +1243,16 @@ async fn handle_decidir(
     }))
 }
 
-// --- SERVICIO OCR (El patrón Fallback) ---
-
-async fn process_ocr(image_bytes: &[u8]) -> Result<InvoiceData, String> {
-    let client = reqwest::Client::new();
-    
-    // URL de tu API en la nube (la rápida)
-    let primary_api = "http://api-nube.tuservidor.com/ocr";
-    // URL de tu ordenador portátil/servidor local en el hackathon (la segura)
-    let fallback_api = "http://localhost:5000/ocr";
-
-    tracing::info!("Intentando API principal de PaddleOCR...");
-    
-    match send_to_paddle(&client, primary_api, image_bytes).await {
-        Ok(data) => {
-            tracing::info!("⚡ OCR Principal respondió correctamente.");
-            Ok(data)
-        },
-        Err(e) => {
-            tracing::warn!("⚠️ API Principal caída ({}). Cambiando a Fallback Local...", e);
-            
-            // Si la principal falla, intentamos la local
-            match send_to_paddle(&client, fallback_api, image_bytes).await {
-                Ok(data) => {
-                    tracing::info!("🛡️ OCR Fallback respondió correctamente.");
-                    Ok(data)
-                },
-                Err(e) => Err(format!("Ambas APIs fallaron. Último error: {}", e))
-            }
-        }
-    }
-}
-
-// Función auxiliar para hacer la petición HTTP POST a Python/PaddleOCR
-async fn send_to_paddle(client: &reqwest::Client, url: &str, bytes: &[u8]) -> Result<InvoiceData, String> {
-    // Aquí asumes que tu API de Python acepta los bytes crudos y devuelve JSON
-    let response = client.post(url)
-        .body(bytes.to_vec()) // En producción, es mejor enviarlo como multipart/form-data
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if response.status().is_success() {
-        let data: InvoiceData = response.json().await.map_err(|e| e.to_string())?;
-        Ok(data)
-    } else {
-        Err(format!("Status code: {}", response.status()))
-    }
-}
+// --- SERVICIO OCR ---
+//
+// Aquí vivía el «patrón fallback» (`process_ocr` + `send_to_paddle`): dos URLs
+// inventadas (`http://api-nube.tuservidor.com/ocr` y `http://localhost:5000/ocr`)
+// y una petición que mandaba el PDF como cuerpo crudo, sin `multipart` y sin
+// comprobar el contrato. Se ha borrado entero (TRASPASO.md §3.3): el cliente de
+// verdad es `ocr::extraer_pdf` / `ocr::extraer_bytes`, que habla con el servicio
+// del contrato, interpreta `{"lines": []}` como el fallo que es y no deja dos
+// caminos distintos para lo mismo. Dejar los dos al lado era la peor opción: el
+// de mentira era el que se ejecutaba.
 
 // ---------------------------------------------------------------------------
 // Tests del cableado: `decidir_factura` es lo que ejecuta el handler, así que
@@ -942,6 +1284,9 @@ mod tests {
                 Nif::nuevo("b-12345678").expect("NIF válido"),
                 "NIF: b-12345678",
             ),
+            // El CIF del cliente, presente: una factura sin él la escala R1 bis
+            // antes de llegar a ninguna de las reglas que se prueban aquí.
+            cif_cliente: leido(Nif::nuevo("a58231074").expect("CIF válido"), "CIF: A58231074"),
             pedido: leido("PED-00123".to_string(), "Pedido: PED-00123"),
             numero_factura: leido("F-2024-001".to_string(), "Factura F-2024-001"),
             fecha: leido("2024-09-02".to_string(), "Fecha: 02/09/2024"),
@@ -1236,6 +1581,65 @@ mod tests {
         );
     }
 
+    /// Un `--pdf-dir` sin PDFs no es un lote vacío: es un lote mal montado. Si
+    /// se dejara pasar, la entrega saldría con cero líneas y el recuento
+    /// (PAGAR 0, NO_PAGAR 0, ESCALAR 0) parecería un resultado limpio en vez del
+    /// fallo que es. Se comprueba antes de tocar el OCR, así que no hace falta
+    /// ningún servicio levantado.
+    #[tokio::test]
+    async fn un_directorio_sin_pdfs_es_un_error_y_no_un_lote_vacio() {
+        let dir = std::env::temp_dir().join(format!(
+            "hackspain_sin_pdfs_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("se crea el directorio temporal");
+        std::fs::write(dir.join("notas.txt"), b"no es un PDF").expect("se escribe el fichero");
+
+        let error = lote_de_pdfs(&dir, &[])
+            .await
+            .expect_err("un directorio sin PDFs no puede entregar un lote");
+
+        // También el directorio que no existe: es el error de escritura más
+        // común (una ruta relativa lanzada desde otro sitio).
+        let inexistente = lote_de_pdfs(&dir.join("no_existe"), &[]).await;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            error.to_string().contains("no tiene ningún PDF"),
+            "el motivo tiene que decir que faltan los PDFs: {error}"
+        );
+        assert!(
+            inexistente.is_err(),
+            "una carpeta que no existe tampoco es un lote"
+        );
+    }
+
+    /// La ruta del snapshot tiene que poder cambiarse por bandera: el snapshot es
+    /// un dato del despliegue —hay uno por entorno— y un binario que solo sabe
+    /// leer `data/erp_snapshot.json` obliga a editar código para desplegarlo.
+    #[test]
+    fn el_snapshot_del_erp_tiene_ruta_por_defecto_y_se_puede_cambiar() {
+        let por_defecto = Args::parse_from(["hackspain-ocr", "--fixture", "lote.jsonl"]);
+        assert_eq!(
+            por_defecto.erp_snapshot,
+            PathBuf::from("data/erp_snapshot.json"),
+            "el caso dorado del motor sigue apuntando al snapshot de siempre"
+        );
+
+        let con_bandera = Args::parse_from([
+            "hackspain-ocr",
+            "--fixture",
+            "lote.jsonl",
+            "--erp-snapshot",
+            "/etc/maisa/erp_snapshot.json",
+        ]);
+        assert_eq!(
+            con_bandera.erp_snapshot,
+            PathBuf::from("/etc/maisa/erp_snapshot.json")
+        );
+    }
+
     // ---------------------------------------------------------------------
     // Adaptador BSON: la regresión del catálogo vacío
     //
@@ -1363,5 +1767,89 @@ mod tests {
 
         assert_eq!(decision.resultado, Resultado::Pagar);
         assert_eq!(evidencia.match_por, MatchStrategy::ExactByPedido);
+    }
+
+    /// Prueba de fuego del contrato del ERP, de punta a punta y contra el
+    /// snapshot real: una factura que casa con uno de los 20 asientos **sin NIF**
+    /// tiene que salir `ESCALAR` por `R10`, no `ESCALAR` por «sin match».
+    ///
+    /// Antes de que `Asiento::nif` fuera opcional, esos 20 asientos se tiraban en
+    /// el cargador y estas facturas caían en `R9_sin_match`: el motivo decía que
+    /// el ERP no tenía la factura cuando el ERP sí la tenía. Es la diferencia
+    /// entre «falta un dato» y «el dato se perdió» — y solo la primera se puede
+    /// auditar.
+    #[test]
+    fn una_factura_que_casa_con_un_asiento_sin_nif_del_erp_escala_por_r10() {
+        let ruta = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/erp_snapshot.json");
+        if !ruta.exists() {
+            // El snapshot se descarga aparte y no tiene por qué estar en el
+            // árbol de trabajo; si no está, no hay nada que comprobar.
+            return;
+        }
+        let snapshot = erp::leer_snapshot(&ruta).expect("el snapshot commitado se lee");
+        let catalogo = erp::asientos_del_snapshot(&snapshot);
+        let sin_nif: Vec<&Asiento> = catalogo
+            .iter()
+            .filter(|asiento| asiento.nif.is_none())
+            .collect();
+        assert_eq!(
+            sin_nif.len(),
+            20,
+            "el snapshot real trae 20 asientos sin NIF; si no, este test no prueba nada"
+        );
+
+        let asiento = sin_nif[0];
+        assert_eq!(
+            asiento.estado,
+            EstadoAsiento::Pendiente,
+            "los 20 sin NIF del snapshot están todos PENDIENTE: el motivo del \
+             ESCALAR tiene que ser el NIF, no el estado"
+        );
+
+        // La factura del papel: mismo pedido y mismo total que el asiento, pero
+        // **con** NIF de emisor, porque el NIF del proveedor lo trae el PDF y no
+        // el ERP. Es exactamente el caso que el cargador tiraba.
+        let con_pedido = Factura {
+            pedido: leido(asiento.pedido.clone(), "Pedido del PDF"),
+            total: leido(asiento.importe, "TOTAL del PDF"),
+            ..factura()
+        };
+
+        let (evidencia, decision) = decidir_factura(
+            &con_pedido,
+            &catalogo,
+            &[],
+            &ReglasConfig::default(),
+            &snapshot.snapshot_id,
+        );
+
+        // Lo que cambia con el merge: el match **existe**. Sin él, R10 no podría
+        // dar un motivo útil y la factura sería indistinguible de una que el ERP
+        // no tiene.
+        assert_eq!(
+            evidencia.match_por,
+            MatchStrategy::ExactByPedido,
+            "el asiento sin NIF se concilia igual: el pedido es la llave"
+        );
+        assert_eq!(decision.resultado, Resultado::Escalar);
+        assert!(
+            !decision
+                .reglas_evaluadas
+                .contains(&"R9_sin_match".to_string()),
+            "no es un «sin match»: el ERP sí tiene la factura ({:?})",
+            decision.reglas_evaluadas
+        );
+        assert!(
+            decision
+                .reglas_evaluadas
+                .contains(&"R10_erp_sin_nif".to_string()),
+            "la traza nombra la regla aplicada: {:?}",
+            decision.reglas_evaluadas
+        );
+        assert!(
+            decision.motivo.contains(&asiento.asiento_id) && decision.motivo.contains("sin NIF"),
+            "el motivo cita el asiento y la falta de NIF: {}",
+            decision.motivo
+        );
     }
 }

@@ -7,14 +7,37 @@ edition = "2021"
 axum = { version = "0.7", features = ["multipart"] }
 tokio = { version = "1.36", features = ["full"] }
 mongodb = "2.8"
-reqwest = { version = "0.11", features = ["json"] }
+# `multipart`: `ocr.rs` manda el PDF como un unico campo de formulario
+# (`"file"`, TRASPASO.md §3.3), que es lo que espera el servicio FastAPI.
+reqwest = { version = "0.11", features = ["json", "multipart"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# `raw_value`: el snapshot del ERP tiene que escribir `importe` como **numero
+# JSON** conservando los ceros finales (`9872.00`), y el esquema de Mongo exige
+# `bsonType: "decimal"` (docker/mongosh/02-schema-init.js). `Decimal` serializa a
+# string y `f64` pierde los ceros, asi que `erp.rs` construye el numero a mano
+# con `RawValue` desde el `Decimal` ya normalizado (nunca desde un float).
+serde_json = { version = "1.0", features = ["raw_value"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
 # Motor de conciliación y decisión.
+# SIN `serde-float` a propósito: `Decimal` serializa a **string** (TRASPASO.md
+# §3.8) y la capa de persistencia convierte a `Decimal128` de forma explícita.
+# Si `erp.rs` necesita el importe como numero JSON, que use su propio DTO.
 rust_decimal = { version = "1", features = ["serde"] }
 toml = "0.8"
 # CLI del orquestador (spec_y_plan.md Bloque 5): --pdf-dir, --out, --reglas...
 clap = { version = "4", features = ["derive"] }
+
+# --- Conexion real con el ERP y parser (spec_y_plan.md 3.2 / 3.6) -----------
+# El bridge habla XML **ISO-8859-1**: hay que decodificarlo con `encoding_rs`
+# antes de darselo a `quick-xml` (que trabajaria como UTF-8 y romperia los
+# acentos y la 'n con virgulilla' de los nombres de proveedor).
+encoding_rs = "0.8"
+quick-xml = "0.36"
+# Regexes de extraccion del parser (anclas de layout) y validacion de ids.
+regex = "1.13"
+# Fechas tipadas; sin `clock` para no arrastrar dependencias de zona horaria
+# (solo se usan fechas civiles: `NaiveDate`).
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+anyhow = "1.0"

@@ -135,7 +135,7 @@ operativos.
 | **Documento** | El PDF original y sus metadatos (nombre, hash, tamaño, páginas) | 1 documento → 1 expediente |
 | **ExtracciónOCR** | Salida cruda del servicio OCR: líneas con texto, bbox y score | 1 extracción → 1 expediente |
 | **FacturaParseada** | Campos extraídos del OCR. **Cada campo lleva su valor canónico y el texto del que salió** (ver `CampoExtraido`) | 1 factura → 1 expediente |
-| **CampoExtraido** | Un campo con sus dos caras: el valor canónico, el crudo tal cual se leyó, la confianza y la ubicación exacta (`pág. 1 línea 8`, `Hoja1#42:D`, `asiento AS-412`). Su estado es `ENCONTRADO`, `NO_APARECE` o `ILEGIBLE` | 1 factura → 7 campos |
+| **CampoExtraido** | Un campo con sus dos caras: el valor canónico, el crudo tal cual se leyó, la confianza y la ubicación exacta (`pág. 1 línea 8`, `Hoja1#42:D`, `asiento AS-412`). Su estado es `ENCONTRADO`, `NO_APARECE` o `ILEGIBLE` | 1 factura → 8 campos |
 | **Asiento** | Registro contable del ERP: `asiento_id`, `nif`, `pedido`, `importe`, `estado` | 1 asiento → N expedientes (posible) |
 | **SnapshotERP** | Foto completa de los asientos en un instante; permite detectar obsolescencia | 1 snapshot → N asientos |
 | **FilaExcel** | Fila del Excel caótico, volcada sin pérdida como mapa de campos | 1 fila → N expedientes (posible) |
@@ -207,7 +207,8 @@ erDiagram
         int duracion_ms
     }
     FACTURA_PARSEADA {
-        object nif_emisor "campo extraido"
+        object nif_emisor "campo extraido (emisor: a quien se paga)"
+        object cif_cliente "campo extraido (cliente: a quien se factura)"
         object pedido "campo extraido"
         object numero_factura "campo extraido"
         object fecha "campo extraido"

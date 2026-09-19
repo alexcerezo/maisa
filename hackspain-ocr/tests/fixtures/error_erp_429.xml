@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<error>
+  <codigo>ERP-429</codigo>
+  <mensaje>Demasiadas peticiones. El bridge es de 2009; respete la cola.</mensaje>
+</error>

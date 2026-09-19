@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<respuesta>
+  <asientos>
+    <asiento>
+      <id>AS-00084</id>
+      <fecha>21/03/2026</fecha>
+      <proveedor>P002</proveedor>
+      <nif>A41220987</nif>
+      <pedido>PO-2026-0084</pedido>
+      <importe>6.199,54</importe>
+      <estado>PENDIENTE</estado>
+    </asiento>
+  </asientos>
+</respuesta>
+

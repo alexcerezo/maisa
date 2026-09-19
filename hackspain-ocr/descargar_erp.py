@@ -81,6 +81,16 @@ Uso:
     python descargar_erp.py --dry-run             # verifica sin escribir
     python descargar_erp.py --solo-pagina 1       # humo rapido
     python descargar_erp.py --sin-dedup           # conserva los duplicados
+
+Configuracion (nada de rutas ni credenciales fijas en el codigo):
+    ERP_BASE_URL   direccion del bridge      (por defecto http://127.0.0.1:8009)
+    ERP_USUARIO    usuario del bridge        (por defecto "alberto")
+    ERP_CLAVE      contrasena del bridge     (por defecto la del reto)
+
+Los valores por defecto son los del bridge del reto, para que el programa
+funcione recien clonado; en produccion se definen las variables (o se pasan
+--base-url / --usuario / --clave). Las banderas mandan sobre el entorno. Todas
+las rutas de fichero son relativas a la raiz del proyecto.
 """
 
 from __future__ import annotations
@@ -107,10 +117,49 @@ for _flujo in (sys.stdout, sys.stderr):
         _reconfigurar(encoding="utf-8", errors="replace")
 
 ESQUEMA_VERSION = 1
-USUARIO_DEFECTO = "alberto"
-CLAVE_DEFECTO = "FACTURAS2009"
-BASE_DEFECTO = "http://127.0.0.1:8009"
+
+# --------------------------------------------------------------------------- #
+# Configuracion: entorno primero, valores por defecto despues
+# --------------------------------------------------------------------------- #
+# Ninguna direccion de maquina ni credencial va fijada en el codigo: los tres
+# parametros de conexion se pueden dar por variable de entorno (o por bandera
+# de linea de comandos, que tiene prioridad sobre el entorno). Los valores por
+# defecto son los del bridge del reto para que el programa funcione recien
+# clonado en cualquier ordenador; en produccion se define `ERP_CLAVE` y no se
+# depende de ningun valor por defecto (ver `aviso_de_credencial`).
+VARIABLES_ENTORNO = {
+    "usuario": "ERP_USUARIO",
+    "clave": "ERP_CLAVE",
+    "base_url": "ERP_BASE_URL",
+}
+
+
+def variable_de_entorno(nombre: str, defecto: str) -> str:
+    """Valor de la variable `nombre`, o `defecto` si no esta o viene vacia."""
+    return os.environ.get(nombre, "").strip() or defecto
+
+
+USUARIO_DEFECTO = variable_de_entorno(VARIABLES_ENTORNO["usuario"], "alberto")
+CLAVE_DEFECTO = variable_de_entorno(VARIABLES_ENTORNO["clave"], "FACTURAS2009")
+BASE_DEFECTO = variable_de_entorno(VARIABLES_ENTORNO["base_url"],
+                                   "http://127.0.0.1:8009")
 POR_PAGINA_DEFECTO = 20
+
+
+def aviso_de_credencial() -> str | None:
+    """Aviso si se esta usando la credencial por defecto en vez del entorno.
+
+    Devolver `None` significa "configurado explicitamente". No se imprime la
+    credencial: solo se dice de donde sale.
+    """
+    if os.environ.get(VARIABLES_ENTORNO["clave"], "").strip():
+        return None
+    return (
+        f"aviso: no has definido {VARIABLES_ENTORNO['clave']}; se usa la "
+        "credencial por defecto del bridge del reto. En produccion define "
+        f"{VARIABLES_ENTORNO['usuario']} / {VARIABLES_ENTORNO['clave']} "
+        "(o pasa --usuario / --clave)."
+    )
 
 ESTADOS_VALIDOS = {"PENDIENTE", "PAGADA"}
 
@@ -290,8 +339,10 @@ class ClienteErp:
         except urllib.error.URLError as error:
             raise ErrorErp(
                 f"no puedo hablar con el ERP en {self.base} ({error.reason}).\n"
-                f"    Arrancalo con:  python alberto_erp.py --rapido\n"
-                f"    (esta en c:\\Users\\marti\\Documents\\Hackaton\\500-sombras-de-alberto)"
+                "    Arranca el bridge del ERP en esa direccion (el del reto se\n"
+                "    arranca con `python alberto_erp.py --rapido`) y, si no esta\n"
+                "    en el puerto 8009, apunta la URL con --base-url o con la\n"
+                f"    variable de entorno {VARIABLES_ENTORNO['base_url']}."
             ) from error
 
     def login(self) -> None:
@@ -326,9 +377,13 @@ class ClienteErp:
 
             if codigo == "SES-401" or codigo_http == "401":
                 # Credenciales mal: reintentar no arregla nada.
+                # La clave se omite a proposito: un mensaje de error no puede
+                # acabar con credenciales en un log.
                 raise ErrorErp(
                     f"credenciales rechazadas (SES-401). {mensaje or ''}\n"
-                    f"    Comprueba usuario/clave: {self.usuario}/{self.clave}"
+                    f"    Revisa usuario/clave del bridge (usuario probado: "
+                    f"{self.usuario}; define {VARIABLES_ENTORNO['usuario']} / "
+                    f"{VARIABLES_ENTORNO['clave']} o pasa --usuario / --clave)"
                 )
 
             raise ErrorErp(f"login fallo: HTTP {codigo_http} {codigo or ''} {mensaje or ''}".strip())
@@ -724,11 +779,15 @@ def parsear_argumentos() -> argparse.Namespace:
     )
     raiz = Path(__file__).resolve().parent
     parser.add_argument("--base-url", default=BASE_DEFECTO,
-                        help=f"URL del bridge (por defecto {BASE_DEFECTO})")
+                        help=f"URL del bridge (por defecto {BASE_DEFECTO}; "
+                             f"env {VARIABLES_ENTORNO['base_url']})")
     parser.add_argument("--out", default=str(raiz / "data" / "erp_snapshot.json"),
-                        help="fichero de salida")
-    parser.add_argument("--usuario", default=USUARIO_DEFECTO)
-    parser.add_argument("--clave", default=CLAVE_DEFECTO)
+                        help="fichero de salida (relativo a la raiz del proyecto)")
+    parser.add_argument("--usuario", default=USUARIO_DEFECTO,
+                        help=f"env {VARIABLES_ENTORNO['usuario']}")
+    parser.add_argument("--clave", default=CLAVE_DEFECTO,
+                        help=f"contrasena del bridge; env {VARIABLES_ENTORNO['clave']} "
+                             "(no se escribe nunca en los mensajes)")
     parser.add_argument("--max-intentos", type=int, default=8,
                         help="intentos por peticion ante ORA-00600/SES-401/ERP-429")
     parser.add_argument("--solo-pagina", type=int, metavar="N",
@@ -746,6 +805,10 @@ def main() -> int:
     inicio = time.monotonic()
     instante = datetime.now(timezone.utc)
     snapshot_id = "snap-" + instante.strftime("%Y-%m-%dT%H-%M-%SZ")
+
+    aviso = aviso_de_credencial()
+    if aviso and not args.quiet:
+        print(aviso, file=sys.stderr)
 
     print(f"ERP        {args.base_url}")
     print(f"snapshot   {snapshot_id}")

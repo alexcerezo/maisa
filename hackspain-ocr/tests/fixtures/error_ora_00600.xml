@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<error>
+  <codigo>ORA-00600</codigo>
+  <mensaje>Error interno del nucleo del bridge. Reintente la peticion. Si persiste, contacte con Mantenimiento (ext. 2009).</mensaje>
+</error>

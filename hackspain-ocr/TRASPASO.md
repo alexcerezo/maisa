@@ -127,9 +127,10 @@ permite contestar "¿y de dónde has sacado ese número?" en una revisión.
 ### 2.2 Las estructuras
 
 ```rust
-// domain.rs — 7 campos, todos Identificador<T>
+// domain.rs — 8 campos, todos Identificador<T>
 pub struct Factura {
     pub nif_emisor: Identificador<Nif>,      // Nif canoniza al entrar
+    pub cif_cliente: Identificador<Nif>,     // CIF del cliente: sin dígito de control
     pub pedido: Identificador<String>,
     pub numero_factura: Identificador<String>,
     pub fecha: Identificador<String>,        // ISO YYYY-MM-DD
@@ -533,7 +534,13 @@ recorre el motor entero sin necesitar ni un PDF, ni el ERP, ni el Excel.
 - **Cobertura real de etiquetas en `data/facturas/`** (500 PDFs, regex laxa):
   `PO-…` en 471, `NIF` en 277, `IBAN` en 322, `TOTAL` en 209, `Base` en 73.
   Es decir: **el parser tiene que sacar partido de lo que haya**, no exigir los
-  7 campos.
+  8 campos.
+  ⚠️ **Ojo con el octavo**: el censo anterior **no cuenta el bloque del cliente**
+  (`Cliente:` / `CIF:` del destinatario), que es justo el que alimenta
+  `cif_cliente` y el que R1 bis exige. Que `NIF:` aparezca en 277/500 no dice nada
+  del CIF del cliente: son etiquetas distintas. Si en los 500 PDF reales no hay
+  bloque de cliente etiquetado, el lote entero escala por R1 bis — es la pregunta
+  abierta número uno de esta funcionalidad.
 - **`PO-2026-0492` está facturado dos veces**, en dos plantillas distintas y con
   el mismo importe (`2026-0233-A_catering.pdf` y `factura_41082.pdf`, ambos
   1.512,50). Es la norma 5 de `Norma_Pagos_v3`: *"Nunca pagar dos veces el mismo
