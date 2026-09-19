@@ -7,15 +7,18 @@ Estructura de proyecto según `spec_y_plan.md`. Conciliación a tres bandas
 
 > **El motor vivo es `motor/` (Python). El binario Rust de `src/` es legado.**
 
-El motor Rust llegó a tener las reglas R1–R9 y sus tests en verde, pero los
-módulos que leen el mundo (`parser.rs`, `validators.rs`, `ocr.rs`, `erp.rs`,
-`excel.rs`, `obs.rs`) se quedaron en esqueleto: `outputs/outcomes.jsonl` nunca
-llegó a llenarse. Para entregar el domingo hacía falta un motor que **ejecute
-sobre el corpus real**, así que se integró `motor/`, que resuelve las 500
-facturas en ~3,6 s y sin red.
+El motor Rust tiene las reglas implementadas y sus 57 tests en verde, pero el
+lector del maestro (`src/excel.rs`) y la observabilidad (`src/obs.rs`) son
+placeholders de dos líneas, y su modo lote está declarado como *"lo que se puede
+probar sin OCR, sin ERP y sin Excel"*. Por eso `outputs/outcomes.jsonl` nunca
+llegó a llenarse: solo se ha ejecutado contra el lote de ejemplo de 10 líneas.
+Para entregar el domingo hacía falta un motor que **ejecute sobre el corpus
+real**, así que se integró `motor/`, que resuelve las 500 facturas en ~3,6 s y
+sin red.
 
 - `motor/README.md` — cómo se ejecuta y qué decide.
-- `motor/docs/fusion_motores.md` — qué se conservó del diseño Rust y por qué.
+- `motor/docs/albertitos_plan.md` — el plan de entrega: arquitectura, ADRs y
+  trade-offs, escalabilidad y resiliencia.
 - `TRASPASO.md` — se mantiene íntegro como documentación de ese diseño: sus
   contratos (los tres fallos distintos del ERP, el enum cerrado de eventos, la
   trampa de `Decimal` en BSON, el XML en ISO-8859-1) siguen siendo válidos y

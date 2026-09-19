@@ -6,10 +6,15 @@ pedidos (Excel) y los asientos del ERP.
 
 Este directorio es la implementación que se ejecuta y se entrega. El motor
 anterior en Rust (`hackspain-ocr/src/`) se conserva como **legado documental**:
-su diseño, sus contratos y sus reglas están recogidos en `TRASPASO.md` y en
-`docs/fusion_motores.md`, pero **no se compila ni se ejecuta**, porque los
-módulos de entrada/salida (`parser.rs`, `validators.rs`, `ocr.rs`, `erp.rs`,
-`excel.rs`, `obs.rs`) quedaron en esqueleto y nunca llegaron a leer el corpus.
+su diseño y sus contratos están recogidos en `TRASPASO.md`.
+
+No es un esqueleto — tiene las reglas implementadas y 57 tests en verde — pero
+**nunca resolvió el corpus real**: el lector del maestro (`src/excel.rs`) y la
+observabilidad (`src/obs.rs`) son placeholders de dos líneas, y su modo lote
+está declarado en el propio código como *"lo que se puede probar sin OCR, sin
+ERP y sin Excel"*. Por eso `outputs/outcomes.jsonl` sigue a 0 bytes desde el
+commit inicial: el Rust solo se ha ejecutado contra el lote de ejemplo de 10
+líneas.
 
 ## Arranque rápido
 
