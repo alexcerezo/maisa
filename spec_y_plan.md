@@ -180,20 +180,37 @@ cargo run --release -- --pdf-dir data/facturas_lote2 --out outputs/outcomes_lote
 
 Todo con `serde`. Foco en poder **reconstruir cualquier decisión**.
 
+> **Implementado.** El `Option<T>` + `scores: HashMap` de este borrador se
+> sustituyó por `Identificador<T>`, que guarda **cada campo con sus dos caras**:
+> el valor canónico y el texto crudo del que salió, más su confianza y su
+> ubicación exacta. Un `Option` no distingue "el PDF no trae NIF" de "se leyó un
+> NIF que no se pudo canonizar", y esa diferencia decide si se paga o se escala.
+
 ```rust
+// Un campo extraído: crudo + normalizado en un único valor.
+// El estado es tri-estado: ENCONTRADO | NO_APARECE | ILEGIBLE.
+pub struct Identificador<T> {
+    estado: EstadoCampo,          // privados: solo se construye por sus 3 funciones
+    valor: Option<T>,             // el canónico; NO se serializa si no existe
+    rastro: Option<Rastro>,       // crudo + score + origen
+}
+
+pub struct Rastro {
+    pub crudo: String,            // texto tal cual: "NIF: b-12345678"
+    pub score: f64,               // confianza de la fuente (ERP/Excel = 1.0)
+    pub origen: Option<Origen>,   // OCR{pagina,linea} | Excel{fila,columna} | Erp{asiento_id}
+}
+
 // Extracción del PDF (post-parser)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Factura {
-    pub file_id: String,
-    pub nif_emisor: Option<String>,
-    pub pedido: Option<String>,
-    pub numero_factura: Option<String>,
-    pub fecha: Option<Date>,
-    pub base: Option<Decimal>,
-    pub iva: Option<Decimal>,
-    pub total: Option<Decimal>,
-    pub scores: HashMap<String, f32>,
-    pub raw_text: String,
+    pub nif_emisor: Identificador<Nif>,      // Nif es newtype: solo existe si es canónico
+    pub pedido: Identificador<String>,
+    pub numero_factura: Identificador<String>,
+    pub fecha: Identificador<String>,        // ISO-8601 en texto
+    pub base: Identificador<Decimal>,
+    pub iva: Identificador<Decimal>,
+    pub total: Identificador<Decimal>,
 }
 
 // Asiento del ERP (ya normalizado desde XML ISO-8859-1)
@@ -366,6 +383,12 @@ Por cada factura, tras el pipeline, escribir en `traces/<file_id>/`:
 - `decision.json` — decisión + motivo + reglas evaluadas + timings + coste.
 - `pdf.copy.pdf` (symlink al original) — para la UI del bonus.
 
+`factura.json` (y el subdocumento `expedientes.factura`) contiene **cada campo con
+su crudo**, así que la traza de un `ESCALAR` se puede explicar sin volver a
+ejecutar nada: se ve el texto que se leyó, la confianza y la línea exacta. Los
+mismos datos, en forma de eventos, van a la colección time-series `eventos`
+(escrita **solo** por `obs.rs`, que es quien garantiza el contrato de campos).
+
 Logs estructurados con `tracing` en formato JSON. Un `run_id` por ejecución
 como campo común. Un contador global en `observability`:
 
@@ -459,9 +482,13 @@ venv de Python creado.
 ### Bloque 3 · Módulos `parser` + `validators` + `excel` (2.5 h) — PERSONA B (en paralelo con Bloques 1-2)
 
 - [ ] `src/parser.rs`: sobre `Vec<OCRLine>`, extraer `nif`, `pedido`, `total`,
-      `fecha` con regex y anclas de layout. Guarda `scores` por campo.
+      `fecha` con regex y anclas de layout. Entrega cada campo como
+      `Identificador::encontrado(valor, crudo, score, Some(Origen::Ocr{pagina, linea}))`:
+      el crudo y el `origen` no se reconstruyen después, se capturan aquí.
 - [ ] `src/validators.rs`: CIF/NIF (dígito control), IBAN (mod 97), aritmética
-      con tolerancia. `time` para fechas.
+      con tolerancia. Es quien degrada un campo a `Identificador::ilegible(...)`
+      —"hay texto pero no pasa el dígito de control"— conservando el crudo.
+      `time` para fechas.
 - [ ] `src/excel.rs` con `calamine`: leer todas las hojas del XLSX, construir
       `Vec<ExcelRow>` + índices por NIF y por pedido.
 - [ ] `#[cfg(test)]` en cada uno con 3-5 casos.

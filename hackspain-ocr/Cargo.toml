@@ -12,3 +12,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+
+# Motor de conciliación y decisión.
+rust_decimal = { version = "1", features = ["serde"] }
+toml = "0.8"
+# CLI del orquestador (spec_y_plan.md Bloque 5): --pdf-dir, --out, --reglas...
+clap = { version = "4", features = ["derive"] }

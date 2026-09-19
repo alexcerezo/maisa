@@ -1,6 +1,22 @@
 # Reglas parametrizables del motor de decision. Ver spec_y_plan.md 3.5.
 # Este archivo es el punto de inyeccion de la regla nueva del sabado 18:00.
 
+# Version logica del juego de reglas. Va a `Decision::huellas.reglas_version`,
+# asi que hay que subirla en el mismo commit que cambia una regla: es lo que
+# permite saber con que reglas se pago y que decisiones han quedado obsoletas.
+version = 1
+
 tolerancia_importe = 0.02
 umbral_pago_maximo = 5000.00
 score_minimo = 0.85
+
+# Reglas inyectables (escenario sorpresa del sábado 18:00). Descomentar y
+# recargar reglas.toml es suficiente; no hace falta recompilar.
+#
+# `prohibido_pagar_proveedor` son NIFs canónicos: da igual escribirlos con
+# guion, espacios o minúsculas ("b-12345678" == "B12345678"), porque el tipo
+# `Nif` los normaliza al cargar. A cambio, una entrada sin ningún carácter
+# alfanumérico (por ejemplo "---") es un error de carga en vez de una regla que
+# no bloquea nada en silencio.
+# prohibido_pagar_proveedor = ["B12345678"]
+# retener_iva = false
