@@ -1,5 +1,19 @@
+# LEGADO DEL MOTOR RUST. NO PASAR ESTE FICHERO A `--config`.
+#
+# El motor vivo es `motor/` (Python) y su norma es `motor/config/reglas.toml`.
+# Este fichero solo lo lee `src/rules.rs`, el motor Rust que se conserva como
+# referencia historica, y usa un esquema INCOMPATIBLE con el del motor vivo
+# (claves planas aqui, `[umbrales]`/`[precedencia]`/`[reglas.*]`/`[hechos_duros]`
+# alli).
+#
+# Hasta ahora, `maisa.procesa --config config/reglas.toml` desde la raiz de
+# `maisa/` cargaba este fichero SIN ERROR y producia `{'PAGAR': 500}`: sin
+# `[reglas]` toda factura caia al resultado por defecto. `norma.Politica.carga`
+# ya rechaza ese esquema, asi que esto es defensa en profundidad, no la unica.
+#
 # Reglas parametrizables del motor de decision. Ver spec_y_plan.md 3.5.
 # Este archivo es el punto de inyeccion de la regla nueva del sabado 18:00.
+# (Lo era del motor Rust; el punto de inyeccion vivo es motor/config/reglas.toml.)
 
 # Version logica del juego de reglas. Va a `Decision::huellas.reglas_version`,
 # asi que hay que subirla en el mismo commit que cambia una regla: es lo que

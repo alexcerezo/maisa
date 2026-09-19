@@ -17,17 +17,29 @@ from pathlib import Path
 RESULTADOS = ("PAGAR", "NO_PAGAR", "ESCALAR")
 
 
-def clave_orden(file_id: str) -> tuple:
-    """Orden estable y legible: primero por nombre, con numeros comparados como numeros."""
-    partes = []
-    for trozo in file_id.replace("-", "_").split("_"):
-        partes.append((0, int(trozo), "") if trozo.isdigit() else (1, 0, trozo))
-    return (len(partes), partes)
-
-
 def normaliza_file_id(valor: str) -> str:
     """Solo para *comparar*; nunca se emite el resultado de esta funcion."""
     return unicodedata.normalize("NFKC", valor).strip().casefold()
+
+
+def clave_orden(file_id: str) -> str:
+    """Clave de orden canonica de una linea del JSONL: NFKC **sin** plegar caja.
+
+    Hace falta porque `sorted()` sobre `Path` no es portable: `PurePath.__lt__`
+    pliega mayusculas en Windows y no en POSIX, asi que el mismo lote se ordenaba
+    distinto en cada sistema y la entrega salia con las lineas en otro orden
+    (mismos datos, otros bytes). Comprobado: `copia_2026_0518.pdf` va antes de
+    `F26-2163_...pdf` en Windows y despues en Linux, 129 lineas de diferencia.
+
+    Va sin `casefold()` a proposito: es el orden del `outcomes.jsonl` ya
+    publicado y de `tests/oro/outcomes_oro.jsonl`, que la CI compara por md5.
+    Ordenar plegando caja daria el orden de Windows y cambiaria la entrega.
+
+    Antes habia aqui una version que ordenaba los trozos numericos como numeros
+    (natural sort). Nunca llego a llamarse, y de haberse llamado habria dado otro
+    orden (`pagina_2` antes que `pagina_10`) y roto el md5 de la entrega.
+    """
+    return unicodedata.normalize("NFKC", file_id).strip()
 
 
 def linea(file_id: str, resultado: str, motivos: list[str] | None = None, **extra) -> dict:
@@ -43,12 +55,21 @@ def linea(file_id: str, resultado: str, motivos: list[str] | None = None, **extr
 
 
 def escribe_jsonl(rutas: list[Path], filas: list[dict]) -> Path:
-    """Escribe el JSONL ordenado y devuelve la ruta."""
-    orden = {normaliza_file_id(f["file_id"]): i for i, f in enumerate(filas)}
-    filas = sorted(filas, key=lambda f: orden[normaliza_file_id(f["file_id"])])
+    """Escribe el JSONL ordenado y devuelve la ruta.
+
+    `newline="\\n"` es obligatorio: sin el, en Windows `open` traduce cada `\\n` a
+    CRLF y `tools/valida_entrega.py` marca la entrega como no publicable. Que el
+    fichero tenga los mismos bytes en cualquier maquina no es cosmetico: la CI
+    compara md5 del resultado.
+
+    El orden es `clave_orden` (NFKC, sensible a caja) y no el de entrada: asi el
+    fichero es el mismo aunque el lote llegue en otro orden, y no depende de como
+    ordene `Path` el sistema.
+    """
+    filas = sorted(filas, key=lambda f: clave_orden(f["file_id"]))
     for ruta in rutas:
         ruta.parent.mkdir(parents=True, exist_ok=True)
-        with ruta.open("w", encoding="utf-8") as fh:
+        with ruta.open("w", encoding="utf-8", newline="\n") as fh:
             for fila in filas:
                 fh.write(json.dumps(fila, ensure_ascii=False) + "\n")
     return rutas[0]

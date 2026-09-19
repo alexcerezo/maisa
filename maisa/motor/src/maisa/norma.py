@@ -35,6 +35,15 @@ ESCALAR = "ESCALAR"
 RESULTADOS = (PAGAR, NO_PAGAR, ESCALAR)
 
 
+class ConfigInvalida(ValueError):
+    """El TOML no tiene la forma de la norma: no se puede decidir con el.
+
+    Existe para que un fichero de reglas ajeno (el del motor Rust legado, o uno
+    con una clave mal escrita) pare el motor en vez de degradarlo. La version
+    silenciosa de esto no fallaba: pagaba las 500 facturas.
+    """
+
+
 def euros(valor: object) -> str:
     """Formatea un importe con dos decimales fijos.
 
@@ -116,12 +125,66 @@ class Politica:
     reglas: dict[str, dict]
     hechos_duros: dict[str, str]
 
+    # Secciones y claves que declara la norma v3. Un TOML al que le falten no es
+    # "la norma con valores por defecto": es OTRO esquema. El `config/reglas.toml`
+    # del motor Rust legado usa claves planas y ninguna de estas secciones; al
+    # cargarlo, `[precedencia]` y `[reglas]` quedaban vacios y **toda** factura
+    # caia al resultado por defecto: 500 PAGAR, `validacion: OK` y exit 0. Un motor
+    # de pagos que no encuentra su norma se para; no decide.
+    SECCIONES = ("umbrales", "precedencia", "reglas", "hechos_duros")
+    CLAVES = ("version", "fuente", "descripcion", "umbrales", "precedencia",
+              "reglas", "hechos_duros")
+
     @staticmethod
     def carga(ruta: Path) -> "Politica":
         datos = tomllib.loads(ruta.read_text(encoding="utf-8"))
-        u = datos.get("umbrales", {})
+        faltan = [s for s in Politica.SECCIONES if s not in datos]
+        if faltan:
+            raise ConfigInvalida(
+                f"{ruta}: faltan las secciones {faltan}. Claves de primer nivel "
+                f"encontradas: {sorted(datos)}.\n"
+                "  Esquema esperado: version, [umbrales], [precedencia], "
+                "[reglas.*], [hechos_duros].\n"
+                "  Si venias del motor Rust, `config/reglas.toml` (raiz de maisa) "
+                "es el legado; la norma viva es `motor/config/reglas.toml`."
+            )
+        sobran = sorted(set(datos) - set(Politica.CLAVES))
+        if sobran:
+            raise ConfigInvalida(
+                f"{ruta}: claves de primer nivel desconocidas: {sobran}. Se "
+                f"admiten {list(Politica.CLAVES)}. Una clave mal escrita no se "
+                "ignora: cambia la decision, asi que se rechaza en vez de adivinar."
+            )
+        version = datos["version"]
+        if not isinstance(version, str) or not version.strip():
+            raise ConfigInvalida(
+                f"{ruta}: `version` debe ser texto no vacio (vino {version!r}). Es "
+                "el valor que sella cada decision: sin el, la traza no dice con que "
+                "norma se pago."
+            )
+        if not isinstance(datos["precedencia"], dict) or not datos["precedencia"]:
+            raise ConfigInvalida(
+                f"{ruta}: [precedencia] debe ser una tabla no vacia con "
+                f"{list(RESULTADOS)}. Sin precedencia no hay forma de resolver dos "
+                "reglas que disparan a la vez."
+            )
+        faltan_prec = [r for r in RESULTADOS if r not in datos["precedencia"]]
+        if faltan_prec:
+            raise ConfigInvalida(
+                f"{ruta}: [precedencia] no declara {faltan_prec}. Se exigen los "
+                f"tres resultados ({list(RESULTADOS)}) para que el orden sea total."
+            )
+        if not isinstance(datos["reglas"], dict) or not datos["reglas"]:
+            raise ConfigInvalida(
+                f"{ruta}: [reglas] debe ser una tabla con al menos una regla. Con "
+                "cero reglas toda factura cae al resultado por defecto: el motor "
+                "pagaria sin comprobar nada."
+            )
+        if not isinstance(datos["hechos_duros"], dict):
+            raise ConfigInvalida(f"{ruta}: [hechos_duros] debe ser una tabla.")
+        u = datos["umbrales"]
         return Politica(
-            version=datos.get("version", "desconocida"),
+            version=version,
             fuente=datos.get("fuente", ""),
             tolerancia=Decimal(str(u.get("tolerancia_importe", "0.01"))),
             similitud_nif=float(u.get("similitud_minima_nif", 0.85)),
@@ -129,9 +192,9 @@ class Politica:
             confianza_minima=float(u.get("confianza_minima_campo", 0.70)),
             calidad_texto_minima=float(u.get("calidad_texto_minima", 0.60)),
             hoy=str(u.get("hoy", "")),
-            precedencia={k: int(v) for k, v in datos.get("precedencia", {}).items()},
-            reglas=datos.get("reglas", {}),
-            hechos_duros=datos.get("hechos_duros", {}),
+            precedencia={k: int(v) for k, v in datos["precedencia"].items()},
+            reglas=datos["reglas"],
+            hechos_duros=datos["hechos_duros"],
         )
 
     def politica_de(self, regla: str, clave: str, por_defecto: str = ESCALAR) -> str:

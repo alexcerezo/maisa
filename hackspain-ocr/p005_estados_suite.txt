@@ -1,0 +1,346 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running unittests src\main.rs (target\debug\deps\hackspain_ocr-75eedfd44e84dd7d.exe)
+
+running 185 tests
+test erp::tests::contra_el_erp_vivo ... ignored, necesita el bridge del ERP levantado (python alberto_erp.py --rapido, puerto 8009)
+test erp::tests::descargar_contra_el_erp_vivo_y_comparar_con_el_snapshot ... ignored, necesita el bridge del ERP levantado y descarga las 26 paginas (~7 s)
+test domain::tests::un_campo_ausente_no_tiene_ni_crudo_ni_score ... ok
+test domain::tests::un_campo_ilegible_conserva_su_texto_pero_ningun_valor ... ok
+test domain::tests::sin_identificadores_cuenta_lo_ilegible_como_no_utilizable ... ok
+test domain::tests::los_campos_criticos_distingen_ausente_de_ilegible_y_de_poco_fiable ... ok
+test erp::tests::el_formulario_del_login_escapa_lo_que_haga_falta ... ok
+test domain::tests::los_documentos_antiguos_siguen_cargando ... ok
+test domain::tests::un_campo_incoherente_se_rechaza_al_deserializar ... ok
+test domain::tests::un_campo_encontrado_guarda_crudo_y_valor_juntos ... ok
+test erp::tests::el_importe_del_snapshot_admite_la_forma_antigua_en_texto ... ok
+test domain::tests::el_rastro_sobrevive_a_la_ida_y_vuelta_json ... ok
+test erp::tests::la_clave_de_factura_junta_proveedor_pedido_fecha_importe ... ok
+test domain::tests::un_campo_ausente_no_se_escribe_como_null ... ok
+test erp::tests::las_fechas_se_calculan_sin_chrono ... ok
+test erp::tests::el_login_da_token ... ok
+test erp::tests::el_estado_del_erp_se_traduce_a_tipos ... ok
+test erp::tests::los_tres_errores_del_bridge_traen_su_codigo ... ok
+test erp::tests::sin_bloque_meta_la_pagina_es_un_fallo_de_protocolo ... ok
+test erp::tests::los_importes_espanoles_y_los_iso_dan_el_mismo_valor ... ok
+test erp::tests::el_detalle_de_un_asiento_se_lee_sin_meta ... ok
+test erp::tests::la_fecha_va_de_dia_primero_a_iso ... ok
+test erp::tests::la_ultima_pagina_no_respeta_por_pagina ... ok
+test erp::tests::los_ceros_finales_del_importe_sobreviven ... ok
+test erp::tests::el_primer_asiento_se_convierte_con_precision ... ok
+test erp::tests::la_primera_pagina_trae_el_recuento_del_erp ... ok
+test erp::tests::un_estado_desconocido_corta_la_pagina ... ok
+test erp::tests::un_estado_desconocido_no_se_asume_pendiente ... ok
+test erp::tests::el_xml_se_decodifica_como_iso_8859_1 ... ok
+test erp::tests::un_importe_ilegible_corta_la_pagina ... ok
+test erp::tests::un_importe_ilegible_no_es_un_cero ... ok
+test erp::tests::un_punto_suelto_es_separador_de_miles_no_decimal ... ok
+test erp::tests::el_snapshot_lleva_los_identificadores_compuestos ... ok
+test erp::tests::una_fila_con_nif_vacio_se_conserva_y_se_cuenta ... ok
+test erp::tests::el_snapshot_escribe_el_importe_como_numero_y_conserva_los_ceros ... ok
+test ocr::tests::contra_el_servicio_vivo ... ignored, requiere el servicio OCR escuchando en OCR_URL (uvicorn ocr_service.main:app --port 8000)
+test ocr::tests::acepta_los_nombres_en_ingles_y_un_bbox_entero ... ok
+test erp::tests::las_credenciales_de_demo_se_detectan_y_se_avisa_sin_la_clave ... ok
+test ocr::tests::lineas_con_pages_cero_es_una_respuesta_contradictoria ... ok
+test erp::tests::un_xml_roto_no_provoca_un_panico ... ok
+test ocr::tests::falta_el_campo_lines_es_error_de_servicio ... ok
+test ocr::tests::lines_vacio_es_error_aunque_el_servicio_diga_que_hay_paginas ... ok
+test ocr::tests::lines_vacio_es_un_fallo_del_ocr_y_nunca_ok ... ok
+test ocr::tests::parsea_el_cuerpo_de_ejemplo ... ok
+test ocr::tests::un_cuerpo_que_no_es_json_es_error_de_servicio ... ok
+test ocr::tests::url_por_defecto_usa_ocr_url_y_si_no_la_constante ... ok
+test erp::tests::un_snapshot_corrupto_da_un_error_y_no_un_panico ... ok
+test erp::tests::el_debug_no_filtra_la_clave_ni_el_token ... ok
+test erp::tests::un_error_irrecuperable_no_se_reintenta ... ok
+test erp::tests::el_estado_no_necesita_token ... ok
+test erp::tests::un_asiento_inexistente_devuelve_none_y_no_reintenta ... ok
+test erp::tests::los_contadores_de_la_descarga_arrancan_a_cero ... ok
+test erp::tests::un_login_rechazado_no_revela_la_clave ... ok
+test erp::tests::el_login_guarda_el_token ... ok
+test erp::tests::un_erp_429_espera_lo_que_diga_retry_after ... ok
+test erp::tests::un_asiento_existente_se_devuelve ... ok
+test erp::tests::los_duplicados_se_colapsan_conservando_el_id_mas_bajo ... ok
+test erp::tests::el_snapshot_real_del_repo_se_puede_leer ... ok
+test erp::tests::descargar_recorre_las_paginas_en_serie ... ok
+test erp::tests::el_snapshot_escrito_se_puede_volver_a_leer ... ok
+test ocr::tests::extraer_pdf_habla_multipart_con_el_campo_file ... ok
+test parser::tests::el_origen_lleva_la_pagina_del_ocr ... ok
+test parser::tests::el_cif_del_cliente_no_se_copia_del_emisor_aunque_compartan_linea ... ok
+test parser::tests::el_cif_del_cliente_no_se_confunde_con_el_nif_del_emisor ... ok
+test parser::tests::el_cif_del_cliente_no_exige_digito_de_control ... ok
+test parser::tests::el_cif_del_cliente_se_extrae_de_su_propia_linea ... ok
+test parser::tests::cada_campo_lleva_el_score_de_su_linea ... ok
+--- 13 líneas de OCR ---
+  [ 0] 0.518 "## FACTURA"
+  [ 1] 0.506 "Factura: FA-2247 Fecha: 18/01/2026"
+test parser::tests::el_pedido_que_no_aparece_no_es_un_error ...   [ 2] 0.552 "Pedido: PO-2026-0161"
+  [ 3] 0.515 "Catering Hermanos Pico S.L."
+  [ 4] 0.621 "NIF: B96233419"
+  [ 5] 0.570 "IBAN: ES18 0081 5290 0700 0123 4567"
+  [ 6] 0.690 "Cliente: Banco Miralmar S.A. · CIF: A58231074"
+  [ 7] 0.706 "Consumibles ..... 1.144,70"
+  [ 8] 0.713 "Transporte urgente ..... 1.191,42"
+  [ 9] 0.754 "Base: 2.336, 12"
+  [10] 0.736 "IVA (21%): 490,59"
+  [11] 0.746 "TOTAL: 2.826,71"
+  [12] 0.000 "Documento generado por el sistema de facturacion del proveedor."
+--- factura ---
+ok
+test parser::tests::familia_1_puntos_de_relleno ... ok
+test parser::tests::el_total_es_el_ultimo_numero_de_la_linea ... ok
+{
+  "nif_emisor": {
+    "estado": "ENCONTRADO",
+    "valor": "B96233419",
+    "rastro": {
+      "crudo": "NIF: B96233419",
+      "score": 0.6206668615341187,
+      "origen": {
+        "fuente": "OCR",
+        "pagina": 0,
+        "linea": 4
+      }
+    }
+  },
+  "cif_cliente": {
+    "estado": "ENCONTRADO",
+    "valor": "A58231074",
+    "rastro": {
+      "crudo": "Cliente: Banco Miralmar S.A. · CIF: A58231074",
+      "score": 0.6901509165763855,
+      "origen": {
+        "fuente": "OCR",
+        "pagina": 0,
+        "linea": 6
+      }
+    }
+  },
+  "pedido": {
+    "estado": "ENCONTRADO",
+    "valor": "PO-2026-0161",
+    "rastro": {
+      "crudo": "Pedido: PO-2026-0161",
+      "score": 0.5520004034042358,
+      "origen": {
+        "fuente": "OCR",
+        "pagina": 0,
+        "linea": 2
+      }
+    }
+  },
+  "numero_factura": {
+    "estado": "ENCONTRADO",
+    "valor": "FA-2247",
+    "rastro": {
+      "crudo": "Factura: FA-2247 Fecha: 18/01/2026",
+      "score": 0.5058019161224365,
+      "origen": {
+        "fuente": "OCR",
+        "pagina": 0,
+        "linea": 1
+      }
+    }
+  },
+  "fecha": {
+    "estado": "ENCONTRADO",
+    "valor": "2026-01-18",
+    "rastro": {
+      "crudo": "Factura: FA-2247 Fecha: 18/01/2026",
+      "score": 0.5058019161224365,
+      "origen": {
+        "fuente": "OCR",
+        "pagina": 0,
+        "linea": 1
+      }
+    }
+  },
+  "base": {
+    "estado": "ENCONTRADO",
+    "valor": "2336.12",
+    "rastro": {
+      "crudo": "Base: 2.336, 12",
+      "score": 0.7540645599365234,
+      "origen": {
+        "fuente": "OCR",
+        "pagina": 0,
+        "linea": 9
+      }
+    }
+  },
+  "iva": {
+    "estado": "ENCONTRADO",
+    "valor": "490.59",
+    "rastro": {
+      "crudo": "IVA (21%): 490,59",
+      "score": 0.7362048625946045,
+      "origen": {
+        "fuente": "OCR",
+        "pagina": 0,
+        "linea": 10
+      }
+    }
+  },
+  "total": {
+    "estado": "ENCONTRADO",
+    "valor": "2826.71",
+    "rastro": {
+      "crudo": "TOTAL: 2.826,71",
+      "score": 0.7463081479072571,
+      "origen": {
+        "fuente": "OCR",
+        "pagina": 0,
+        "linea": 11
+      }
+    }
+  }
+}
+test parser::tests::extrae_los_ocho_campos_de_una_factura_real ... --- coherencia ---
+okbase        = 2336.12
+
+iva         = 490.59
+base + iva  = 2826.71
+total       = 2826.71
+descuadre   = 0.00
+test parser::tests::familia_3_tabuladores ... ok
+test parser::tests::con_la_misma_prioridad_gana_el_ultimo_total ... ok
+test parser::tests::el_pedido_se_canoniza_a_la_forma_del_erp ... ok
+test parser::tests::los_cif_sinteticos_del_corpus_se_leen_aunque_no_cumplan_el_control ... ok
+test parser::tests::diag_salida_real_de_paddleocr_vl ... ok
+test parser::tests::familia_2_total_a_pagar_con_prefijo_eur_y_decimal_anglosajon ... ok
+test parser::tests::el_ultimo_separador_decide_la_convencion ... ok
+test parser::tests::la_factura_de_prueba_coincide_con_el_json_real_cuando_esta ... ok
+test parser::tests::el_numero_de_factura_admite_varias_plantillas ... ok
+test parser::tests::nunca_toma_un_subtotal_ni_una_base_como_total ... ok
+test parser::tests::familia_4_variantes_de_etiqueta_y_simbolo ... ok
+test parser::tests::los_importes_admiten_las_dos_convenciones ... ok
+test parser::tests::familia_5_espacios_de_ancho_cero ... ok
+test parser::tests::los_datos_se_buscan_aunque_las_lineas_lleguen_desordenadas ... ok
+test parser::tests::sin_lineas_no_hay_nada_y_no_revienta ... ok
+test parser::tests::prefiere_total_a_pagar_sobre_un_total_generico_anterior ... ok
+test parser::tests::un_cif_cliente_impreso_pero_sin_valor_es_ilegible_y_no_ausente ... ok
+test parser::tests::familia_7_con_recargo_no_se_recalcula_el_total_impreso ... ok
+test parser::tests::un_iban_en_la_ventana_del_cliente_no_es_su_cif ... ok
+test parser::tests::sin_bloque_de_cliente_el_cif_no_aparece ... ok
+test parser::tests::la_prosa_del_pie_no_se_cuela_como_total ... ok
+test parser::tests::familia_6_mojibake_de_pagina_de_codigos ... ok
+test parser::tests::un_nif_con_digito_de_control_correcto_es_encontrado_y_se_canoniza ... ok
+test parser::tests::un_espacio_del_ocr_no_convierte_el_importe_en_un_abono ... ok
+test parser::tests::un_guion_que_no_es_signo_no_invalida_el_importe ... ok
+test parser::tests::una_linea_de_basura_no_inventa_ningun_campo ... ok
+test reconciler::tests::dos_centimos_de_ruido_impiden_el_match_por_importe ... ok
+test parser::tests::un_dato_compuesto_de_dos_lineas_usa_el_score_minimo ... ok
+test parser::tests::sin_ninguna_pista_de_nif_el_campo_no_aparece ... ok
+test parser::tests::una_linea_que_solo_menciona_el_total_no_es_la_linea_del_total ... ok
+test parser::tests::una_etiqueta_de_nif_sin_valor_tambien_es_ilegible ... ok
+test parser::tests::un_espacio_del_ocr_dentro_del_importe_no_cambia_la_cifra ... ok
+test parser::tests::un_total_en_negativo_no_se_lee_como_un_cobro ... ok
+test reconciler::tests::e2e_escala_por_descuadre_y_conserva_el_asiento_en_la_traza ... ok
+test reconciler::tests::e2e_escala_cuando_el_excel_contradice_al_erp ... ok
+test reconciler::tests::e2e_no_paga_cuando_el_erp_ya_esta_pagada ... ok
+test parser::tests::un_nif_que_parece_real_pero_falla_el_control_se_lee_mientras_la_comprobacion_este_apagada ... ok
+test reconciler::tests::e2e_paga_cuando_el_erp_esta_pendiente_y_todo_cuadra ... ok
+test reconciler::tests::el_descuadre_pdf_erp_no_se_duplica_como_conflicto ... ok
+test parser::tests::una_etiqueta_doble_no_esconde_el_nif ... ok
+test reconciler::tests::excel_con_importe_distinto_conflicta_sin_duplicar_filas ... ok
+test reconciler::tests::excel_aporta_contexto_aunque_no_haya_asiento ... ok
+test reconciler::tests::indice_erp_vacio_detecta_ausencia_total ... ok
+test reconciler::tests::excel_contradice_el_estado_del_erp ... ok
+test reconciler::tests::match_debil_por_nif_unico_conserva_el_asiento_para_la_regla_de_descuadre ... ok
+test reconciler::tests::match_fuerte_por_pedido ... ok
+test reconciler::tests::match_medio_por_nif_e_importe_dentro_de_tolerancia ... ok
+test parser::tests::sin_nif_de_emisor_el_cif_del_cliente_no_lo_suplanta ... ok
+test reconciler::tests::nif_distinto_entre_pdf_y_erp_conflicta ... ok
+test reconciler::tests::no_inventa_match_cuando_hay_varios_asientos_con_el_mismo_nif ... ok
+test reconciler::tests::normaliza_claves_de_pedido_y_nif ... ok
+test reconciler::tests::pedido_repetido_en_el_erp_es_ambiguedad ... ok
+test reconciler::tests::un_asiento_sin_nif_casa_por_pedido_pero_no_por_nif ... ok
+test reconciler::tests::un_nif_ilegible_no_empareja_por_nif ... ok
+test rules::tests::asiento_pagada_sin_nif_sigue_devolviendo_no_pagar ... ok
+test rules::tests::asiento_sin_nif_no_se_paga_en_automatico ... ok
+test rules::tests::baja_confianza_bloquea_pago_automatico ... ok
+test rules::tests::conflicto_bloquea_pago_automatico ... ok
+test rules::tests::conflicto_no_revierte_un_pago_ya_liquidado ... ok
+test rules::tests::dos_centimos_de_diferencia_ya_son_descuadre_y_escalan ... ok
+test rules::tests::el_importe_exacto_sigue_pagando ... ok
+test rules::tests::erp_pagada_no_pagar ... ok
+test rules::tests::erp_pendiente_conciliado_pagar ... ok
+test rules::tests::erp_pendiente_descuadre_escala ... ok
+test rules::tests::lista_con_guion_sigue_bloqueando ... ok
+test rules::tests::prohibido_pagar_por_nif ... ok
+test rules::tests::sin_cif_cliente_escala_aunque_todo_lo_demas_cuadre ... ok
+test rules::tests::sin_erp_con_excel_escala ... ok
+test rules::tests::sin_identificadores_escala ... ok
+test rules::tests::sin_match_escala ... ok
+test rules::tests::sin_nif_en_pdf_el_veto_lo_detecta_el_erp ... ok
+test rules::tests::sin_nif_en_pdf_y_proveedor_limpio_no_bloquea ... ok
+test rules::tests::un_campo_ausente_no_dispara_la_duda ... ok
+test rules::tests::un_campo_ilegible_bloquea_el_pago_automatico_y_cita_el_crudo ... ok
+test rules::tests::un_centimo_de_diferencia_concilia_y_paga ... ok
+test rules::tests::un_cif_cliente_ilegible_escala_diciendo_que_era_ilegible ... ok
+test rules::tests::un_cif_cliente_presente_no_estorba_a_la_decision ... ok
+test rules::tests::un_nif_ilegible_sin_pedido_escala_diciendo_que_era_ilegible ... ok
+test tests::con_el_nif_ilegible_no_se_paga_aunque_cuadre_todo ... ok
+test tests::el_excel_entra_por_peticion_y_fuerza_escalar ... ok
+test tests::el_file_id_se_rescata_solo_si_esta ... ok
+test tests::el_recuento_cuadra_con_las_lineas_emitidas ... ok
+test tests::el_veto_survive_a_un_pdf_sin_nif ... ok
+test tests::escala_si_el_catalogo_esta_vacio ... ok
+test tests::las_huellas_de_dos_decisiones_distintas_no_se_pisan ... ok
+test tests::paga_cuando_el_erp_esta_pendiente_y_cuadra ... ok
+test rules::tests::lista_con_entrada_invalida_falla_al_cargar ... ok
+test tests::no_paga_si_el_erp_ya_esta_pagada ... ok
+test tests::sin_identificadores_sale_como_escalar_y_no_como_error ... ok
+test rules::tests::parsea_reglas_toml_de_produccion ... ok
+test validators::tests::el_orden_de_los_campos_es_ano_mes_dia ... ok
+test validators::tests::lo_que_no_tiene_alfanumericos_no_llega_a_ser_un_nif ... ok
+test validators::tests::fecha_es_a_iso_es_dia_primero_y_estricta ... ok
+test validators::tests::nif_valido_no_depende_de_la_caja_ni_de_los_separadores ... ok
+test validators::tests::nif_valido_acepta_dni_nie_cif_y_nif_de_persona_fisica ... ok
+test validators::tests::fecha_es_a_iso_devuelve_none_para_texto_suelto ... ok
+test validators::tests::nif_valido_rechaza_letras_donde_van_digitos_y_basura ... ok
+test validators::tests::nif_valido_rechaza_longitudes_incorrectas ... ok
+test validators::tests::nif_valido_rechaza_un_control_que_no_cuadra ... ok
+test tests::el_snapshot_del_erp_tiene_ruta_por_defecto_y_se_puede_cambiar ... ok
+test tests::un_directorio_sin_pdfs_es_un_error_y_no_un_lote_vacio ... ok
+test tests::el_lote_sobrevive_a_lineas_rotas ... ok
+
+--- estados (ENC=ENCONTRADO, AUS=NO_APARECE, ILE=ILEGIBLE) ---
+campo              1   2   3   4   5   6   7   8   9  10  11  12  13  14  15
+nif_emisor       ENC AUS ENC ENC ENC ENC ENC ENC ENC ENC ENC AUS ILE ENC ENC
+cif_cliente      ENC ENC AUS ENC ENC ENC ENC ENC ENC ENC ENC AUS ENC ILE ENC
+pedido           ENC ENC ENC AUS ENC ENC ENC ENC ENC ENC ENC ENC ENC ENC ENC
+numero_factura   ENC ENC ENC ENC AUS ENC AUS ENC ENC ENC ENC ENC ENC ENC ENC
+fecha            ENC ENC ENC ENC AUS AUS ENC ENC ENC ENC ENC ENC ENC ENC ENC
+base             ENC ENC ENC ENC ENC ENC ENC AUS ENC ENC AUS ENC ENC ENC ENC
+iva              ENC ENC ENC ENC ENC ENC ENC ENC AUS ENC AUS ENC ENC ENC ENC
+total            ENC ENC ENC ENC ENC ENC ENC ENC ENC AUS AUS ENC ENC ENC ILE
+leyenda:
+   1. la real (nada quitado)
+   2. sin NIF del emisor
+   3. sin CIF del cliente
+   4. sin pedido
+   5. sin nº de factura ni fecha
+   6. sin fecha (deja el nº)
+   7. sin nº (deja la fecha)
+   8. sin base
+test tests::los_pdfs_se_listan_ordenados_y_con_la_extension_sea_cual_sea_la_caja ...    9. sin IVA
+  10. sin TOTAL
+ok
+  11. sin ningún importe
+  12. sin NIF ni CIF del cliente
+  13. NIF impreso e ilegible
+  14. CIF del cliente impreso e ilegible
+  15. TOTAL en negativo (abono)
+test parser::tests::que_campo_cambia_de_estado_al_quitar_cada_dato_del_ocr ... ok
+test tests::una_factura_que_casa_con_un_asiento_sin_nif_del_erp_escala_por_r10 ... ok
+test tests::un_asiento_sin_nif_se_conserva_sin_nif ... ok
+test tests::el_importe_decimal128_llega_sin_perder_centimos ... ok
+test tests::el_asiento_sin_nif_escala_diciendo_que_falta_el_nif ... ok
+test tests::un_asiento_de_mongo_con_date_y_decimal_llega_al_dominio ... ok
+test tests::el_asiento_de_mongo_paga_por_el_camino_completo ... ok
+test erp::tests::un_ses_401_rehace_login_y_reintenta ... ok
+test erp::tests::un_ora_00600_repite_la_misma_pagina ... ok
+test erp::tests::descargar_sin_guion_agotado_no_miente ... ok
+test erp::tests::agotar_los_intentos_da_un_error_explicito ... ok
+
+test result: ok. 182 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.24s
+

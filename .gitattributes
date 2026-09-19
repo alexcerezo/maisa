@@ -8,3 +8,33 @@
 **/docker/**/*.sh text eol=lf
 **/docker/**/*.js text eol=lf
 *.sh text eol=lf
+
+# El resto del texto del repositorio tambien va en LF, y aqui no es cosmetico:
+#
+# * `outcomes*.jsonl` es la ENTREGA. `motor/tools/valida_entrega.py` la rechaza si
+#   trae CRLF (el verificador parte por "\n" y el `\r` se queda pegado al JSON).
+# * Los hashes que documenta `motor/docs/resiliencia.md` y las puertas de
+#   determinismo de la CI son sha256 de BYTES. Con `core.autocrlf=true` (el valor
+#   por defecto en Windows) el arbol de trabajo materializa CRLF y TODOS esos
+#   hashes dejan de cuadrar aunque el contenido sea identico. Comprobado: en un
+#   checkout de Windows, `reglas.toml` daba `016c604f72036cd7` en vez del
+#   `be2cc0248ffe75c6` documentado, y lo mismo los otros siete ficheros.
+#
+# `eol=lf` tiene prioridad sobre `core.autocrlf`, asi que esto vale en cualquier
+# maquina. Los binarios se declaran aparte para que ningun patron los alcance.
+*.py       text eol=lf
+*.json     text eol=lf
+*.jsonl    text eol=lf
+*.toml     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.rs       text eol=lf
+*.md       text eol=lf
+*.xml      text eol=lf
+*.txt      text eol=lf
+Makefile   text eol=lf
+Dockerfile text eol=lf
+
+*.pdf      binary
+*.xlsx     binary
+*.png      binary

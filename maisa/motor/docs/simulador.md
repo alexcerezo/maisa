@@ -71,7 +71,7 @@ equivocas, el error las lista):
 ```
 simulacion : regla tolerancia_importe=10.0
 lote       : .../corpus/maisa/facturas (500 facturas, lote 1, 4 trabajadores)
-norma      : norma_v3.1 (.../maisa/config/reglas.toml)
+norma      : norma_v3.1 (.../motor/config/reglas.toml)
 cambios aplicados (en memoria, nada escrito en disco):
   - politica.tolerancia = 10.0
 decision   : {'ESCALAR': 43, 'NO_PAGAR': 9, 'PAGAR': 448}  ->  {'ESCALAR': 42, 'NO_PAGAR': 9, 'PAGAR': 449}
