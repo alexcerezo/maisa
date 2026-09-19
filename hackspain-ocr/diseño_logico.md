@@ -353,7 +353,16 @@ db.createCollection("expedientes", {
   decision: {
     resultado: "PAGAR",
     motivo: "asiento AS-00412 PENDIENTE, importes conciliados",
-    reglas_evaluadas: ["R1_sin_identificadores", "R2_erp_pagada", "R3_erp_pendiente_conciliado"],
+    reglas_evaluadas: [
+      "R1_sin_identificadores",
+      "R1_sin_cif_cliente",
+      "R2_prohibido_pagar_proveedor",
+      "R3_erp_pagada",
+      "R4_conflicto_fuentes",
+      "R5_extraccion_dudosa",
+      "R10_erp_sin_nif",
+      "R6_erp_pendiente_conciliado"
+    ],
     coste_estimado_cents: 0,
     timings_ms: { ocr: 1187, parse: 12, erp: 0, excel: 3, decide: 1 },
     huellas: {

@@ -296,11 +296,13 @@ pub async fn extraer_pdf(cliente: &reqwest::Client, ruta: &Path) -> Result<Vec<L
   entera de que el problema era otro. Tiene que ser un `Err`.
 - El servicio **nunca** devuelve 500; cualquier respuesta rara es `Err` aquí.
 
-**Deuda pendiente:** `main.rs::process_ocr` todavía apunta a
-`http://api-nube.tuservidor.com/ocr` y a `http://localhost:5000/ocr`, y devuelve
-un `InvoiceData` (`emisor` / `total` / `raw_text`) que no tiene nada que ver con
-`Factura`. Ese camino es el del servidor HTTP viejo. Cuando `ocr.rs` exista, hay
-que **borrar los dos URLs y el `InvoiceData`**, no dejarlos al lado.
+**Deuda ya saldada** (aquí no queda nada que borrar). El camino viejo —
+`process_ocr`, `send_to_paddle`, las dos URLs inventadas
+(`http://api-nube.tuservidor.com/ocr`, `http://localhost:5000/ocr`) y el
+`InvoiceData` (`emisor` / `total` / `raw_text`) que no tenía nada que ver con
+`Factura`— está **borrado**, no dejado al lado: el cliente de verdad es
+`ocr::extraer_pdf` / `ocr::extraer_bytes`. Si alguien busca `process_ocr` en
+`main.rs` solo encontrará los dos comentarios que explican por qué ya no está.
 
 ### 3.4 `ocr_service/main.py` — el servicio
 
@@ -345,6 +347,16 @@ Contrato (`spec_y_plan.md` §3.6), `http://127.0.0.1:8009`:
   `nif`, `importe` y `estado` ya resueltos.
 - `Asiento.estado` es `Pendiente` | `Pagada`: el ERP devuelve texto, hay que
   mapearlo y **no** dejarlo como `String`.
+- **Una fila sin NIF no se descarta.** `Asiento.nif` es `Option<Nif>`: los 20
+  asientos del snapshot con el NIF en blanco se conservan con `nif: None` (más su
+  aviso `nif vacio en 20/516`), porque el asiento *existe* — tiene pedido,
+  importe y estado, y concilia por pedido. Tirarlos aquí convertía una factura
+  legítima en un `R9_sin_match` que mentía sobre la evidencia; quien decide no
+  pagarla es `R10_erp_sin_nif`, con motivo explícito. Consecuencia: la descarga
+  contra el ERP vivo y el snapshot de Python coinciden en **516/516** (antes 496
+  vs 516). Y `ClienteErp::filas_leidas` cuenta los nodos `<asiento>` del XML, no
+  `asientos.len() + avisos.len()`: con las filas sin NIF conservadas esa suma
+  contaba 20 filas dos veces y declaraba el snapshot `PARCIAL` sin motivo.
 
 > **Esto es lo que desbloquea el resto.** Cuando tengas el ERP levantado, dime
 > cómo se abre y lo probamos contra datos reales.
@@ -537,7 +549,8 @@ recorre el motor entero sin necesitar ni un PDF, ni el ERP, ni el Excel.
   8 campos.
   ⚠️ **Ojo con el octavo**: el censo anterior **no cuenta el bloque del cliente**
   (`Cliente:` / `CIF:` del destinatario), que es justo el que alimenta
-  `cif_cliente` y el que R1 bis exige. Que `NIF:` aparezca en 277/500 no dice nada
+  `cif_cliente` y el que R1 bis exige —`R1_sin_cif_cliente` es el identificador
+  que emite el motor, «R1 bis» es solo el apodo—. Que `NIF:` aparezca en 277/500 no dice nada
   del CIF del cliente: son etiquetas distintas. Si en los 500 PDF reales no hay
   bloque de cliente etiquetado, el lote entero escala por R1 bis — es la pregunta
   abierta número uno de esta funcionalidad.

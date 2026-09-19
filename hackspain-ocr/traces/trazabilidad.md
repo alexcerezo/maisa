@@ -193,11 +193,16 @@ Este fichero cierra el ciclo de auditoría. Permite justificar ante auditores el
   "timestamp": "2026-09-20T08:15:23.150Z",
   "result": "PAGAR",
   "motivo": "asiento AS-00412 PENDIENTE, importes conciliados",
-  "regla_aplicada": "R3_ERP_PENDIENTE_CONCILIADO",
+  "regla_aplicada": "R6_erp_pendiente_conciliado",
   "reglas_evaluadas": [
-    "R1_IDENTIFICADORES_MINIMOS: PASS (NIF='B87654321', Pedido='PED-2009-8812')",
-    "R2_ERP_PAGADA: NO_MATCH (Estado ERP='PENDIENTE')",
-    "R3_ERP_PENDIENTE_CONCILIADO: MATCH (Diferencia=0.00 € <= Tolerancia=0.01 €)"
+    "R1_sin_identificadores: PASS (NIF='B87654321', Pedido='PED-2009-8812')",
+    "R1_sin_cif_cliente: PASS (CIF='B12345678')",
+    "R2_prohibido_pagar_proveedor: NO_MATCH (proveedor fuera de la lista)",
+    "R3_erp_pagada: NO_MATCH (Estado ERP='PENDIENTE')",
+    "R4_conflicto_fuentes: NO_MATCH (sin contradicción PDF/ERP/Excel)",
+    "R5_extraccion_dudosa: PASS (todos los campos con confianza)",
+    "R10_erp_sin_nif: NO_MATCH (el asiento tiene NIF)",
+    "R6_erp_pendiente_conciliado: MATCH (Diferencia=0.00 € <= Tolerancia=0.01 €)"
   ],
   "timings_ms": {
     "ocr": 342,
@@ -211,6 +216,14 @@ Este fichero cierra el ciclo de auditoría. Permite justificar ante auditores el
 }
 
 ```
+
+> Los **identificadores** de este ejemplo son los reales del motor, en orden de
+> evaluación (`rules.rs`). El **formato** —el `: PASS`/`: NO_MATCH`/`: MATCH` con
+> el detalle entre paréntesis, y el campo `regla_aplicada`— es el del visor de
+> trazas, que lo compone para el operador. El modelo persistido (`domain::Decision`)
+> guarda `resultado`, `motivo`, `reglas_evaluadas` como lista de **IDs pelados en
+> orden de código** y las `huellas`; el detalle de cada veredicto se reconstruye a
+> partir del `motivo`, no se almacena por regla.
 
 ---
 
