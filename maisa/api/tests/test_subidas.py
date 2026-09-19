@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from app.errors import ApiError
 from app.main import create_app
 
-from .conftest import PDF_BYTES, FakeAlmacen, FakeOcr, construir_settings
+from .conftest import PDF_BYTES, construir_settings
 
 NOMBRE = "2026-03-01_P004.pdf"
 OTRO_NOMBRE = "2026-03-02_P005.pdf"
