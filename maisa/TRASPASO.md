@@ -13,6 +13,10 @@
 > siguientes) — los tres fallos distintos del ERP, el enum cerrado de eventos de
 > observabilidad, la trampa de `Decimal` en BSON y el XML en ISO-8859-1 — porque
 > están implementados en el motor vivo.
+>
+> **`ocr_service/main.py` ya no existe.** El stub se ha sustituido por el
+> servicio real en `ocr_service/app/` (`server.py` en el puerto 8866,
+> `cloud.py` para PaddleOCR-VL); §3.4 y §4 se leen como historia.
 
 Este documento existe para una cosa: que los módulos que quedan se puedan hacer
 **en paralelo** sin tener que esperarse unos a otros, y que nadie tenga que

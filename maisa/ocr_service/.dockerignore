@@ -1,0 +1,29 @@
+# Contexto de build
+.git
+.gitignore
+.github
+.vscode
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+
+# Modelos y salidas locales (los modelos van dentro de la imagen)
+*.onnx
+.rapidocr/
+
+# Datos de prueba: no deben inflar la imagen
+test_files/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.pdf
+
+# Docs y utilidades del host
+README.md
+test_ocr.sh
+docker-compose.yml
+.env

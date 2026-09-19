@@ -1,7 +1,24 @@
-fastapi
-uvicorn[standard]
-python-multipart
-rapidocr-onnxruntime
-pypdfium2
-pillow
-numpy
+# Motor de inferencia (wheels manylinux aarch64 en PyPI)
+# Benchmark oficial: onnxruntime es 1.5-2.5x mas rapido que Paddle Inference en CPU.
+onnxruntime>=1.20,<2
+
+# OCR: mismos pesos que PaddleOCR exportados a ONNX. Incluye PP-OCRv4/v5/v6.
+rapidocr>=3.9,<4
+
+# Servidor HTTP
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+python-multipart>=0.0.12
+
+# Imagenes (rapidocr arrastra opencv-python; necesitamos libgl1 en el sistema)
+pillow>=10.4
+
+# PDF multipagina
+pypdfium2>=4.30
+
+# Cliente HTTP hacia la API en la nube (PaddleOCR-VL) y sondeo de jobs.
+requests>=2.31,<3
+
+# Solo para scripts/quantize.py (cuantizacion INT8 de los .onnx).
+# No lo necesita el servicio en ejecucion, pero es barato (~15 MB).
+onnx>=1.17

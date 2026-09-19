@@ -3,6 +3,12 @@
 > Documento de trabajo del equipo. **No** se entrega.
 > Objetivo: llegar al sábado 18:00 con un sistema completo, trazable,
 > resiliente y con demo lista. El domingo a las 10:30 es el deadline real.
+>
+> **Aviso (plan vs. realidad).** Esto es el plan original, escrito antes de
+> implementar, y describe un motor **Rust** (`src/`) que no llegó a emitir la
+> entrega. El sistema que se ejecuta y se mide es el motor **Python** de
+> `motor/`; el OCR no vive en `ocr_service/main.py` sino en `ocr_service/app/`
+> (`app/server.py`, `app/cloud.py`). Ver `docs/ENTREGA.md`.
 
 ---
 

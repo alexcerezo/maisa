@@ -1,0 +1,40 @@
+services:
+  ocr:
+    build: .
+    image: ocr-rapidocr-arm64:latest
+    container_name: ocr-api
+    restart: unless-stopped
+    ports:
+      # Puerto 8866 en el host (el historico de Paddle Serving, evita el 8080)
+      - "8866:8866"
+    volumes:
+      # Cache de modelos ONNX. RapidOCR los guarda dentro del paquete, no en $HOME.
+      # La primera vez Docker copia aqui el contenido pre-descargado en el build,
+      # asi que la imagen arranca sin red y sin espera.
+      - ocr_models:/usr/local/lib/python3.12/site-packages/rapidocr/models
+      # Archivos de prueba accesibles desde el host
+      - ./test_files:/home/ocr/test_files:ro
+      # Temporales de subida (OCR_TMP_DIR). En un volumen dedicado para no
+      # escribir en la capa de escritura del contenedor, que penaliza los
+      # ficheros grandes. Si cambias OCR_TMP_DIR en .env, cambia esta ruta.
+      - ocr_tmp:/tmp/ocr-work
+    env_file:
+      - .env
+    environment:
+      # 2 nucleos fisicos: 1 hilo por nucleo evita sobre-suscripcion
+      - OMP_NUM_THREADS=2
+      - OPENBLAS_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+    # Margen: la inferencia con rec=server ronda 1-1.5 GB en picos
+    mem_limit: 4g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8866/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+volumes:
+  ocr_models:
+  ocr_tmp:
