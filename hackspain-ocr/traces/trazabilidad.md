@@ -122,6 +122,7 @@ Representa los datos canónicos estructurados con sus puntuaciones de confianza 
   "file_id": "factura_0142.pdf",
   "parsed_at": "2026-09-20T08:15:23.102Z",
   "nif_emisor": "B87654321",
+  "cif_cliente": "A58231074",
   "pedido": "PED-2009-8812",
   "numero_factura": "F2026/089",
   "fecha": "2026-02-14",
@@ -130,6 +131,7 @@ Representa los datos canónicos estructurados con sus puntuaciones de confianza 
   "total": "1250.00",
   "scores": {
     "nif_emisor": 0.984,
+    "cif_cliente": 0.978,
     "pedido": 0.961,
     "total": 0.957
   },

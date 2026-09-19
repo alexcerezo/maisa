@@ -434,6 +434,20 @@ pub struct Factura {
     /// el OCR no verlo); `Ilegible` no lo es y fuerza una revisión humana.
     #[serde(default)]
     pub nif_emisor: Identificador<Nif>,
+    /// CIF/NIF del **cliente** (destinatario), tal y como lo imprime la factura.
+    ///
+    /// Un documento fiscal lleva los dos identificadores, el del emisor y el del
+    /// destinatario, y hasta ahora el del cliente se descartaba. Es el mismo tipo
+    /// de dato que `nif_emisor`, pero **no se le exige el dígito de control**: en
+    /// estas facturas el cliente es el propio banco y su CIF no lo pasa, así que
+    /// aplicar `validators::nif_valido` degradaría a `Ilegible` un dato leído
+    /// perfectamente y mandaría a revisión facturas correctas.
+    ///
+    /// Tampoco entra en la conciliación —quien cobra es `nif_emisor`—: es
+    /// trazabilidad fiscal. Lo que sí hace es bloquear el pago automático cuando
+    /// no aparece (R1 bis), porque sin él la factura no está completa.
+    #[serde(default)]
+    pub cif_cliente: Identificador<Nif>,
     #[serde(default)]
     pub pedido: Identificador<String>,
     #[serde(default)]
@@ -457,6 +471,23 @@ impl Factura {
     /// NIF, no sirve para identificar al proveedor.
     pub fn sin_identificadores(&self) -> bool {
         !self.nif_emisor.aparece() && !self.pedido.aparece()
+    }
+
+    /// ¿Falta el CIF del cliente? (es lo que mira R1 bis).
+    ///
+    /// Cuentan los dos estados en los que el campo no sirve: `NoAparece` (la
+    /// plantilla no lo imprime) e `Ilegible` (está impreso pero no se pudo leer).
+    /// En ambos la factura está incompleta como documento fiscal, así que
+    /// ninguno puede pagarse solo. El tri-estado no se pierde por eso: quién
+    /// revisa ve en el campo **cuál** de los dos es, y R1 bis lo dice en el
+    /// motivo, que es justo para lo que existe.
+    ///
+    /// El NIF del emisor **no** tiene un chequeo equivalente a propósito: R2 lo
+    /// respalda con el NIF del asiento del ERP y `sin_identificadores()` cubre el
+    /// caso en que no hay nada con lo que conciliar. Exigirlo aquí convertiría en
+    /// ESCALAR toda factura sin NIF impreso, que es un caso real y ya decidido.
+    pub fn sin_cif_cliente(&self) -> bool {
+        !self.cif_cliente.aparece()
     }
 
     /// Los campos críticos como vistas uniformes.

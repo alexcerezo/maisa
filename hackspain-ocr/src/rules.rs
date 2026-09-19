@@ -130,6 +130,25 @@ pub fn decidir(
         return Decision::new(Resultado::Escalar, motivo, evaluadas, huellas);
     }
 
+    // R1 bis — ¿está la factura completa como documento fiscal? Un documento
+    // lleva dos identificadores, el del emisor y el del destinatario. El del
+    // cliente no decide *a quién* se paga —eso es `nif_emisor`, y R2 lo respalda
+    // con el asiento—, pero sin él la factura no llega completa y no se paga en
+    // automático.
+    //
+    // Valen igual los dos modos de faltar: que no se imprima y que se imprima sin
+    // poder leerse. Se distinguen en el motivo, como en R1, porque quien revisa
+    // necesita saber si el problema es de la plantilla o de la lectura.
+    evaluadas.push("R1_sin_cif_cliente".into());
+    if factura.sin_cif_cliente() {
+        let motivo = if factura.cif_cliente.es_ilegible() {
+            "CIF del cliente ilegible: la factura no está completa"
+        } else {
+            "falta el CIF del cliente: la factura no está completa"
+        };
+        return Decision::new(Resultado::Escalar, motivo.to_string(), evaluadas, huellas);
+    }
+
     // R2 — proveedor en lista de pago prohibido (regla inyectable del sábado).
     //
     // El NIF se toma del PDF y, si el PDF no lo trajo, del asiento del ERP con
@@ -340,6 +359,10 @@ mod tests {
     fn factura_base() -> Factura {
         Factura {
             nif_emisor: leido(nif("B12345678"), "NIF: B-12345678"),
+            // El CIF del cliente va **presente** en la base: es el estado de una
+            // factura completa, y sin él todas las pruebas de decisión caerían
+            // por R1 bis antes de llegar a la regla que quieren probar.
+            cif_cliente: leido(nif("A58231074"), "CIF: A58231074"),
             pedido: leido("PED-2024-0912".to_string(), "Pedido: PED-2024-0912"),
             numero_factura: leido("F-2024-5518".to_string(), "Factura nº F-2024-5518"),
             fecha: leido("2024-09-02".to_string(), "Fecha: 02/09/2024"),
@@ -384,6 +407,52 @@ mod tests {
         );
         assert_eq!(dec.resultado, Resultado::Escalar);
         assert!(dec.motivo.contains("sin identificadores"));
+    }
+
+    /// Una factura a la que le falta el CIF del cliente no está completa como
+    /// documento fiscal, aunque todo lo demás cuadre: no se paga sola. La rama se
+    /// decide antes de mirar el ERP, así que el asiento pendiente y el importe
+    /// exacto no cambian nada.
+    #[test]
+    fn sin_cif_cliente_escala_aunque_todo_lo_demas_cuadre() {
+        let mut f = factura_base();
+        f.cif_cliente = Identificador::no_aparece();
+        let ev = evidencia(Some(asiento(EstadoAsiento::Pendiente, "1234.50")), &[], &[]);
+        let dec = decidir(&f, &ev, &ReglasConfig::default(), huellas());
+
+        assert_eq!(dec.resultado, Resultado::Escalar);
+        assert!(dec.motivo.contains("CIF del cliente"), "motivo: {}", dec.motivo);
+        assert!(
+            dec.reglas_evaluadas.contains(&"R1_sin_cif_cliente".to_string()),
+            "y la traza dice de qué rama sale: {:?}",
+            dec.reglas_evaluadas
+        );
+    }
+
+    /// Escribirlo y no poder leerlo frena igual que no imprimirlo, pero el motivo
+    /// lo dice de otra forma: quien revisa necesita saber si el problema está en
+    /// la plantilla o en el OCR.
+    #[test]
+    fn un_cif_cliente_ilegible_escala_diciendo_que_era_ilegible() {
+        let mut f = factura_base();
+        f.cif_cliente = Identificador::ilegible("CIF: /", 0.35, None);
+        let ev = evidencia(Some(asiento(EstadoAsiento::Pendiente, "1234.50")), &[], &[]);
+        let dec = decidir(&f, &ev, &ReglasConfig::default(), huellas());
+
+        assert_eq!(dec.resultado, Resultado::Escalar);
+        assert!(dec.motivo.contains("ilegible"), "motivo: {}", dec.motivo);
+        assert!(dec.reglas_evaluadas.contains(&"R1_sin_cif_cliente".to_string()));
+    }
+
+    /// El CIF no decide *a quién* se paga: con el campo presente, la decisión es
+    /// la de siempre y el CIF no aparece por ninguna parte del motivo.
+    #[test]
+    fn un_cif_cliente_presente_no_estorba_a_la_decision() {
+        let ev = evidencia(Some(asiento(EstadoAsiento::Pendiente, "1234.50")), &[], &[]);
+        let dec = decidir(&factura_base(), &ev, &ReglasConfig::default(), huellas());
+
+        assert_eq!(dec.resultado, Resultado::Pagar);
+        assert!(!dec.motivo.contains("CIF"), "motivo: {}", dec.motivo);
     }
 
     /// Un NIF que se leyó pero no se pudo canonizar no identifica a nadie, y

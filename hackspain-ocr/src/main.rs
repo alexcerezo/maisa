@@ -42,7 +42,7 @@ use rules::{decidir, ReglasConfig};
 
 // Aquí vivía `InvoiceData` (`emisor` / `total` / `raw_text`), el modelo del
 // scaffold que devolvía el OCR en crudo. Se ha eliminado (TRASPASO.md §3.3): la
-// forma real de una factura extraída es `domain::Factura` —siete campos
+// forma real de una factura extraída es `domain::Factura` —ocho campos
 // canónicos, cada uno con su estado y su rastro— y mantener los dos modelos
 // obligaba a traducir de uno a otro perdiendo el `crudo` por el camino.
 
@@ -1007,9 +1007,10 @@ async fn handle_upload(
     let factura = parser::extraer(&lineas);
 
     tracing::info!(
-        "factura `{nombre}`: {} línea(s) de OCR — nif_emisor {:?}, pedido {:?}, total {:?}",
+        "factura `{nombre}`: {} línea(s) de OCR — nif_emisor {:?}, cif_cliente {:?}, pedido {:?}, total {:?}",
         lineas.len(),
         factura.nif_emisor.estado(),
+        factura.cif_cliente.estado(),
         factura.pedido.estado(),
         factura.total.estado()
     );
@@ -1072,6 +1073,17 @@ async fn handle_decidir(
             "factura sin identificadores utilizables (nif_emisor: {:?}, pedido: {:?}): la decide R1, no un 400",
             factura.nif_emisor.estado(),
             factura.pedido.estado()
+        );
+    }
+
+    // Lo mismo con el CIF del cliente: que no aparezca es una decisión (R1 bis →
+    // ESCALAR), no un documento inválido. Se avisa aparte porque el motivo es
+    // otro —aquí sí hay con qué conciliar, lo que falta es que la factura esté
+    // completa— y confundir los dos casos en el log escondería cuál se revisa.
+    if factura.sin_cif_cliente() {
+        tracing::warn!(
+            "factura sin CIF del cliente (cif_cliente: {:?}): la escala R1 por incompleta, no un 400",
+            factura.cif_cliente.estado()
         );
     }
 
@@ -1155,6 +1167,9 @@ mod tests {
                 Nif::nuevo("b-12345678").expect("NIF válido"),
                 "NIF: b-12345678",
             ),
+            // El CIF del cliente, presente: una factura sin él la escala R1 bis
+            // antes de llegar a ninguna de las reglas que se prueban aquí.
+            cif_cliente: leido(Nif::nuevo("a58231074").expect("CIF válido"), "CIF: A58231074"),
             pedido: leido("PED-00123".to_string(), "Pedido: PED-00123"),
             numero_factura: leido("F-2024-001".to_string(), "Factura F-2024-001"),
             fecha: leido("2024-09-02".to_string(), "Fecha: 02/09/2024"),

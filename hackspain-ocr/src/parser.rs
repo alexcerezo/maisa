@@ -6,7 +6,7 @@
 // ## Lo que este módulo decide y lo que no
 //
 // **No decide nada.** No compara contra el ERP, no aplica reglas y no descarta
-// facturas: para cada uno de los siete campos de `Factura` dice una de tres
+// facturas: para cada uno de los ocho campos de `Factura` dice una de tres
 // cosas (`encontrado` / `ilegible` / `no_aparece`) y en las tres conserva el
 // texto del que salió. Quien juzga es `rules.rs` (R1..R9) y quien compara
 // importes es `reconciler.rs`.
@@ -31,12 +31,20 @@
 // Se paga **lo impreso**. Un recargo financiero puede dejar `TOTAL ≠ base+IVA`
 // y aquí no se recalcula nada: se toma el último número de la línea de total.
 //
-// ## NIF
+// ## Identificadores fiscales
 //
-// El NIF del **emisor**, nunca el del cliente (`Cliente:` / `Destinatario:` /
-// `Facturar a:` / `Bill to:` se ignoran: en estas facturas todos llevan el CIF
-// del banco). Un NIF que parece un NIF pero no pasa el dígito de control es
-// `ilegible`, no `encontrado` (regla R5); ver `validators::nif_valido`.
+// Se extraen los **dos** identificadores del documento, y cada uno por su
+// camino:
+//
+// * `nif_emisor` es el del emisor, y es el que decide a quién se paga. El del
+//   cliente **no** sirve para eso, así que las líneas del cliente se saltan al
+//   buscarlo. Un NIF que parece un NIF pero no pasa el dígito de control es
+//   `ilegible`, no `encontrado` (regla R5); ver `validators::nif_valido`.
+//
+// * `cif_cliente` es el del **cliente**, y se busca **solo** en sus líneas. Ahí
+//   no se exige dígito de control —el CIF del banco no lo pasa— y por eso un
+//   `encontrado` aquí **no** pesa en la decisión: es trazabilidad fiscal. Que no
+//   aparezca sí bloquea el pago automático (regla R1 bis).
 
 use std::str::FromStr;
 use std::sync::OnceLock;
@@ -225,8 +233,15 @@ fn re_decimal_ingles() -> &'static Regex {
 /// mucho, toda ella `no_aparece`). No hace E/S, no conoce reglas y no puede
 /// tumbar el lote por una factura rara.
 pub fn extraer(lineas: &[LineaOcr]) -> Factura {
+    let nif_emisor = extraer_nif(lineas);
+    // El CIF del cliente se busca pasándole ya el NIF del emisor: es lo que
+    // permite descartarlo cuando el OCR pega los dos en la misma línea (ver
+    // `candidato_fiscal_cliente`). Se calcula **antes** de construir la factura
+    // porque `nif_emisor` se mueve dentro de ella.
+    let cif_cliente = extraer_cif_cliente(lineas, nif_emisor.valor());
     Factura {
-        nif_emisor: extraer_nif(lineas),
+        nif_emisor,
+        cif_cliente,
         pedido: extraer_pedido(lineas),
         numero_factura: extraer_numero_factura(lineas),
         fecha: extraer_fecha(lineas),
@@ -259,8 +274,7 @@ fn combinar(primera: &str, segunda: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Líneas que hablan del **cliente**, no del emisor. Todas las variantes que
-/// usan las facturas del lote llevan aquí su CIF (siempre el mismo banco), y
-/// extraerlo sería peor que no extraer nada: se pagaría contra quien no es.
+/// usan las facturas del lote llevan aquí su CIF (siempre el mismo banco).
 fn es_linea_de_cliente(normalizada: &str) -> bool {
     const CLAVES: [&str; 5] = ["CLIENTE", "DESTINATARIO", "FACTURAR A", "BILL TO", "CUSTOMER"];
     let up = normalizada.to_uppercase();
@@ -352,6 +366,104 @@ fn canonizar_nif(
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// CIF del cliente
+// ---------------------------------------------------------------------------
+
+/// Cuántas líneas después de `Cliente:` / `Destinatario:` se sigue buscando su
+/// identificador.
+///
+/// El CIF del destinatario no viaja pegado a la etiqueta (que suele ser un
+/// bloque de dirección de tres o cuatro líneas); una ventana **finita** es lo
+/// que evita que, en una factura sin bloque de cliente, se acabe tomando el NIF
+/// de cualquier línea posterior.
+const VENTANA_CLIENTE: usize = 3;
+
+/// Canoniza el CIF del cliente. **Sin** `nif_valido`, a diferencia de
+/// [`canonizar_nif`]: ver el comentario del campo en `domain.rs`.
+fn canonizar_cliente(
+    token: &str,
+    crudo: &str,
+    score: f64,
+    origen: Option<Origen>,
+) -> Identificador<Nif> {
+    match Nif::nuevo(token) {
+        None => Identificador::ilegible(crudo, score, origen),
+        Some(nif) => Identificador::encontrado(nif, crudo, score, origen),
+    }
+}
+
+/// El primer identificador fiscal de la línea que **no** sea ya el del emisor.
+///
+/// Esta es la defensa contra el caso más probable: facturas que imprimen
+/// `NIF: B46102331 CIF: A58231074` en la misma línea, o un bloque de cabecera
+/// donde el emisor aparece debajo de la etiqueta del cliente. Sin este filtro el
+/// emisor se guardaría como CIF del cliente y la trazabilidad diría justo lo
+/// contrario de la verdad, que es peor que no tener el dato.
+fn candidato_fiscal_cliente(texto: &str, emisor: Option<&Nif>) -> Option<String> {
+    let es_del_emisor = |token: &str| Some(token) == emisor.map(Nif::as_str);
+
+    // Con etiqueta fiscal: `CIF: A58231074`, `NIF / CIF: B46102331`.
+    for etiqueta in re_nif_etiqueta().find_iter(texto) {
+        if let Some(token) = primer_token_fiscal(&texto[etiqueta.end()..]) {
+            if !es_del_emisor(&token) {
+                return Some(token);
+            }
+        }
+    }
+
+    // Sin etiqueta: solo una forma fiscal clara (`A58231074`), para plantillas
+    // que imprimen el CIF del destinatario suelto tras su razón social.
+    re_forma_fiscal()
+        .find_iter(texto)
+        .map(|forma| forma.as_str().to_string())
+        .find(|forma| !es_del_emisor(forma))
+}
+
+/// CIF/NIF del **cliente**, buscado solo en sus líneas.
+///
+/// Se abre ventana con `Cliente:` / `Destinatario:` / `Facturar a:` / `Bill to:`
+/// y se rastrea esa línea y las `VENTANA_CLIENTE` siguientes. Fuera de la
+/// ventana no se mira: el identificador del destinatario está *en su bloque*, y
+/// buscarlo por todo el documento solo sirve para encontrar el del emisor.
+fn extraer_cif_cliente(lineas: &[LineaOcr], emisor: Option<&Nif>) -> Identificador<Nif> {
+    let mut ventana = 0usize;
+    for (indice, linea) in lineas.iter().enumerate() {
+        let normalizada = normalizar_linea(&linea.texto);
+        if es_linea_de_cliente(&normalizada) {
+            ventana = VENTANA_CLIENTE;
+        } else if ventana == 0 {
+            continue;
+        } else {
+            ventana -= 1;
+        }
+        // El IBAN lleva una subcadena con forma de NIF; no es el CIF.
+        if es_linea_de_iban(&normalizada) {
+            continue;
+        }
+        if let Some(token) = candidato_fiscal_cliente(&normalizada, emisor) {
+            return canonizar_cliente(
+                &token,
+                &linea.texto,
+                linea.score,
+                Some(origen_de(indice, linea)),
+            );
+        }
+        // Había etiqueta fiscal y ningún identificador legible detrás: el CIF se
+        // imprimió y no se pudo leer. Decir `NoAparece` aquí borraría la
+        // diferencia entre "esta plantilla no lo imprime" y "el OCR no pudo con
+        // él", que es exactamente lo que el tri-estado existe para no confundir.
+        if re_nif_etiqueta().is_match(&normalizada) {
+            return Identificador::ilegible(
+                &linea.texto,
+                linea.score,
+                Some(origen_de(indice, linea)),
+            );
+        }
+    }
+    Identificador::no_aparece()
 }
 
 // ---------------------------------------------------------------------------
@@ -887,10 +999,108 @@ mod tests {
         assert_eq!(extraer(&lineas).nif_emisor.estado(), EstadoCampo::NoAparece);
     }
 
+    // -- CIF del cliente -----------------------------------------------------
+
+    #[test]
+    fn el_cif_del_cliente_se_extrae_de_su_propia_linea() {
+        let lineas = vec![
+            linea(0, "Suministros Levante S.L.", 0.98),
+            linea(0, "NIF: B46102331", 0.99),
+            linea(0, "Cliente: Banco Miralmar S.A. · CIF: A58231074", 0.99),
+        ];
+        let factura = extraer(&lineas);
+
+        assert!(factura.cif_cliente.aparece());
+        assert_eq!(factura.cif_cliente.valor().map(|n| n.as_str()), Some("A58231074"));
+        // El crudo es la línea entera, y el origen apunta a ella.
+        assert_eq!(factura.cif_cliente.crudo(), Some("Cliente: Banco Miralmar S.A. · CIF: A58231074"));
+        assert_eq!(factura.cif_cliente.origen(), Some(&Origen::Ocr { pagina: 0, linea: 2 }));
+        // Y no contamina al emisor: cada uno sale de su línea.
+        assert_eq!(factura.nif_emisor.valor().map(|n| n.as_str()), Some("B46102331"));
+    }
+
+    /// El CIF del cliente es **trazabilidad fiscal**, no la llave del pago, así
+    /// que no se le exige dígito de control: el mismo token que como emisor
+    /// sería `Ilegible` aquí es `Encontrado`. Cambiar esto degradaría a revisión
+    /// facturas perfectamente legibles, porque el CIF del banco no lo pasa.
+    #[test]
+    fn el_cif_del_cliente_no_exige_digito_de_control() {
+        let token = "B1234567B";
+
+        // El mismo token en la línea del emisor sí se degrada (regla R5).
+        assert_eq!(
+            extraer(&[linea(0, &format!("NIF: {token}"), 0.9)])
+                .nif_emisor
+                .estado(),
+            EstadoCampo::Ilegible
+        );
+
+        let factura = extraer(&[linea(0, &format!("Cliente: Banco Miralmar · CIF: {token}"), 0.9)]);
+        assert_eq!(factura.cif_cliente.estado(), EstadoCampo::Encontrado);
+        assert_eq!(factura.cif_cliente.valor().map(|n| n.as_str()), Some(token));
+    }
+
+    /// Una etiqueta de CIF sin valor legible detrás no es "la plantilla no lo
+    /// imprime": el CIF está impreso y no se pudo leer. La diferencia la ve el
+    /// revisor en el estado y la ve R1 bis en el motivo.
+    #[test]
+    fn un_cif_cliente_impreso_pero_sin_valor_es_ilegible_y_no_ausente() {
+        let lineas = vec![
+            linea(0, "Cliente: Banco Miralmar S.A.", 0.97),
+            linea(0, "CIF: /", 0.35),
+        ];
+        let factura = extraer(&lineas);
+
+        assert_eq!(factura.cif_cliente.estado(), EstadoCampo::Ilegible);
+        assert!(factura.cif_cliente.crudo().is_some());
+        assert!(!factura.cif_cliente.aparece());
+    }
+
+    #[test]
+    fn sin_bloque_de_cliente_el_cif_no_aparece() {
+        let lineas = vec![
+            linea(0, "Suministros Levante S.L.", 0.98),
+            linea(0, "NIF: B46102331", 0.99),
+            linea(0, "TOTAL: 100,00", 0.99),
+        ];
+        let factura = extraer(&lineas);
+
+        assert_eq!(factura.cif_cliente.estado(), EstadoCampo::NoAparece);
+        assert!(factura.cif_cliente.crudo().is_none());
+    }
+
+    /// Cuando el OCR pega los dos identificadores en la misma línea, el del
+    /// emisor ya está cogido: guardarlo otra vez como CIF del cliente dejaría la
+    /// trazabilidad diciendo justo lo contrario de la verdad.
+    #[test]
+    fn el_cif_del_cliente_no_se_copia_del_emisor_aunque_compartan_linea() {
+        let lineas = vec![
+            linea(0, "NIF: B46102331", 0.99),
+            linea(0, "Cliente: Banco Miralmar S.A. · NIF: B46102331 · CIF: A58231074", 0.96),
+        ];
+        let factura = extraer(&lineas);
+
+        assert_eq!(factura.nif_emisor.valor().map(|n| n.as_str()), Some("B46102331"));
+        assert_eq!(factura.cif_cliente.valor().map(|n| n.as_str()), Some("A58231074"));
+    }
+
+    /// El IBAN lleva dentro una subcadena con forma de NIF: ni es el CIF del
+    /// cliente ni debe hacer que la búsqueda se dé por resuelta.
+    #[test]
+    fn un_iban_en_la_ventana_del_cliente_no_es_su_cif() {
+        let lineas = vec![
+            linea(0, "Cliente: Banco Miralmar S.A.", 0.98),
+            linea(0, "IBAN: ES21 0049 1500 0512 3456 7890", 0.98),
+        ];
+        let factura = extraer(&lineas);
+
+        assert_eq!(factura.cif_cliente.estado(), EstadoCampo::NoAparece);
+    }
+
     // -- resto de campos ----------------------------------------------------
 
     #[test]
-    fn extrae_los_siete_campos_de_una_factura_real() {
+    fn extrae_los_ocho_campos_de_una_factura_real() {
         let lineas = vec![
             linea(0, "FACTURA", 0.99),
             linea(0, "Factura: 2026/11604    Fecha: 08/01/2026", 0.96),
@@ -907,6 +1117,7 @@ mod tests {
         let factura = extraer(&lineas);
 
         assert_eq!(factura.nif_emisor.valor().map(|n| n.as_str()), Some("B46102331"));
+        assert_eq!(factura.cif_cliente.valor().map(|n| n.as_str()), Some("A58231074"));
         assert_eq!(factura.pedido.valor().map(String::as_str), Some("PO-2026-0096"));
         assert_eq!(factura.numero_factura.valor().map(String::as_str), Some("2026/11604"));
         assert_eq!(factura.fecha.valor().map(String::as_str), Some("2026-01-08"));

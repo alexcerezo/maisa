@@ -141,6 +141,7 @@ db.createCollection("expedientes", {
           bsonType: "object",
           properties: {
             nif_emisor:     campoExtraido(["string"]),
+            cif_cliente:    campoExtraido(["string"]),   // CIF del destinatario, sin dígito de control
             pedido:         campoExtraido(["string"]),
             numero_factura: campoExtraido(["string"]),
             fecha:          campoExtraido(["string"]),
@@ -395,7 +396,7 @@ db.createCollection("expedientes", {
 
 ### 2.5 La forma de un campo extraído
 
-`factura` no guarda siete valores, guarda **siete campos extraídos**, y los siete
+`factura` no guarda ocho valores, guarda **ocho campos extraídos**, y los ocho
 comparten la misma forma. El `$jsonSchema` de §2.2 la escribe con un ayudante
 `campoExtraido(tiposValor)` para no repetirla (y para que no puedan divergir):
 

@@ -337,6 +337,11 @@ mod tests {
             nif_emisor: nif_bruto.map_or_else(Identificador::no_aparece, |bruto| {
                 Identificador::encontrado(nif(bruto), format!("NIF: {bruto}"), 0.98, None)
             }),
+            // El CIF del cliente no participa en la conciliación: quien casa la
+            // factura con el asiento es el NIF del emisor, el pedido y el
+            // importe. Se rellena igual para que la factura de prueba sea la que
+            // produce el parser, no una a la que le falta un campo.
+            cif_cliente: Identificador::encontrado(nif("A58231074"), "CIF: A58231074", 0.98, None),
             pedido: pedido.map_or_else(Identificador::no_aparece, |p| {
                 Identificador::encontrado(p.to_string(), format!("Pedido: {p}"), 0.98, None)
             }),
