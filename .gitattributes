@@ -1,0 +1,6 @@
+# Los scripts de shell que se montan en los contenedores DEBEN conservar
+# finales de linea LF. Un CR heredado de Windows hace que /bin/sh no encuentre
+# el interprete ni los comandos ("/bin/sh^M: bad interpreter").
+docker/**/*.sh text eol=lf
+docker/**/*.js text eol=lf
+*.sh text eol=lf

@@ -1,0 +1,94 @@
+# MongoDB 7 para el sistema Albertitos.
+# Arranque:     cp .env.example .env  &&  docker compose up -d
+# Verificacion: docker compose exec mongo mongosh --eval "rs.status().ok"  -> 1
+#
+# Decisiones de diseno (ver diseno_logico.md §13):
+#   - Replica set de 1 nodo (rs0): habilita change streams (UI en vivo) y
+#     prepara el escalado sin cambiar la cadena de conexion.
+#   - Autenticacion obligatoria: usuario root para administracion y usuario de
+#     app con readWrite SOLO sobre la base de datos "albertitos".
+#   - --keyFile: un replica set necesita autenticacion INTERNA entre miembros.
+#     La imagen oficial no genera el keyfile, por eso se usa un entrypoint
+#     propio (docker/mongo/entrypoint.sh) que lo crea antes de arrancar mongod.
+#     Ademas, keyFile implica la autorizacion de clientes, asi que no hace
+#     falta pasar --auth.
+#   - Servicio "mongo-init": el entrypoint oficial ejecuta los scripts de
+#     /docker-entrypoint-initdb.d contra un mongod TEMPORAL sin replica set,
+#     por lo que rs.initiate() no puede hacerse alli. Se hace despues, en un
+#     contenedor aparte, cuando mongod ya corre con --replSet.
+#   - Puerto publicado SOLO en 127.0.0.1: nunca exponer MongoDB a la red.
+#   - Volumenes nombrados: los datos sobreviven a "docker compose down".
+
+services:
+  mongo:
+    image: mongo:7.0
+    container_name: albertitos-mongo
+    restart: unless-stopped
+    # Envuelve al entrypoint oficial para generar el keyfile antes del arranque.
+    entrypoint: ["/usr/local/bin/mongo-keyfile-entrypoint.sh"]
+    command:
+      - "--replSet"
+      - "rs0"
+      - "--keyFile"
+      - "/data/configdb/keyfile"
+      - "--bind_ip_all"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-albertitos}
+      MONGO_APP_USER: ${MONGO_APP_USER}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD}
+      MONGO_DB: ${MONGO_DB:-albertitos}
+    ports:
+      # Solo accesible desde la propia maquina. No cambiar a 0.0.0.0.
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+      # El keyfile vive fuera del dbPath y en su propio volumen para no
+      # regenerarse en cada "docker compose up".
+      - mongo_config:/data/configdb
+      - ./docker/mongo/entrypoint.sh:/usr/local/bin/mongo-keyfile-entrypoint.sh:ro
+      # Scripts de inicializacion: se ejecutan una sola vez, en el primer
+      # arranque con el volumen vacio. Deben ser idempotentes.
+      - ./docker/mongosh:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --host 127.0.0.1 --eval 'db.adminCommand({ping:1}).ok' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - albertitos
+
+  # Arranque de un solo uso: inicia el replica set y espera al PRIMARY.
+  # Termina con exito y se queda parado (restart: "no").
+  mongo-init:
+    image: mongo:7.0
+    container_name: albertitos-mongo-init
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/init/run.sh"]
+    environment:
+      MONGO_INIT_HOST: mongo:27017
+      # Miembro anunciado del replica set. Se usa 127.0.0.1 (y no el nombre del
+      # servicio) para que un cliente que corra en la MAQUINA ANFITRIONA pueda
+      # resolverlo con replicaSet=rs0 sin necesitar directConnection=true.
+      MONGO_RS_HOST: 127.0.0.1:27017
+      MONGO_ROOT_USER: ${MONGO_ROOT_USER}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - ./docker/init:/init:ro
+    networks:
+      - albertitos
+
+volumes:
+  mongo_data:
+    name: albertitos_mongo_data
+  mongo_config:
+    name: albertitos_mongo_config
+
+networks:
+  albertitos:
+    name: albertitos_net
