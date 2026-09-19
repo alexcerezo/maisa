@@ -136,20 +136,17 @@ db.createCollection("expedientes", {
           }
         },
 
+        // Cada campo de `factura` es {estado, valor, rastro}: ver §2.5.
         factura: {
           bsonType: "object",
           properties: {
-            nif_emisor: { bsonType: ["string", "null"] },
-            pedido: { bsonType: ["string", "null"] },
-            numero_factura: { bsonType: ["string", "null"] },
-            fecha: { bsonType: ["date", "null"] },
-            base: { bsonType: ["decimal", "null"] },
-            iva: { bsonType: ["decimal", "null"] },
-            total: { bsonType: ["decimal", "null"] },
-            scores: {
-              bsonType: "object",
-              additionalProperties: { bsonType: "double", minimum: 0, maximum: 1 }
-            }
+            nif_emisor:     campoExtraido(["string"]),
+            pedido:         campoExtraido(["string"]),
+            numero_factura: campoExtraido(["string"]),
+            fecha:          campoExtraido(["string"]),
+            base:           campoExtraido(["decimal"]),
+            iva:            campoExtraido(["decimal"]),
+            total:          campoExtraido(["decimal"])
           }
         },
 
@@ -283,14 +280,57 @@ db.createCollection("expedientes", {
   },
 
   factura: {
-    nif_emisor: "B12345678",
-    pedido: "PED-2024-0912",
-    numero_factura: "F-2024-5518",
-    fecha: ISODate("2024-09-02T00:00:00Z"),
-    base: NumberDecimal("1020.25"),
-    iva: NumberDecimal("214.25"),
-    total: NumberDecimal("1234.50"),
-    scores: { nif_emisor: 0.981, pedido: 0.964, total: 0.972 }
+    nif_emisor: {
+      estado: "ENCONTRADO",
+      valor: "B12345678",
+      rastro: {
+        crudo: "NIF: B12345678",
+        score: 0.981,
+        origen: { fuente: "OCR", pagina: 0, linea: 1 }
+      }
+    },
+    pedido: {
+      estado: "ENCONTRADO",
+      valor: "PED-2024-0912",
+      rastro: {
+        crudo: "Pedido: PED-2024-0912",
+        score: 0.964,
+        origen: { fuente: "OCR", pagina: 0, linea: 2 }
+      }
+    },
+    numero_factura: {
+      estado: "ENCONTRADO",
+      valor: "F-2024-5518",
+      rastro: { crudo: "Factura nº F-2024-5518", score: 0.976,
+                origen: { fuente: "OCR", pagina: 0, linea: 9 } }
+    },
+    fecha: {
+      estado: "ENCONTRADO",
+      valor: "2024-09-02",
+      rastro: { crudo: "Fecha: 02/09/2024", score: 0.958,
+                origen: { fuente: "OCR", pagina: 0, linea: 10 } }
+    },
+    base: {
+      estado: "ENCONTRADO",
+      valor: NumberDecimal("1020.25"),
+      rastro: { crudo: "BASE IMPONIBLE 1.020,25", score: 0.943,
+                origen: { fuente: "OCR", pagina: 0, linea: 27 } }
+    },
+    iva: {
+      estado: "ENCONTRADO",
+      valor: NumberDecimal("214.25"),
+      rastro: { crudo: "IVA 21% 214,25", score: 0.951,
+                origen: { fuente: "OCR", pagina: 0, linea: 28 } }
+    },
+    total: {
+      estado: "ENCONTRADO",
+      valor: NumberDecimal("1234.50"),
+      rastro: {
+        crudo: "TOTAL: 1.234,50 EUR",
+        score: 0.972,
+        origen: { fuente: "OCR", pagina: 0, linea: 3 }
+      }
+    }
   },
 
   evidencia: {
@@ -332,8 +372,8 @@ db.createCollection("expedientes", {
 |---|---|---|---|
 | `_id_` | `{_id: 1}` (implícito) | Idempotencia, lectura por `file_id`, export JSONL ordenado | Clave natural; el export recorre el `_id` en orden |
 | `ix_lote_resultado` | `{lote_id: 1, "decision.resultado": 1, _id: 1}` | UI: "todos los ESCALAR del lote 1" | Índice compuesto que sirve filtro + orden sin `SORT` en memoria |
-| `ix_nif` | `{"factura.nif_emisor": 1}` | "¿qué facturas son de este proveedor?" | Consulta de investigación y detección de duplicados |
-| `ix_pedido` | `{"factura.pedido": 1}` | "¿qué facturas comparten pedido?" | Detección de duplicados (INV-7) |
+| `ix_nif` | `{"factura.nif_emisor.valor": 1}` **sparse** | "¿qué facturas son de este proveedor?" | Consulta de investigación y detección de duplicados |
+| `ix_pedido` | `{"factura.pedido.valor": 1}` **sparse** | "¿qué facturas comparten pedido?" | Detección de duplicados (INV-7) |
 | `ix_asiento` | `{"evidencia.asiento_id": 1}` | "¿qué facturas apuntan a este asiento?" | Trazabilidad inversa ERP → facturas |
 | `ix_run` | `{"decision.huellas.run_id": 1}` | "¿qué se decidió en este run?" | Reproducibilidad de una ejecución |
 | `ix_huella_negocio` | `{huella_negocio: 1}` | Detección de duplicados `(nif, pedido)` | **No único** por diseño (INV-7) |
@@ -352,6 +392,82 @@ db.createCollection("expedientes", {
 > el planificador elige `ix_lote_resultado` (prefijo `lote_id`), que es mejor
 > plan porque acota primero por lote. `ix_reglas_version` cubre el caso no
 > acotado —auditoría global— donde no hay `lote_id` por el que empezar.
+
+### 2.5 La forma de un campo extraído
+
+`factura` no guarda siete valores, guarda **siete campos extraídos**, y los siete
+comparten la misma forma. El `$jsonSchema` de §2.2 la escribe con un ayudante
+`campoExtraido(tiposValor)` para no repetirla (y para que no puedan divergir):
+
+```javascript
+function campoExtraido(tiposValor) {
+  return {
+    bsonType: ["object", "null"],
+    required: ["estado"],
+    properties: {
+      estado: { enum: ["ENCONTRADO", "NO_APARECE", "ILEGIBLE"] },
+      valor: { bsonType: tiposValor },
+      rastro: {
+        bsonType: ["object", "null"],
+        required: ["crudo", "score"],
+        properties: {
+          crudo: { bsonType: "string" },
+          score: { bsonType: "double", minimum: 0, maximum: 1 },
+          origen: {
+            bsonType: ["object", "null"],
+            required: ["fuente"],
+            properties: {
+              fuente: { enum: ["OCR", "EXCEL", "ERP"] },
+              pagina: { bsonType: "int", minimum: 0 },
+              linea:  { bsonType: "int", minimum: 0 },
+              fila:   { bsonType: "string" },
+              columna:{ bsonType: "string" },
+              asiento_id: { bsonType: "string" }
+            }
+          }
+        }
+      }
+    }
+  };
+}
+```
+
+**Por qué el valor y el crudo van juntos y no en dos campos paralelos.** Sin el
+crudo, una decisión mala es indistinguible de un OCR malo, de una normalización
+mala o de una regla mala: los tres caminos terminan en el mismo valor canónico.
+Con el crudo, la traza dice *en qué paso* se torció la cosa, que es lo que
+convierte la auditoría en diagnóstico. Guardarlos en el mismo subdocumento (en
+vez de `nif_emisor` + `nif_emisor_bruto`) hace **imposible** tener uno sin el
+otro; un mapa `scores: {campo: double}` aparte era justo lo contrario, dos
+estructuras que hay que sincronizar a mano y que se desincronizan.
+
+**Por qué `estado` es un tri-estado.** Un `null` confunde dos casos que llevan a
+decisiones distintas:
+
+| `estado` | Significa | Consecuencia |
+|---|---|---|
+| `NO_APARECE` | El PDF no trae el dato | Caso normal: si hay pedido, se concilia por pedido |
+| `ILEGIBLE` | Hay texto, pero no se pudo canonizar | Se **escala**: no se puede garantizar *a quién* se paga |
+| `ENCONTRADO` | Hay valor canónico y `rastro` lo respalda | Se usa el valor; el `score` entra en R5 |
+
+**Invariantes que Mongo NO comprueba (las garantiza el tipo Rust
+`Identificador<T>` en el borde de entrada):** `ENCONTRADO` exige `valor` y
+`rastro`; `ILEGIBLE` exige `rastro` y prohíbe `valor`; `NO_APARECE` prohíbe
+ambos. Replicarlo en `$jsonSchema` con `oneOf`/`not` daría un validador frágil
+que rechazaría escrituras legítimas, así que el validador solo comprueba formas
+y tipos. **El escritor es Rust y es el único**, y valida antes de escribir.
+
+**`valor` no existe ≠ `valor: null`.** Lo que no se leyó **se omite** (el
+`Option` de Rust no se serializa). Es lo que hace que `ix_nif` / `ix_pedido`
+puedan ser `sparse`: un expediente sin NIF no entra en `ix_nif`, en vez de
+entrar con un `null` que después hay que descartar en cada consulta.
+
+**Ojo con la proyección de escritura.** En el dominio, `base`/`iva`/`total` son
+`Decimal` y `fecha` es texto ISO-8601 (`"2024-09-02"`). `rust_decimal` serializa
+a **string** vía serde, así que un `bson::to_bson(&Factura)` directo escribiría
+strings donde el validador espera `decimal` (y fallaría la escritura, que es la
+forma correcta de fallar). La conversión a `Decimal128` / `ISODate` es
+responsabilidad explícita de la capa de persistencia, no del serde del dominio.
 
 ---
 
@@ -1042,6 +1158,8 @@ patrón de acceso que lo consuma.**
 | P15 | Versión de reglas activa | `reglas_versiones` | `findOne({vigente: true})` | `ix_vigente_parcial` |
 | P16 | Snapshot del ERP activo | `erp_snapshots` | `findOne({vigente: true})` | `ix_vigente_parcial` |
 | P17 | Última ejecución de un lote | `ejecuciones` | `find({lote_id}).sort({inicio: -1}).limit(1)` | `ix_lote_inicio` |
+| P18 | Todas las facturas de un proveedor | `expedientes` | `find({"factura.nif_emisor.valor": nif})` | `ix_nif` |
+| P19 | Facturas que comparten un pedido (duplicados) | `expedientes` | `find({"factura.pedido.valor": pedido})` | `ix_pedido` |
 
 ---
 

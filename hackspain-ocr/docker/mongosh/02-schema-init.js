@@ -42,6 +42,56 @@
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Forma canónica de un campo extraído: { estado, valor, rastro }.
+  //
+  // Existe UNA sola forma para los siete campos de `factura`; solo cambia el
+  // tipo del `valor`. Guardar el valor normalizado y el texto crudo JUNTOS
+  // (en vez de `nif_emisor` + `nif_emisor_bruto` en paralelo) evita dos
+  // estructuras que hay que mantener sincronizadas.
+  //
+  // `estado` es lo que hace trazable la diferencia entre:
+  //   NO_APARECE — el PDF no trae el dato (lo trata R1: no se puede conciliar)
+  //   ILEGIBLE   — se leyó algo que no se pudo canonizar, y se conserva el texto
+  //   ENCONTRADO — hay valor canónico, y `rastro.crudo` dice de dónde salió
+  //
+  // La coherencia entre `estado`, `valor` y `rastro` la garantiza el tipo Rust
+  // `Identificador<T>` (su `TryFrom` rechaza las combinaciones imposibles en el
+  // borde), NO este validador: replicarla aquí con `oneOf`/`not` daría un
+  // esquema frágil que rechazaría escrituras legítimas. Mongo solo comprueba
+  // que las formas y los tipos son los pactados.
+  // ---------------------------------------------------------------------
+  function campoExtraido(tiposValor) {
+    return {
+      bsonType: ["object", "null"],
+      required: ["estado"],
+      properties: {
+        estado: { enum: ["ENCONTRADO", "NO_APARECE", "ILEGIBLE"] },
+        valor: { bsonType: tiposValor },
+        rastro: {
+          bsonType: ["object", "null"],
+          required: ["crudo", "score"],
+          properties: {
+            crudo: { bsonType: "string", description: "texto tal cual salió de la fuente, sin normalizar" },
+            score: { bsonType: "double", minimum: 0, maximum: 1 },
+            origen: {
+              bsonType: ["object", "null"],
+              required: ["fuente"],
+              properties: {
+                fuente: { enum: ["OCR", "EXCEL", "ERP"] },
+                pagina: { bsonType: "int", minimum: 0 },   // OCR
+                linea: { bsonType: "int", minimum: 0 },    // OCR (1-based)
+                fila: { bsonType: "string" },              // EXCEL ("42")
+                columna: { bsonType: "string" },           // EXCEL ("D")
+                asiento_id: { bsonType: "string" }         // ERP ("AS-412")
+              }
+            }
+          }
+        }
+      }
+    };
+  }
+
   // =====================================================================
   // 1. expedientes — agregado raíz, un documento por factura
   // =====================================================================
@@ -107,17 +157,20 @@
           factura: {
             bsonType: "object",
             properties: {
-              nif_emisor: { bsonType: ["string", "null"] },
-              pedido: { bsonType: ["string", "null"] },
-              numero_factura: { bsonType: ["string", "null"] },
-              fecha: { bsonType: ["date", "null"] },
-              base: { bsonType: ["decimal", "null"] },
-              iva: { bsonType: ["decimal", "null"] },
-              total: { bsonType: ["decimal", "null"] },
-              scores: {
-                bsonType: "object",
-                additionalProperties: { bsonType: "double", minimum: 0, maximum: 1 }
-              }
+              nif_emisor: campoExtraido(["string"]),       // Nif canónico: "B12345678"
+              pedido: campoExtraido(["string"]),
+              numero_factura: campoExtraido(["string"]),
+              // La fecha se normaliza a texto ISO-8601. El `bsonType` "date"
+              // llegará cuando la proyección de escritura convierta el
+              // `Identificador<String>`: hoy NO hay ninguna capa que lo haga.
+              fecha: campoExtraido(["string"]),
+              // INV-8: los importes son `Decimal` en el dominio. OJO: la
+              // proyección de escritura TIENE que mapearlos a `Decimal128`
+              // (`rust_decimal` serializa a string vía serde, y un
+              // `bson::to_bson(&Factura)` directo daría strings aquí).
+              base: campoExtraido(["decimal"]),
+              iva: campoExtraido(["decimal"]),
+              total: campoExtraido(["decimal"])
             }
           },
 
@@ -209,8 +262,14 @@
   });
 
   db.expedientes.createIndex({ lote_id: 1, "decision.resultado": 1, _id: 1 }, { name: "ix_lote_resultado" });
-  db.expedientes.createIndex({ "factura.nif_emisor": 1 }, { name: "ix_nif" });
-  db.expedientes.createIndex({ "factura.pedido": 1 }, { name: "ix_pedido" });
+  // El campo es {estado, valor, rastro}, así que se indexa `.valor` (el NIF
+  // canónico), no el subdocumento entero. Van con `sparse: true` porque un
+  // campo NO_APARECE no escribe `valor` (en Rust es un `Option` que no se
+  // serializa): sin sparse, los expedientes sin NIF entrarían en el índice
+  // como nulos y la consulta "¿qué facturas son de este proveedor?" tendría
+  // que descartarlos a mano en cada consulta.
+  db.expedientes.createIndex({ "factura.nif_emisor.valor": 1 }, { name: "ix_nif", sparse: true });
+  db.expedientes.createIndex({ "factura.pedido.valor": 1 }, { name: "ix_pedido", sparse: true });
   db.expedientes.createIndex({ "evidencia.asiento_id": 1 }, { name: "ix_asiento" });
   db.expedientes.createIndex({ "decision.huellas.run_id": 1 }, { name: "ix_run" });
   db.expedientes.createIndex({ huella_negocio: 1 }, { name: "ix_huella_negocio" });

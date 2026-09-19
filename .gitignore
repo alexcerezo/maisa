@@ -13,6 +13,11 @@ hackspain-ocr/.env
 backups/
 *.archive
 
+# Salida del lote de ejemplo: se regenera y NO es una entrega.
+# (`outputs/outcomes.jsonl` sí se versiona: esa SÍ es la entrega.)
+hackspain-ocr/outputs/outcomes_ejemplo.jsonl
+
+
 # Restos de Python (el descargador del ERP y validate_jsonl.py son stdlib)
 __pycache__/
 *.pyc

@@ -134,7 +134,8 @@ operativos.
 | **Lote** | Conjunto de facturas procesadas en una misma ejecución (lote 1, lote 2) | 1 lote → N expedientes |
 | **Documento** | El PDF original y sus metadatos (nombre, hash, tamaño, páginas) | 1 documento → 1 expediente |
 | **ExtracciónOCR** | Salida cruda del servicio OCR: líneas con texto, bbox y score | 1 extracción → 1 expediente |
-| **FacturaParseada** | Campos canónicos extraídos del OCR: `nif`, `pedido`, `fecha`, `base`, `iva`, `total` | 1 factura → 1 expediente |
+| **FacturaParseada** | Campos extraídos del OCR. **Cada campo lleva su valor canónico y el texto del que salió** (ver `CampoExtraido`) | 1 factura → 1 expediente |
+| **CampoExtraido** | Un campo con sus dos caras: el valor canónico, el crudo tal cual se leyó, la confianza y la ubicación exacta (`pág. 1 línea 8`, `Hoja1#42:D`, `asiento AS-412`). Su estado es `ENCONTRADO`, `NO_APARECE` o `ILEGIBLE` | 1 factura → 7 campos |
 | **Asiento** | Registro contable del ERP: `asiento_id`, `nif`, `pedido`, `importe`, `estado` | 1 asiento → N expedientes (posible) |
 | **SnapshotERP** | Foto completa de los asientos en un instante; permite detectar obsolescencia | 1 snapshot → N asientos |
 | **FilaExcel** | Fila del Excel caótico, volcada sin pérdida como mapa de campos | 1 fila → N expedientes (posible) |
@@ -144,6 +145,22 @@ operativos.
 | **Run** | Ejecución del pipeline: contadores, latencias, estado | 1 run → N expedientes |
 | **Evento** | Señal operativa puntual (reintento ERP, fallo OCR, cache hit) | 1 run → N eventos |
 | **Revisión** | Intervención humana sobre un `ESCALAR` (bonus UI) | 1 revisión → 1 expediente |
+
+> **Por qué cada campo guarda el crudo y el normalizado.** El sistema toma cada
+> dato dos veces: el texto tal cual lo entregó la fuente y el valor canónico en
+> que se convirtió (`"b-12345678"` → `"B12345678"`, `"1.234,50 EUR"` →
+> `Decimal("1234.50")`, `"02/09/2024"` → `"2024-09-02"`). Si solo se guardara el
+> canónico, una decisión mala sería **indistinguible** de un OCR malo, de una
+> normalización mala o de una regla mala: los tres caminos terminan en el mismo
+> valor, y no habría forma de saber en qué paso se torció la cosa. Con el crudo
+> al lado, la traza se convierte en diagnóstico, y quien revise un `ESCALAR` ve
+> exactamente el texto que se leyó y **de dónde salió** (página y línea del OCR,
+> celda del Excel, asiento del ERP) sin volver a ejecutar el pipeline.
+>
+> El estado del campo no es un booleano: `NO_APARECE` (el PDF no trae el dato) e
+> `ILEGIBLE` (se leyó algo que no se pudo canonizar) son casos distintos y llevan
+> a decisiones distintas — lo primero se puede conciliar por pedido, lo segundo
+> obliga a escalar, porque no se puede garantizar *a quién* se está pagando.
 
 ### 4.2 Diagrama entidad-relación
 
@@ -166,6 +183,7 @@ erDiagram
     EVIDENCIA }o--o{ FILA_EXCEL : "referencia"
     ASIENTO }o--|| SNAPSHOT_ERP : "pertenece a"
     DECISION }o--|| REGLA_VERSION : "huella"
+    FACTURA_PARSEADA ||--|{ CAMPO_EXTRAIDO : "compone"
 
     EXPEDIENTE {
         string file_id PK "nombre exacto del PDF"
@@ -189,14 +207,20 @@ erDiagram
         int duracion_ms
     }
     FACTURA_PARSEADA {
-        string nif_emisor
-        string pedido
-        string numero_factura
-        date fecha
-        decimal128 base
-        decimal128 iva
-        decimal128 total
-        map scores "confianza por campo"
+        object nif_emisor "campo extraido"
+        object pedido "campo extraido"
+        object numero_factura "campo extraido"
+        object fecha "campo extraido"
+        object base "campo extraido"
+        object iva "campo extraido"
+        object total "campo extraido"
+    }
+    CAMPO_EXTRAIDO {
+        string estado "ENCONTRADO|NO_APARECE|ILEGIBLE"
+        any valor "canonico: Nif|string|decimal"
+        string crudo "texto tal cual, sin normalizar"
+        double score "confianza de la fuente"
+        string origen "OCR|EXCEL|ERP + ubicacion"
     }
     EVIDENCIA {
         string asiento_id FK
