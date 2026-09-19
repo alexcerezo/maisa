@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<sesion>
+  <token>7e09a6d43f0aa143eca77423b4609d83</token>
+  <caduca_en_segundos>900</caduca_en_segundos>
+  <usos_maximos>300</usos_maximos>
+  <aviso>Guarde este token. El bridge no lo repetira.</aviso>
+</sesion>

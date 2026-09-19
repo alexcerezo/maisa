@@ -279,9 +279,11 @@ si queremos, el enunciado lo permite). Un serializador dedicado emite solo eso.
 - Nunca devuelve 500; ante fallo devuelve `lines: []` y `pages: 0`.
 - Timeout largo (60 s), pool de peticiones desde Rust con concurrencia 4-8.
 
-**ERP `alberto_erp.py` — el que ya tenemos** (`http://127.0.0.1:8009`):
+**ERP `alberto_erp.py` — servicio externo del reto** (por defecto
+`http://127.0.0.1:8009`, configurable con `ERP_BASE_URL`):
 
-- `POST /erp/login` (form: `usuario=alberto`, `clave=FACTURAS2009`) → XML con
+- `POST /erp/login` (form: `usuario`/`clave`, que salen de `ERP_USUARIO` /
+  `ERP_CLAVE` y **nunca** se escriben en logs ni mensajes de error) → XML con
   `<token>`, `<caduca_en_segundos>`, `<usos_maximos>`.
 - `GET /erp/asientos?pagina=N` con `X-ERP-Token: <token>` → XML con 20 asientos.
 - `GET /erp/asientos/<id>` → un asiento.
