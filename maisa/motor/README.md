@@ -5,7 +5,7 @@ cruzando tres fuentes: el PDF de la factura, el maestro de proveedores con los
 pedidos (Excel) y los asientos del ERP.
 
 Este directorio es la implementación que se ejecuta y se entrega. El motor
-anterior en Rust (`maisa/hackspain-ocr/src/`) se conserva como **legado documental**:
+anterior en Rust (`maisa/src/`) se conserva como **legado documental**:
 su diseño y sus contratos están recogidos en `TRASPASO.md`.
 
 No es un esqueleto — tiene las reglas implementadas y 57 tests en verde — pero
@@ -19,9 +19,9 @@ líneas.
 ## Arranque rápido
 
 ```bash
-python -m pip install -r maisa/hackspain-ocr/motor/requirements.txt
+python -m pip install -r maisa/motor/requirements.txt
 
-cd maisa/hackspain-ocr
+cd maisa
 PYTHONPATH=motor/src python -m maisa.procesa \
   --facturas data/facturas \
   --xlsx     data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \

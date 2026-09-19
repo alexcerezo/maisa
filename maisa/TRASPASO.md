@@ -24,7 +24,7 @@ Lo que está hecho está **probado y verde**. Lo que falta se puede empezar hoy.
 
 ## 0. Cómo comprobar en un minuto lo que ya funciona
 
-Desde `maisa/hackspain-ocr/`:
+Desde `maisa/`:
 
 ```powershell
 cargo test --bins

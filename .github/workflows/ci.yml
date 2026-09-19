@@ -19,7 +19,7 @@
 # Estructura del repo: la raiz tiene los tres ficheros de la entrega
 # (`outcomes.jsonl`, `outcomes_lote2.jsonl`, `albertitos_plan.pdf`), `maisa/`
 # (todo el resto: motor, datos, docs, ui) y `.github/` (que GitHub solo lee
-# desde la raiz). El codigo se ejecuta desde `maisa/hackspain-ocr/`, que es lo
+# desde la raiz). El codigo se ejecuta desde `maisa/`, que es lo
 # que fija `defaults` abajo.
 name: CI
 
@@ -34,7 +34,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: maisa/hackspain-ocr
+    working-directory: maisa
 
 env:
   PYTHONPATH: motor/src
@@ -71,7 +71,7 @@ jobs:
       # `motor/pytest.ini` declara `pythonpath = src`, `testpaths = tests` y
       # `-m "not lento"`, asi que esto funciona recien clonado sin exportar nada.
       - name: pytest
-        working-directory: maisa/hackspain-ocr/motor
+        working-directory: maisa/motor
         run: python -m pytest
 
   lote:
@@ -134,12 +134,12 @@ jobs:
       - name: la copia de la raiz es la misma entrega
         run: |
           set -e
-          if ! cmp /tmp/outcomes.jsonl ../../outcomes.jsonl; then
+          if ! cmp /tmp/outcomes.jsonl ../outcomes.jsonl; then
             echo "::error::outcomes.jsonl (raiz) NO coincide con outputs/outcomes.jsonl."
-            echo "Regeneralo con: cp outputs/outcomes.jsonl ../../outcomes.jsonl"
+            echo "Regeneralo con: cp outputs/outcomes.jsonl ../outcomes.jsonl"
             exit 1
           fi
-          echo "outcomes.jsonl (raiz) al dia ($(wc -l < ../../outcomes.jsonl) lineas)"
+          echo "outcomes.jsonl (raiz) al dia ($(wc -l < ../outcomes.jsonl) lineas)"
 
       # `|` y no escalar plegado: sin el bloque, YAML junta las lineas en una
       # sola y los `\` de continuacion se comen los argumentos de oro.py.

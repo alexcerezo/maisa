@@ -5,7 +5,7 @@
 **Cómo se reproduce todo, con un solo comando:**
 
 ```bash
-# desde el directorio del motor (`maisa/hackspain-ocr/motor`)
+# desde el directorio del motor (`maisa/motor`)
 # con el bridge ERP de Alberto CAIDO (caso normal): 61/61 OK, exit 0
 PYTHONPATH=src ../.venv/bin/python tools/evidencia_resiliencia.py
 
