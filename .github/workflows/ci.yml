@@ -118,16 +118,20 @@ jobs:
           fi
           echo "outputs/outcomes.jsonl al dia ($(wc -l < outputs/outcomes.jsonl) lineas)"
 
+      # `|` y no escalar plegado: sin el bloque, YAML junta las lineas en una
+      # sola y los `\` de continuacion se comen los argumentos de oro.py.
       - name: banco de oro (500 decisiones congeladas)
-        run: python motor/tools/oro.py --comprobar \
-               --facturas data/facturas \
-               --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
-               --snapshot data/erp_snapshot.json \
-               --config motor/config/reglas.toml
+        run: |
+          python motor/tools/oro.py --comprobar \
+            --facturas data/facturas \
+            --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
+            --snapshot data/erp_snapshot.json \
+            --config motor/config/reglas.toml
 
       - name: cobertura por regla
-        run: python motor/tools/oro.py --cobertura \
-               --facturas data/facturas \
-               --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
-               --snapshot data/erp_snapshot.json \
-               --config motor/config/reglas.toml
+        run: |
+          python motor/tools/oro.py --cobertura \
+            --facturas data/facturas \
+            --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
+            --snapshot data/erp_snapshot.json \
+            --config motor/config/reglas.toml
