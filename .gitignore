@@ -73,3 +73,7 @@ maisa-watch*
 
 # Claves API de OCI / certificados
 *.pem
+
+# Claves locales (nunca se commitean)
+.env.local
+.env.*.local

@@ -10,7 +10,10 @@
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
     "build-criterios": "tsx scripts/build-criterios.ts",
-    "eval": "tsx eval/run.ts"
+    "eval": "tsx --env-file-if-exists=../.env --env-file-if-exists=.env.local eval/run.ts",
+    "smoke": "tsx --env-file-if-exists=../.env --env-file-if-exists=.env.local examples/gateway-smoke.ts",
+    "referencia": "tsx --env-file-if-exists=../.env --env-file-if-exists=.env.local eval/referencia.ts",
+    "precalentar": "tsx scripts/precalentar-ocr.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.87",

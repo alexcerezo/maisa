@@ -243,6 +243,15 @@ export function fakeBackend(
 function traducirError(err: unknown): Error {
   if (GatewayError.isInstance(err)) {
     if (err.statusCode === 401 || err.statusCode === 403) {
+      // El caso mas comun no es una clave mala: es una cuenta sin tarjeta. El
+      // Gateway deja autenticar pero no sirve nada hasta que haya una tarjeta
+      // en fichero, aunque el modelo este en promocion a 0.
+      if (/credit card/i.test(err.message)) {
+        return new Error(
+          'AI Gateway 403: la clave vale, pero la cuenta no tiene ninguna tarjeta en fichero y el Gateway no sirve peticiones sin una, aunque el modelo este en promocion a 0.\n' +
+            'Anade una tarjeta (no se cobra mientras dure la promo) en https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card',
+        )
+      }
       return new Error(
         `AI Gateway ${err.statusCode}: falta la clave, no vale, o la cuenta no tiene creditos. Define AI_GATEWAY_API_KEY (https://vercel.com/d?to=%2F%5Bteam%5D%2F~%2Fai%2Fapi-keys).\n${err.message}`,
       )

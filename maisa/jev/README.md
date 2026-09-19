@@ -30,6 +30,25 @@ Jev es de pago, pero **ahora mismo se puede usar gratis** por una promoción:
   access, con lista de espera**, y la clave se saca de `console.typesafe.ai/keys`.
   Se usa con `TYPESAFE_AI_API_KEY`.
 
+**Comprobado con una cuenta real (2026-09-19).** La promoción es de verdad y Jev
+entra en el tier gratuito, pero hay dos pegas que no se leen en la ficha:
+
+1. **La cuenta necesita una tarjeta en fichero.** Sin ella, el Gateway
+   autentica la clave y contesta **HTTP 403** con *"AI Gateway requires a valid
+   credit card on file to service requests"*. No cobra mientras dure la promo,
+   pero no sirve nada sin tarjeta. Se añade en
+   [la configuración del AI Gateway](https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card).
+2. **El tier gratuito solo abre un subconjunto de modelos.** Jev **sí** está
+   (`typesafe-ai/jev` respondió y facturó $0), pero modelos grandes no: pedir
+   `openai/gpt-5.5`, `openai/gpt-5.5-fast`, `anthropic/claude-haiku-4.5` o
+   `deepseek/deepseek-v3.2` devuelve **HTTP 403** *"Free tier users do not have
+   access to this model"*. Los que sí respondieron en la prueba: `openai/gpt-5-mini`,
+   `openai/gpt-4.1-mini`, `openai/gpt-4o-mini`, `google/gemini-2.5-flash`,
+   `google/gemini-2.5-flash-lite`, `meta/llama-3.3-70b`, `mistral/mistral-small`.
+
+Por eso el paquete trae `npm run smoke` (`examples/gateway-smoke.ts`): verifica
+clave, tarjeta y acceso a modelo en un segundo, sin tocar a Jev.
+
 El *"gratis con el AI SDK"* que se suele citar es impreciso por dos motivos: el
 AI SDK es un cliente y no fija tarifas, y lo que es gratis es la **promoción del
 Gateway**, no el AI SDK. Lo que sí es cierto es que el AI SDK no cobra nada por
