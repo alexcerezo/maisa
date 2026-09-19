@@ -471,7 +471,7 @@ def simula(args: argparse.Namespace) -> int:
     decisor, maestro, asientos = P.construye_decisor(
         args.xlsx, args.config, args.snapshot, None
     )
-    rutas = sorted(args.facturas.glob("*.pdf"))
+    rutas = sorted(args.facturas.glob("*.pdf"), key=lambda p: P.emit.clave_orden(p.name))
     documentos = lectura.lee_lote(rutas, trabajadores=args.trabajadores)
     lecturas = {d.lectura.file_id: d for d in documentos}
     # El lote entero decide la duplicidad de pedido: sin esto el simulador

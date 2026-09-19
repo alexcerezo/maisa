@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import sys
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -48,6 +49,10 @@ SALIDA_POR_DEFECTO = _primero(RAIZ.parent / "outputs", Path("/tmp/out")) / "outc
 
 
 def construye_decisor(xlsx: Path, config: Path, snapshot: Path | None, erp_url: str | None):
+    # La norma se valida lo primero, antes de leer el maestro y antes de tocar la
+    # red: una config invalida tiene que costar milisegundos, no un Excel abierto
+    # ni un login al ERP que luego se tira a la basura.
+    pol = norma.Politica.carga(config)
     maestro = excel.carga(xlsx)
     if snapshot and Path(snapshot).exists():
         asientos = {a.pedido: a for a in carga_snapshot(Path(snapshot))}
@@ -57,7 +62,7 @@ def construye_decisor(xlsx: Path, config: Path, snapshot: Path | None, erp_url: 
         cliente = ERP(base=erp_url or "http://127.0.0.1:8009")
         cliente.login()
         asientos = {a.pedido: a for a in cliente.asientos()}
-    return norma.Decisor(maestro, asientos, norma.Politica.carga(config)), maestro, asientos
+    return norma.Decisor(maestro, asientos, pol), maestro, asientos
 
 
 def marca_pedidos_repetidos(
@@ -96,7 +101,10 @@ def procesa(
     traza_hash: bool = False,
 ) -> list[dict]:
     decisor, maestro, asientos = construye_decisor(xlsx, config, snapshot, erp_url)
-    pdfs = sorted(facturas.glob("*.pdf"))
+    # Orden explicito por nombre y no `sorted(...)` sobre `Path`: `PurePath`
+    # pliega mayusculas en Windows y no en POSIX, lo que reordenaba la entrega
+    # segun el sistema. Ver `emit.clave_orden`.
+    pdfs = sorted(facturas.glob("*.pdf"), key=lambda p: emit.clave_orden(p.name))
     ruta_traza = salida.with_name(salida.stem + "_traza.jsonl")
     # El registro encadena cada evento con el hash del anterior y hace flush
     # linea a linea: si el proceso muere a mitad, el log queda truncado y
@@ -208,10 +216,15 @@ def main(argv: list[str] | None = None) -> int:
         print("OK" if not problemas else "\n".join(problemas))
         return 0 if not problemas else 1
 
-    procesa(
-        args.facturas, args.xlsx, args.config, args.snapshot, args.erp_url,
-        args.salida, args.trabajadores, args.lote, traza_hash=args.traza_hash,
-    )
+    try:
+        procesa(
+            args.facturas, args.xlsx, args.config, args.snapshot, args.erp_url,
+            args.salida, args.trabajadores, args.lote, traza_hash=args.traza_hash,
+        )
+    except norma.ConfigInvalida as exc:
+        print(f"\nCONFIG RECHAZADA: no se decide nada con este fichero.\n{exc}",
+              file=sys.stderr)
+        return 2
     return 0
 
 

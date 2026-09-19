@@ -3,7 +3,14 @@
 El sabado a las 18:00 llegan **40 facturas nuevas y una regla nueva**. El domingo
 La Caja puede **cambiar un dato** de una factura ya entregada. Este documento es
 el procedimiento para absorber las dos cosas **sin tocar una linea de Python**:
-la norma vive en `maisa/config/reglas.toml` y el motor es sin estado.
+la norma vive en `motor/config/reglas.toml` y el motor es sin estado.
+
+> **Ojo con el fichero de reglas.** Hay dos `reglas.toml` en el repo y solo uno es
+> el que usa el motor. El vivo es `motor/config/reglas.toml` (norma v3.1, con
+> `[umbrales]`, `[precedencia]`, `[reglas.*]` y `[hechos_duros]`).
+> `maisa/config/reglas.toml` es el **legado del motor Rust**, con otro esquema:
+> el motor lo rechaza con `ConfigInvalida` y sale con codigo 2, no lo ignora.
+> Todas las rutas de este runbook son relativas a la raiz del repo (`maisa/`).
 
 Lo que se entrega son tres ficheros y solo tres. El que cambia es
 `outcomes_lote2.jsonl`.
@@ -15,7 +22,7 @@ Lo que se entrega son tres ficheros y solo tres. El que cambia es
 | Que | Donde | Quien lo trae |
 |---|---|---|
 | 40 PDF nuevos | `corpus/maisa/facturas_lote2/` | el enunciado |
-| Regla nueva (texto) | se traduce a `maisa/config/reglas.toml` | nosotros |
+| Regla nueva (texto) | se traduce a `motor/config/reglas.toml` | nosotros |
 | Estado del ERP del sabado | `/tmp/asientos.json` (snapshot) o el bridge vivo | organizacion |
 
 `valida_entrega.py` busca el corpus del lote 2, por este orden, en
@@ -31,14 +38,14 @@ Antes de escribir nada, se pregunta al simulador que pasaria:
 ```bash
 cd maisa
 # "¿y si la tolerancia pasara de 1 centimo a 5?"
-PYTHONPATH=src ../.venv/bin/python tools/oro.py --simula regla tolerancia_importe=0.05
+PYTHONPATH=motor/src ../.venv/bin/python motor/tools/oro.py --simula regla tolerancia_importe=0.05
 
 # "¿y si un pedido ya PAGADO dejara de ser NO_PAGAR?"
-PYTHONPATH=src ../.venv/bin/python tools/oro.py --simula regla reglas.R5_estado.si_ya_pagada=ESCALAR
+PYTHONPATH=motor/src ../.venv/bin/python motor/tools/oro.py --simula regla reglas.R5_estado.si_ya_pagada=ESCALAR
 ```
 
 La salida dice **cuantas** de las 500 se mueven y, factura a factura, **que regla**
-cambia de veredicto (`-`/`+` sobre la traza de hechos). Ver `docs/simulador.md`.
+cambia de veredicto (`-`/`+` sobre la traza de hechos). Ver `motor/docs/simulador.md`.
 
 Criterio de aceptacion de la regla nueva:
 
@@ -90,7 +97,7 @@ si_pasa     = "PAGAR"         #    (si aplica)
 
 ```bash
 cd maisa
-PYTHONPATH=src ../.venv/bin/python -m maisa.procesa \
+PYTHONPATH=motor/src ../.venv/bin/python -m maisa.procesa \
     --facturas ../corpus/maisa/facturas_lote2 \
     --salida /tmp/out/outcomes_lote2.jsonl \
     --lote 2 --trabajadores 4 --traza-hash
@@ -100,7 +107,7 @@ PYTHONPATH=src ../.venv/bin/python -m maisa.procesa \
   la traza es un fichero por lote, asi que la traza del lote 1 no se toca.
 - **`--lote 2`** etiqueta los eventos de la traza (`lote: 2`) para que los dos lotes
   se puedan auditar juntos sin confundirlos. El nombre del fichero lo pone `--salida`.
-- **Coste esperado (medido en `docs/capacidad.md`):** 40 facturas con capa de texto
+- **Coste esperado (medido en `motor/docs/capacidad.md`):** 40 facturas con capa de texto
   son ~0,3 s. Cada escaneo **nuevo** anade ~4,1 s de OCR porque el contenedor atiende
   de una en una. Las escaneadas ya vistas estan en la cache por `sha256` y cuestan
   ~3 ms. Si las 40 son de texto, el lote 2 entero cuesta menos que un cafe.
@@ -111,7 +118,7 @@ PYTHONPATH=src ../.venv/bin/python -m maisa.procesa \
 
 ```bash
 cd maisa
-PYTHONPATH=src ../.venv/bin/python tools/valida_entrega.py ../entrega --publicable \
+PYTHONPATH=motor/src ../.venv/bin/python motor/tools/valida_entrega.py ../entrega --publicable \
     --corpus-lote2 ../corpus/maisa/facturas_lote2
 ```
 
@@ -147,13 +154,13 @@ que es justo lo que pide la spec: `file_id` y `result` son lo unico obligatorio.
 
 ## 6. Versionar
 
-1. `maisa/config/reglas.toml` con `version = "norma_v4"`: es el artefacto que explica
+1. `motor/config/reglas.toml` con `version = "norma_v4"`: es el artefacto que explica
    el cambio, y va en el repositorio de trabajo (no en el de entrega).
 2. Commit en la raiz del repo con los tres ficheros, y anotar en el mensaje la version de
    la norma y el **sello de la traza** del lote 2 (`trace.sello`), que es el ancla
    que permite demostrar despues que la traza no se toco.
 3. Si el plan cambia (nueva regla = nuevo ADR), regenerar el PDF:
-   `tools/md_a_pdf.py docs/albertitos_plan.md /tmp/albertitos_plan.pdf`.
+   `motor/tools/md_a_pdf.py motor/docs/albertitos_plan.md /tmp/albertitos_plan.pdf`.
 4. Si el lote 1 se reemite (opcion (b) del paso 1), volver a pasar
    `oro.py --fijar` para congelar la nueva referencia; si no, `--comprobar` avisara
    de una deriva que ya no es un fallo sino un cambio de norma.
@@ -165,7 +172,7 @@ que es justo lo que pide la spec: `file_id` y `result` son lo unico obligatorio.
 | # | Paso | Comando | Criterio de OK |
 |---|---|---|---|
 | 1 | Predecir el efecto de la regla | `oro.py --simula regla ...` | se sabe cuantas facturas mueve |
-| 2 | Editar la norma | `$EDITOR config/reglas.toml` | `version` subida |
+| 2 | Editar la norma | `$EDITOR motor/config/reglas.toml` | `version` subida |
 | 3 | No romper el lote 1 | `oro.py --comprobar` | exit 0, o deriva explicada por el paso 1 |
 | 4 | Correr el lote 2 | `python -m maisa.procesa --lote 2 ...` | exit 0 y una linea por PDF |
 | 5 | Validar la entrega | `valida_entrega.py --publicable --corpus-lote2` | exit 0 |
@@ -176,7 +183,7 @@ que es justo lo que pide la spec: `file_id` y `result` son lo unico obligatorio.
 
 ## 8. Que puede salir mal (y que ya esta probado)
 
-Cada fila apunta a la evidencia ejecutada de `docs/resiliencia.md`.
+Cada fila apunta a la evidencia ejecutada de `motor/docs/resiliencia.md`.
 
 | Sintoma | Causa | Que se hace |
 |---|---|---|

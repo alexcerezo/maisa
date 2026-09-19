@@ -40,8 +40,8 @@ nuevo, se cae al servicio de OCR (`http://127.0.0.1:8866`) y se rellena la cach√
 ## Reparto actual
 
 ```
-PAGAR     443
-ESCALAR    48
+PAGAR     448
+ESCALAR    43
 NO_PAGAR    9
 ```
 
