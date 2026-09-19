@@ -3,5 +3,5 @@
 #
 # httpx ya viene en requirements.txt (el proxy del OCR lo usa), pero se repite
 # aqui porque el TestClient de FastAPI tambien lo necesita.
-pytest==8.3.4
+pytest==9.0.3
 httpx==0.28.1
