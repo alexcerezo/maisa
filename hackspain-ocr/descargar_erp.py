@@ -5,9 +5,9 @@ Por que existe este script (y no solo `src/erp.rs`):
 
 1.  `src/erp.rs` todavia no existe. Este script produce HOY el snapshot de los
     516 asientos, que es lo que desbloquea a `reconciler` y `rules`.
-2.  Es el **oraculo independiente** de verificacion: lee el ERP por su cuenta y
-    sirve para contrastar el resultado de `outcomes.jsonl` (usa `--out` para
-    volcarlo a otro fichero sin pisar el snapshot bueno).
+2.  Es la **segunda via de lectura** del ERP: lo lee por su cuenta, sin pasar
+    por el motor, y sirve para contrastar el resultado de `outcomes.jsonl`
+    (usa `--out` para volcarlo a otro fichero sin pisar el snapshot bueno).
 3.  Es el plan B si el ERP se cae durante la demo.
 
 Es deliberadamente **stdlib only** (sin dependencias). El ERP habla XML en
