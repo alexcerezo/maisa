@@ -479,7 +479,7 @@ Los datos van bajo `/api`. `/health`, `/docs` y `/` quedan fuera del prefijo.
 | `GET` | `/api/expedientes/{file_id}` | Mongo (`expedientes`) | Un expediente concreto con su OCR y su decisión | `X-API-Key` | `200` · `404` · `503` |
 | `POST` | `/api/ocr` | proxy al OCR | Leer un PDF suelto sin pasar por el motor | `X-API-Key` + multipart | `200` · `400` · `413` · `422` · `502` · `503` · `504` |
 | `GET` | `/api/meta` | configuración | Saber qué versión y qué configuración está viva | `X-API-Key` | `200` |
-| `GET` | `/` | frontend estático | Servir el visor si está en `UI_DIR`; si no, JSON informativo | — | `200` siempre |
+| `GET` | `/` | frontend estático | Servir el visor si `UI_DIR` (el build del panel, `ui/dist`) tiene `index.html`; si no, JSON informativo | — | `200` siempre |
 
 ### 3.2 Parámetros
 
@@ -1047,7 +1047,7 @@ Mongo vive en `maisa/.env`, que no se versiona.
 | `ERP_URL` | `http://127.0.0.1:8009` | Informativo; la API no consulta el ERP. |
 | `OUTPUTS_DIR` | `maisa/outputs` (repo) / `/datos/outputs` (Docker) | Traza y entrega del motor. Solo lectura. |
 | `FACTURAS_DIR` | `maisa/data/facturas` / `/datos/facturas` | PDFs originales. Solo lectura. |
-| `UI_DIR` | `maisa/ui` / `/datos/ui` | Frontend estático (bind mount). Si hay `index.html`, `/` lo sirve; si no, `/` devuelve un JSON informativo. La decisión se toma **en cada petición**, así que añadir o quitar el fichero no requiere reiniciar. |
+| `UI_DIR` | `maisa/ui/dist` / `/datos/ui/dist` | **Build** del frontend (`npm run build`), no su código fuente. Vite lo deja en `ui/dist`, que es lo que hay que servir: apuntando a `maisa/ui` se sirve la plantilla de Vite, que carga `/src/main.tsx` y deja el navegador en blanco. Si hay `index.html`, `/` lo sirve; si no, `/` devuelve un JSON informativo. La decisión se toma **en cada petición**, así que añadir o quitar el fichero no requiere reiniciar. |
 | `CORS_ORIGINS` | 4 orígenes locales | Lista blanca separada por comas. Vacío = solo orígenes locales. `*` se acepta pero **desactiva las credenciales**. |
 | `CORS_ALLOW_CREDENTIALS` | `false` | Nunca `true` junto con `*`. |
 | `API_KEY` | vacío | Si se define, exige `X-API-Key` en todo salvo `/health`, `/health/ready`, `/docs` y `/openapi.json`. Si está vacío, la API arranca en **modo abierto** (lo avisa en el log y en `/api/meta`). |
@@ -1074,6 +1074,19 @@ Mongo vive en `maisa/.env`, que no se versiona.
 La red `albertitos_net` la crea `maisa/docker-compose.yml`, que también levanta Mongo. Este compose
 **no la crea**: se une a ella como `external: true`.
 
+Antes de levantar nada, construye el panel. Es un paso aparte porque Vite no está en la imagen de la
+API: el compose monta `maisa/ui` y sirve **`maisa/ui/dist`**, así que sin build `/` devuelve el JSON
+informativo en vez del visor (`dist/` no está versionado, hay que generarlo en cada máquina).
+
+```console
+$ npm --prefix maisa/ui ci          # solo la primera vez
+$ npm --prefix maisa/ui run build
+> vite build
+dist/index.html                   0.40 kB │ gzip:  0.29 kB
+dist/assets/index-*.js          266.80 kB │ gzip: 85.06 kB
+✓ built in 400ms
+```
+
 ```console
 $ docker network create albertitos_net      # solo la primera vez
 albertitos_net
@@ -1085,6 +1098,9 @@ $ docker compose -f maisa/api/docker-compose.yml up -d --build
 $ curl -s http://127.0.0.1:8010/health
 {"estado":"ok","servicio":"albertitos-api","dependencias":{...},"datos":{...}}
 ```
+
+Para comprobar que el visor ha entrado, `GET /api/meta` lo dice sin abrir el navegador:
+`ui.disponible` es `true` y `ui.dir` apunta a `/datos/ui/dist`. Si sale `false`, falta el build.
 
 Si además quieres la vía pública (HTTPS), levanta el proxy TLS **después** de la API: necesita que
 `albertitos-api` ya esté en `albertitos_net` para poder resolver el nombre.
@@ -1114,8 +1130,10 @@ albertitos-api  | INFO:     Uvicorn running on http://0.0.0.0:8000
 Las credenciales no van en el compose: entran como `env_file` desde `maisa/.env` (no versionado,
 `required: false`, así que sin él la API arranca igual pero con `mongo` en rojo). Los datos del
 motor se montan **en solo lectura** (`maisa/outputs` → `/datos/outputs`, `maisa/data/facturas` →
-`/datos/facturas`, `maisa/ui` → `/datos/ui`), que son justo los valores de `OUTPUTS_DIR`,
-`FACTURAS_DIR` y `UI_DIR` que fija el `Dockerfile`.
+`/datos/facturas`, `maisa/ui` → `/datos/ui`). Ojo con el último: el volumen monta la carpeta del
+panel **entera**, pero `UI_DIR` apunta a `/datos/ui/dist`, que es su build. Montar la carpeta y no
+su `dist` es a propósito, para que `dist/` se pueda crear o reemplazar con el contenedor levantado
+(la decisión de servir el visor se toma en cada petición).
 
 > **`FORWARDED_ALLOW_IPS` (detrás del proxy TLS).** Con Caddy delante, la conexión a la API llega
 > desde otro contenedor, no desde `127.0.0.1`. Uvicorn solo se fía de `127.0.0.1` por defecto, así

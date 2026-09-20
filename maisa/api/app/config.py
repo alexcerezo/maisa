@@ -22,7 +22,15 @@ MAISA_DIR = API_DIR.parent
 
 DEFAULT_OUTPUTS_DIR = MAISA_DIR / "outputs"
 DEFAULT_FACTURAS_DIR = MAISA_DIR / "data" / "facturas"
-DEFAULT_UI_DIR = MAISA_DIR / "ui"
+# El BUILD del panel (`npm run build` en `maisa/ui`), no su codigo fuente.
+#
+# La diferencia no es cosmetica: `maisa/ui/index.html` tambien existe sin
+# construir, pero es la plantilla de Vite y carga `/src/main.tsx`, que un
+# navegador no sabe ejecutar. Apuntando al fuente, `index_html.is_file()` daria
+# `true`, asi que /api/meta diria que hay visor y `/` serviria una pagina en
+# blanco en vez de avisar de que no hay ninguno: el peor fallo posible, porque
+# parece que funciona.
+DEFAULT_UI_DIR = MAISA_DIR / "ui" / "dist"
 
 # Por defecto, en Docker: el contenedor `mongo` de la red compartida. El nombre
 # `mongo` es el servicio de maisa/docker-compose.yml (DNS interno de Docker),

@@ -18,9 +18,14 @@ WORKDIR /app
 # docker-compose.yml (/datos/*, en solo lectura). Sin esto, los defaults
 # derivados del paquete apuntarian a /outputs, /data/facturas y /ui porque
 # dentro de la imagen `app/config.py` cuelga de la raiz.
+#
+# `UI_DIR` apunta a `dist`, el BUILD del panel (`npm run build` en maisa/ui). Si
+# apuntase a la carpeta del panel, `/` serviria la plantilla de Vite sin
+# construir (la que carga `/src/main.tsx`) y el navegador daria una pagina en
+# blanco: esa plantilla existe igual aunque no se haya construido nada.
 ENV OUTPUTS_DIR=/datos/outputs \
     FACTURAS_DIR=/datos/facturas \
-    UI_DIR=/datos/ui
+    UI_DIR=/datos/ui/dist
 
 # Las dependencias primero: si cambia el codigo, esta capa se reutiliza.
 COPY requirements.txt ./
