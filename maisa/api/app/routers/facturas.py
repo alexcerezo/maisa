@@ -19,6 +19,7 @@ import json
 import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Sequence
 
 from fastapi import APIRouter, Depends, File, Header, Path as PathParam, Query, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -112,23 +113,30 @@ def _traza_o_503(traza: TrazaStore, settings: Settings) -> None:
             503,
             "traza_no_disponible",
             "La traza del motor no esta disponible o esta vacia.",
-            {"fichero": str(settings.traza_path), "outputs_dir": str(settings.outputs_dir)},
+            {"ficheros": [str(cada) for cada in settings.traza_paths],
+             "outputs_dir": str(settings.outputs_dir)},
         )
 
 
-def resolver_pdf(facturas_dir: Path, file_id: str) -> Path | None:
+def resolver_pdf(facturas_dir: Path | Sequence[Path], file_id: str) -> Path | None:
     """Ruta absoluta del PDF, o None si el nombre no es seguro o no existe.
 
-    Doble comprobacion: el nombre no puede contener separadores y la ruta
-    resuelta tiene que seguir colgando de FACTURAS_DIR.
+    `facturas_dir` admite uno o varios directorios (lote 1 y lote 2): se busca en
+    ellos **en orden** y gana el primero que tenga el fichero. Por cada base,
+    doble comprobacion: el nombre no puede contener separadores y la ruta
+    resuelta tiene que seguir colgando de su directorio.
     """
     if not file_id or "/" in file_id or "\\" in file_id or file_id in {".", ".."}:
         return None
-    base = facturas_dir.resolve()
-    candidato = (base / file_id).resolve()
-    if base != candidato.parent:
-        return None
-    return candidato if candidato.is_file() else None
+    bases = (facturas_dir,) if isinstance(facturas_dir, (str, Path)) else tuple(facturas_dir)
+    for base in bases:
+        raiz = base.resolve()
+        candidato = (raiz / file_id).resolve()
+        if raiz != candidato.parent:
+            continue
+        if candidato.is_file():
+            return candidato
+    return None
 
 
 @router.get("", summary="Listado paginado de facturas con su decision")
@@ -260,7 +268,7 @@ async def pdf(
     almacen: AlmacenFacturas = Depends(get_almacen),
 ) -> Response:
     """El PDF del motor (disco) o, si no esta, el que se subio por la API (GridFS)."""
-    ruta = resolver_pdf(settings.facturas_dir, file_id)
+    ruta = resolver_pdf(settings.facturas_dirs, file_id)
     if ruta is not None:
         media_type = mimetypes.guess_type(ruta.name)[0] or "application/pdf"
         return FileResponse(
@@ -285,7 +293,7 @@ async def pdf(
             404,
             "pdf_no_encontrado",
             f"No se encontro el PDF '{file_id}'.",
-            {"facturas_dir": str(settings.facturas_dir), "gridfs": "pdfs"},
+            {"facturas_dirs": [str(cada) for cada in settings.facturas_dirs], "gridfs": "pdfs"},
         )
     return Response(
         content=contenido,

@@ -49,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.settings = settings
-        app.state.traza = TrazaStore(settings.traza_path, settings.cola_path)
+        app.state.traza = TrazaStore(settings.traza_paths, settings.cola_path)
         app.state.entrega = EntregaStore(settings.outcomes_path)
         app.state.mongo = MongoRepo(
             settings.mongo_uri,
@@ -64,7 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not app.state.traza.disponible:
             logger.warning(
                 "Traza no disponible en %s: los endpoints de facturas devolveran 503.",
-                settings.traza_path,
+                ", ".join(str(ruta) for ruta in settings.traza_paths),
             )
         if settings.api_key is None:
             logger.warning(
@@ -79,7 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             API_VERSION,
             settings.mongo_db,
             settings.ocr_url,
-            settings.facturas_dir,
+            ", ".join(str(cada) for cada in settings.facturas_dirs),
             "si" if settings.subidas_habilitadas else "no",
         )
         try:

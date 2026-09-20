@@ -19,7 +19,7 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 logger = logging.getLogger("albertitos-api")
 
@@ -216,17 +216,30 @@ def _sha256_fichero(ruta: Path) -> str | None:
 class TrazaStore:
     """Traza del motor en memoria, con recarga automatica si cambia el fichero.
 
+    `ruta` es una traza o varias. El motor escribe **una traza por lote**
+    (`outcomes_traza.jsonl` y `outcomes_lote2_traza.jsonl`), asi que la API
+    recibe las dos y las sirve concatenadas: para el visor hay un solo listado.
+
     `cola` es la ruta opcional del sidecar de la cola de revision
     (`outcomes_cola.jsonl`). Si existe, su anotacion se engancha a cada registro
     al cargar, de forma que el listado y el detalle la ven sin saber de donde
     viene.
     """
 
-    def __init__(self, ruta: Path, cola: Path | None = None) -> None:
-        self.ruta = ruta
+    def __init__(self, ruta: Path | Sequence[Path], cola: Path | None = None) -> None:
+        # `ruta` admite una sola traza (lote 1) o varias (lote 1 + lote 2). Con
+        # varias se leen en el orden dado y se sirven como un unico listado, que
+        # es lo que permite enseñar las 540 sin que el visor sepa de lotes.
+        rutas = (ruta,) if isinstance(ruta, (str, Path)) else tuple(ruta)
+        self.rutas: tuple[Path, ...] = tuple(Path(cada) for cada in rutas)
+        # `ruta` sigue siendo la primera: quien ya la leia no se entera.
+        self.ruta = self.rutas[0]
         self.cola = cola
         self._lock = threading.Lock()
-        self._firma: _Firma | None = None
+        # `None` (y no `()`) para que la primera carga siempre ocurra, y para que
+        # "ningun fichero existe" sea un estado estable que no relea en cada
+        # consulta: `(None, None) == (None, None)` no vuelve a tocar el disco.
+        self._firmas: tuple[_Firma | None, ...] | None = None
         self._firma_cola: _Firma | None = None
         self._hash: str | None = None
         self._hash_cola: str | None = None
@@ -239,19 +252,20 @@ class TrazaStore:
     # Carga
     # ------------------------------------------------------------------ #
     def cargar(self, forzar: bool = False) -> None:
-        """Recarga la traza si el fichero cambio (o siempre, con `forzar`).
+        """Recarga las trazas si algun fichero cambio (o siempre, con `forzar`).
 
-        Solo se lee el fichero cuando su identidad en disco (`mtime`/tamano)
+        Solo se leen los ficheros cuando su identidad en disco (`mtime`/tamano)
         cambia; el sha256 del contenido se calcula en esa misma recarga, no en
-        cada consulta.
+        cada consulta. Con varias trazas la recarga es conjunta: el listado es
+        uno, asi que no tiene sentido recargar solo la mitad.
         """
-        firma = _Firma.de(self.ruta)
+        firmas = tuple(_Firma.de(cada) for cada in self.rutas)
         firma_cola = _Firma.de(self.cola) if self.cola is not None else None
         with self._lock:
             if (
                 not forzar
-                and firma is not None
-                and firma == self._firma
+                and self._firmas is not None
+                and firmas == self._firmas
                 and firma_cola == self._firma_cola
             ):
                 return
@@ -260,13 +274,18 @@ class TrazaStore:
             resumenes: list[dict] = []
             indice: dict[str, int] = {}
             invalidas = 0
-            hash_contenido: str | None = None
+            digest_ficheros: list[str] = []
             hash_cola: str | None = None
-            if firma is not None:
-                hash_contenido = _sha256_fichero(self.ruta)
-                if firma_cola is not None:
-                    hash_cola = _sha256_fichero(self.cola)
-                with self.ruta.open("r", encoding="utf-8") as fichero:
+            if firma_cola is not None and any(cada is not None for cada in firmas):
+                hash_cola = _sha256_fichero(self.cola)
+            for ruta, firma in zip(self.rutas, firmas):
+                if firma is None:
+                    continue
+                # El sha256 de **cada** fichero entra en la firma combinada, y en
+                # el orden de `self.rutas`: dos trazas distintas dan firmas
+                # distintas, y reordenarlas tambien.
+                digest_ficheros.append(_sha256_fichero(ruta) or "")
+                with ruta.open("r", encoding="utf-8") as fichero:
                     for numero, linea in enumerate(fichero, start=1):
                         linea = linea.strip()
                         if not linea:
@@ -275,20 +294,31 @@ class TrazaStore:
                             registro = json.loads(linea)
                         except json.JSONDecodeError:
                             invalidas += 1
-                            logger.warning("Traza: linea %s ilegible, se ignora.", numero)
+                            logger.warning(
+                                "Traza %s: linea %s ilegible, se ignora.", ruta.name, numero
+                            )
                             continue
                         file_id = _texto(registro.get("file_id"))
                         if not file_id:
                             invalidas += 1
-                            logger.warning("Traza: linea %s sin file_id, se ignora.", numero)
+                            logger.warning(
+                                "Traza %s: linea %s sin file_id, se ignora.", ruta.name, numero
+                            )
                             continue
                         anotacion = cola.get(file_id)
                         if anotacion is not None:
                             registro["segunda_lectura"] = anotacion
+                        # `setdefault`: si un file_id se repite entre lotes gana
+                        # el primero, que es el de la traza que va antes.
                         indice.setdefault(file_id, len(registros))
                         registros.append(registro)
                         resumenes.append(resumir(registro))
-            self._firma = firma
+            hash_contenido = (
+                hashlib.sha256("|".join(digest_ficheros).encode()).hexdigest()
+                if digest_ficheros
+                else None
+            )
+            self._firmas = firmas
             self._firma_cola = firma_cola
             self._hash = hash_contenido
             self._hash_cola = hash_cola
@@ -300,7 +330,7 @@ class TrazaStore:
                 "Traza cargada: %s facturas%s (%s)",
                 len(registros),
                 f", {invalidas} lineas ignoradas" if invalidas else "",
-                self.ruta,
+                ", ".join(str(cada) for cada in self.rutas),
             )
 
     def _asegurar(self) -> None:

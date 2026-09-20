@@ -20,7 +20,9 @@ maisa/outputs/outcomes_ejemplo.jsonl
 
 # Traza encadenada: material de auditoría que se regenera en cada pasada y
 # lleva marca de tiempo, así que versionarla ensuciaría el repo en cada run.
-maisa/outputs/*_traza.jsonl
+# El comodín central cubre las dos formas: la plana (`outcomes_traza.jsonl`, la
+# que lee la API) y la encadenada por lotes (`outcomes_lote2_traza_hash.jsonl`).
+maisa/outputs/*_traza*.jsonl
 
 # Anotación de la segunda lectura para la cola de revisión: derivada, se
 # regenera con `motor/tools/cola_revision.py` y **no** es una entrega. La

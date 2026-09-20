@@ -22,6 +22,10 @@ MAISA_DIR = API_DIR.parent
 
 DEFAULT_OUTPUTS_DIR = MAISA_DIR / "outputs"
 DEFAULT_FACTURAS_DIR = MAISA_DIR / "data" / "facturas"
+# Los 40 PDF del lote 2 llegan en su propio arbol (`motor/docs/lote2.md`), asi
+# que el visor necesita **los dos** directorios: sin este, las 40 fichas del
+# lote 2 aparecen en el listado pero su PDF da 404 al abrirlo.
+DEFAULT_FACTURAS_LOTE2_DIR = MAISA_DIR / "data" / "facturas_lote2" / "facturas_primin"
 # El BUILD del panel (`npm run build` en `maisa/ui`), no su codigo fuente.
 #
 # La diferencia no es cosmetica: `maisa/ui/index.html` tambien existe sin
@@ -162,6 +166,7 @@ class Settings:
     erp_url: str = DEFAULT_ERP_URL
     outputs_dir: Path = DEFAULT_OUTPUTS_DIR
     facturas_dir: Path = DEFAULT_FACTURAS_DIR
+    facturas_lote2_dir: Path = DEFAULT_FACTURAS_LOTE2_DIR
     ui_dir: Path = DEFAULT_UI_DIR
     api_port: int = 8010
     cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
@@ -186,8 +191,28 @@ class Settings:
 
     @property
     def traza_path(self) -> Path:
-        """Traza encadenada del motor (una linea JSON por factura)."""
+        """Traza del lote 1 (una linea JSON por factura)."""
         return self.outputs_dir / "outcomes_traza.jsonl"
+
+    @property
+    def traza_lote2_path(self) -> Path:
+        """Traza del lote 2, hermana de la del lote 1.
+
+        `procesa.py` nombra la traza a partir de `--salida`
+        (`outcomes_lote2.jsonl` -> `outcomes_lote2_traza.jsonl`), de modo que el
+        lote 2 vive en su propio fichero y el del lote 1 no se toca.
+        """
+        return self.outputs_dir / "outcomes_lote2_traza.jsonl"
+
+    @property
+    def traza_paths(self) -> tuple[Path, ...]:
+        """Las trazas que la API sirve como una sola: lote 1 y lote 2."""
+        return (self.traza_path, self.traza_lote2_path)
+
+    @property
+    def facturas_dirs(self) -> tuple[Path, ...]:
+        """Los directorios donde buscar el PDF de una factura: lote 1 y lote 2."""
+        return (self.facturas_dir, self.facturas_lote2_dir)
 
     @property
     def outcomes_path(self) -> Path:
@@ -228,6 +253,7 @@ class Settings:
             erp_url=_env_str("ERP_URL", DEFAULT_ERP_URL).rstrip("/"),
             outputs_dir=_env_path("OUTPUTS_DIR", DEFAULT_OUTPUTS_DIR),
             facturas_dir=_env_path("FACTURAS_DIR", DEFAULT_FACTURAS_DIR),
+            facturas_lote2_dir=_env_path("FACTURAS_LOTE2_DIR", DEFAULT_FACTURAS_LOTE2_DIR),
             ui_dir=_env_path("UI_DIR", DEFAULT_UI_DIR),
             api_port=_env_int("API_PORT", 8010),
             cors_origins=origins,
@@ -261,7 +287,9 @@ class Settings:
             "datos": {
                 "outputs_dir": str(self.outputs_dir),
                 "facturas_dir": str(self.facturas_dir),
-                "traza_existe": self.traza_path.is_file(),
+                "facturas_dirs": [str(ruta) for ruta in self.facturas_dirs],
+                "traza_existe": any(ruta.is_file() for ruta in self.traza_paths),
+                "traza_paths": [str(ruta) for ruta in self.traza_paths],
                 "entrega_existe": self.outcomes_path.is_file(),
                 "cola_existe": self.cola_path.is_file(),
             },

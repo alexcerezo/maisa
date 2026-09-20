@@ -79,6 +79,9 @@ services:
       ERP_URL: ${ERP_URL:-http://host.docker.internal:8009}
       OUTPUTS_DIR: /datos/outputs
       FACTURAS_DIR: /datos/facturas
+      # Los 40 PDF del lote 2 viven en su propio arbol (`motor/docs/lote2.md`),
+      # asi que el visor necesita los dos directorios para poder abrir las 540.
+      FACTURAS_LOTE2_DIR: /datos/facturas_lote2/facturas_primin
       # El visor que se sirve en `/` es el BUILD del panel (`npm ci && npm run
       # build` dentro de maisa/ui), que deja Vite en `maisa/ui/dist`. El volumen
       # de abajo monta la carpeta del panel entera y no su `dist` a proposito:
@@ -125,6 +128,7 @@ services:
     volumes:
       - ../outputs:/datos/outputs:ro
       - ../data/facturas:/datos/facturas:ro
+      - ../data/facturas_lote2:/datos/facturas_lote2:ro
       - ../ui:/datos/ui:ro
 
     healthcheck:

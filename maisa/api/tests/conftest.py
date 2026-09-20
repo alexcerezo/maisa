@@ -244,7 +244,13 @@ def construir_settings(
     *,
     api_key: str | None = None,
     mongo_uri: str = "mongodb://127.0.0.1:1/albertitos",
+    facturas_lote2_dir: Path | None = None,
 ) -> Settings:
+    # El lote 2 se deriva del lote 1 para que un `facturas_dir` temporal no
+    # arrastre el directorio real del repositorio: los tests tienen que ser
+    # herméticos tambien con dos lotes.
+    if facturas_lote2_dir is None:
+        facturas_lote2_dir = facturas_dir.parent / "facturas_lote2" / "facturas_primin"
     return Settings(
         mongo_uri=mongo_uri,
         mongo_db="albertitos",
@@ -252,6 +258,7 @@ def construir_settings(
         ocr_url="http://127.0.0.1:1",
         outputs_dir=outputs_dir,
         facturas_dir=facturas_dir,
+        facturas_lote2_dir=facturas_lote2_dir,
         ui_dir=ui_dir,
         api_key=api_key,
         health_timeout_s=0.5,
