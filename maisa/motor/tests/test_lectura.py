@@ -137,6 +137,9 @@ def cache(carpeta: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("MAISA_OCR_NUBE", raising=False)
     monkeypatch.delenv("MAISA_OCR_REINTENTOS", raising=False)
     monkeypatch.delenv("MAISA_OCR_NUBE_MAX", raising=False)
+    monkeypatch.delenv(lectura.CLAVE_CACHE_ENV, raising=False)
+    lectura.reinicia_clave_cache()
+    lectura.CACHE_CONTADORES.clear()
     lectura.reinicia_presupuesto_nube()
     return destino
 
@@ -244,6 +247,130 @@ def test_cache_de_otro_pdf_se_ignora(
 
     assert doc.escalon == "vision_ocr"
     assert doc.lectura.texto == "PROPIO"
+
+
+# ------------------------------------------------------------- firma de cache
+@pytest.fixture
+def con_clave(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Clave de firma de verdad, para los tests que comprueban el sello.
+
+    El `cache` de la fixture anterior apaga la firma con la variable vacia; aqui
+    se enciende con una clave cualquiera (el valor no importa, solo que exista).
+    """
+    monkeypatch.setenv(lectura.CLAVE_CACHE_ENV, "clave-de-test")
+    lectura.reinicia_clave_cache()
+    yield "clave-de-test"
+    lectura.reinicia_clave_cache()
+
+
+def test_la_cache_escrita_va_firmada(carpeta: Path, cache: Path, con_clave: str) -> None:
+    ruta = pdf_escaneado(carpeta)
+    monkeypatch_vision = respuesta_vision("TOTAL 1,00 EUR")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(lectura, "_peticion_ocr", lambda *a, **k: monkeypatch_vision)
+        doc = lectura.lee(ruta)
+
+    guardado = json.loads((cache / f"{doc.sha256}.json").read_text(encoding="utf-8"))
+    assert guardado["hmac"] == lectura.firma_entrada(guardado)
+
+
+def test_una_entrada_manipulada_no_se_sirve(
+    carpeta: Path, cache: Path, con_clave: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Si alguien reescribe el texto, la cache se ignora y se vuelve al OCR.
+
+    Es el unico motivo de existir del sello: sin el, `sha256` lo copia cualquiera
+    del PDF y una entrada cambiada a mano se sirve como si fuera una lectura.
+    """
+    ruta = pdf_escaneado(carpeta)
+    sha = lectura.sha256_pdf(ruta)
+    entrada = {
+        "version": lectura.VERSION_CACHE, "sha256": sha, "motor": "", "escalon": "vision_ocr",
+        "paginas": ["TOTAL 1,00 EUR"], "texto": "TOTAL 1,00 EUR",
+    }
+    entrada["hmac"] = lectura.firma_entrada(entrada)
+    entrada["texto"] = "TOTAL 999.999,00 EUR"
+    entrada["paginas"] = ["TOTAL 999.999,00 EUR"]
+    escribe_cache(cache, sha, entrada)
+    monkeypatch.setattr(lectura, "_peticion_ocr", lambda *a, **k: respuesta_vision("TOTAL 1,00 EUR"))
+
+    doc = lectura.lee(ruta)
+
+    assert doc.escalon == "vision_ocr"
+    assert doc.lectura.texto == "TOTAL 1,00 EUR"
+
+
+def test_una_entrada_manipulada_se_cuenta(carpeta: Path, cache: Path, con_clave: str) -> None:
+    ruta = pdf_escaneado(carpeta)
+    sha = lectura.sha256_pdf(ruta)
+    entrada = {"version": lectura.VERSION_CACHE, "sha256": sha, "texto": "X", "hmac": "0" * 64}
+    escribe_cache(cache, sha, entrada)
+
+    assert lectura.verifica_cache(cache)["manipuladas"] == 1
+    lectura.lee(ruta)
+    assert lectura.estado_cache()["manipuladas"] == 1
+
+
+def test_la_cache_sin_sello_se_sigue_leyendo(
+    carpeta: Path, cache: Path, con_clave: str
+) -> None:
+    """Las 30 entradas heredadas valen: la firma avisa, no cierra la puerta.
+
+    Un clon nuevo tiene que reproducir el lote sin clave ni servicio de OCR; si
+    exigieramos sello, esas entradas se releerian y el lote dependeria de que el
+    contenedor de vision este vivo.
+    """
+    ruta = pdf_escaneado(carpeta)
+    sha = lectura.sha256_pdf(ruta)
+    escribe_cache(cache, sha, {"sha256": sha, "texto": "LEGADO"})
+
+    doc = lectura.lee(ruta)
+
+    assert doc.escalon == "cache_ocr"
+    assert doc.lectura.texto == "LEGADO"
+    assert lectura.verifica_cache(cache)["sin_firma"] == 1
+
+
+def test_sin_clave_no_se_firma_pero_se_lee(
+    carpeta: Path, cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(lectura.CLAVE_CACHE_ENV, "")
+    lectura.reinicia_clave_cache()
+    ruta = pdf_escaneado(carpeta)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(lectura, "_peticion_ocr", lambda *a, **k: respuesta_vision("SIN CLAVE"))
+        doc = lectura.lee(ruta)
+
+    guardado = json.loads((cache / f"{doc.sha256}.json").read_text(encoding="utf-8"))
+    assert "hmac" not in guardado
+    assert lectura.estado_cache()["clave_configurada"] is False
+    assert lectura.lee(ruta).escalon == "cache_ocr"
+
+
+def test_la_firma_no_depende_del_orden_de_las_claves() -> None:
+    """El sello cubre el contenido, no el orden en que se escribio el JSON."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(lectura.CLAVE_CACHE_ENV, "clave-de-test")
+        lectura.reinicia_clave_cache()
+        uno = lectura.firma_entrada({"a": 1, "b": [2, 3]})
+        otro = lectura.firma_entrada({"b": [2, 3], "a": 1})
+        con_sello = lectura.firma_entrada({"a": 1, "b": [2, 3], "hmac": "loquesea"})
+    lectura.reinicia_clave_cache()
+
+    assert uno == otro == con_sello
+
+
+def test_la_clave_vacia_apaga_la_firma_aunque_el_env_tenga_otra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Variable definida y vacia = firma apagada: no se cae al `.env`."""
+    monkeypatch.setenv(lectura.CLAVE_CACHE_ENV, "")
+    monkeypatch.setattr(lectura, "_clave_de_fichero_env", lambda: "clave-del-env")
+    lectura.reinicia_clave_cache()
+    try:
+        assert lectura._clave_cache() is None
+    finally:
+        lectura.reinicia_clave_cache()
 
 
 # -------------------------------------------------------------- firma motor

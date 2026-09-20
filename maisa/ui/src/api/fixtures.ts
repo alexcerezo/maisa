@@ -40,6 +40,17 @@ export const RUTA_FACTURAS = "/data/facturas.json";
 export const RUTA_MANIFIESTO = "/data/manifiesto.json";
 export const RUTA_SNAPSHOTS = "/data/snapshots.json";
 
+/**
+ * La salud de las dependencias y la version del servicio, congeladas.
+ *
+ * Son las dos unicas copias que **no** son una foto de los datos sino del
+ * servicio, y por eso el panel las marca como tales: sin conexion, `latencia_ms`
+ * es la que habia el dia del congelado y no la de ahora. Ensenarla sin decirlo
+ * seria presentar una medida vieja como si fuera un latido.
+ */
+export const RUTA_SALUD = "/data/salud.json";
+export const RUTA_META = "/data/meta.json";
+
 /** El detalle de una factura, ya congelado. */
 export function rutaDetalle(fileId: string): string {
     return `/data/facturas/${slugFileId(fileId)}.json`;
@@ -79,6 +90,7 @@ export const PDFS_CONGELADOS: ReadonlySet<string> = new Set([
     "FA-2508_consultoría.pdf",
     "2026-07-09_P010.pdf",
     "scan_002.pdf",
+    "e02_P002.pdf",
 ]);
 
 /**

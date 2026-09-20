@@ -37,7 +37,15 @@
  * ser identicos.
  */
 
-import { estadoCola, type EstadoCola, type FacturaResumen, type Resultado } from "./types";
+/*
+ * La extension `.ts` en el import es obligatoria y no es un descuido: este
+ * fichero lo carga `node tools/verificar_paridad.ts` tal cual, sin empaquetar, y
+ * el resolvedor de Node no adivina extensiones. Sin ella el script no arranca
+ * (`ERR_MODULE_NOT_FOUND`), que es justo la comprobacion que impide que el
+ * congelado y la API se separen. TypeScript lo admite porque `tsconfig.json` tiene
+ * `allowImportingTsExtensions` con `noEmit`.
+ */
+import { estadoCola, type EstadoCola, type FacturaResumen, type Resultado } from "./types.ts";
 
 /**
  * Tope de caracteres de una busqueda. Espejo de `MAX_QUERY_LEN` en

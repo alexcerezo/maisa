@@ -260,5 +260,77 @@ const statsDistintas = Object.keys(statsCongeladas).filter(
 comprobar("contadores", statsDistintas.length === 0, statsDistintas.join(", "));
 
 // --------------------------------------------------------------------------
+// 4. La salud y la meta del panel de trazabilidad
+// --------------------------------------------------------------------------
+console.log("\n4. /health y /api/meta, contra el congelado");
+
+/**
+ * El valor sin las latencias medidas.
+ *
+ * `latencia_ms` es un cronometro: cambia en cada llamada y no es una desviacion.
+ * Compararlo convertiria esta prueba en un fallo permanente y, peor, en un fallo
+ * que se aprende a ignorar. Se quita del arbol entero —`mongo`, `ocr` y
+ * `escritura` la traen cada uno— y se compara todo lo demas, que es lo que si
+ * tiene que cuadrar: dependencias, contadores, versiones y rutas.
+ */
+function sinLatencia(valor: unknown): unknown {
+    if (Array.isArray(valor)) return valor.map(sinLatencia);
+    if (valor !== null && typeof valor === "object") {
+        return Object.fromEntries(
+            Object.entries(valor as Record<string, unknown>)
+                .filter(([clave]) => clave !== "latencia_ms")
+                .map(([clave, v]) => [clave, sinLatencia(v)]),
+        );
+    }
+    return valor;
+}
+
+/**
+ * Las rutas de las claves que no coinciden, con los dos valores.
+ *
+ * Se devuelven las rutas y no un `true`/`false` porque el fallo util de esta
+ * prueba es *que campo* se movio: "el congelado y la API no cuadran" no dice si
+ * hay que regenerar los fixtures o si el servicio gano una dependencia nueva.
+ */
+function diferenciasDe(a: unknown, b: unknown, ruta = ""): string[] {
+    if (Array.isArray(a) && Array.isArray(b)) {
+        if (a.length !== b.length) return [`${ruta}: ${a.length} vs ${b.length}`];
+        return a.flatMap((v, i) => diferenciasDe(v, b[i], `${ruta}[${i}]`));
+    }
+    if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+        const claves = new Set([...Object.keys(a), ...Object.keys(b)]);
+        return [...claves].flatMap((clave) =>
+            diferenciasDe(
+                (a as Record<string, unknown>)[clave],
+                (b as Record<string, unknown>)[clave],
+                ruta ? `${ruta}.${clave}` : clave,
+            ),
+        );
+    }
+    return canonico(a) === canonico(b)
+        ? []
+        : [`${ruta}: congelado ${JSON.stringify(a)} vs API ${JSON.stringify(b)}`];
+}
+
+for (const [nombre, rutaWeb, rutaApi] of [
+    ["salud", "/data/salud.json", "/health"],
+    ["meta", "/data/meta.json", "/api/meta"],
+] as const) {
+    const congelado = await leerDelCongelado<unknown>(rutaWeb);
+    const respuesta = await fetch(`${API}${rutaApi}`);
+    if (!respuesta.ok) {
+        comprobar(`${nombre} (${rutaApi})`, false, `la API responde ${respuesta.status}`);
+        continue;
+    }
+    const vivo = (await respuesta.json()) as unknown;
+    const diferencias = diferenciasDe(sinLatencia(congelado), sinLatencia(vivo));
+    comprobar(
+        `${nombre}: el congelado es lo que devuelve ${rutaApi}`,
+        diferencias.length === 0,
+        diferencias.slice(0, 10).join("\n         "),
+    );
+}
+
+// --------------------------------------------------------------------------
 console.log(`\n${fallos === 0 ? "Todo cuadra." : `${fallos} comprobaciones fallan.`}`);
 process.exit(fallos === 0 ? 0 : 1);

@@ -58,6 +58,7 @@ Todo esto lo produce el motor; la API solo lo transporta. Los nombres de la izqu
 | **anotación de segunda lectura** | `maisa/outputs/outcomes_cola.jsonl`: **opcional** y **no es una entrega**. Es una línea por factura escalada que el OCR sí pudo leer, con la evidencia de lo que una segunda lectura (la nube) aporta. La escribe `motor/tools/cola_revision.py` y la API la sirve como `segunda_lectura`. **Nunca cambia `resultado`.** |
 | `segunda_lectura` | La anotación de arriba, ya en JSON: `{confirmable, desvio, campos, motivos}` en el detalle y `{confirmable, desvio}` en el listado. `confirmable: true` = la segunda lectura resuelve el identificador que faltaba, el maestro lo confirma y **la escalada desaparece**: se puede cerrar la incidencia con la evidencia delante. `desvio: true` = el documento trae un IBAN ajeno al proveedor del pedido: es una **señal de fraude** y no se recorta nunca. `null` = no hay anotación para esa factura. |
 | `revision` | El estado de revisión **humana** de una factura escalada: `{estado, revisor, comentario, actualizado_en}` o `null`. **No confundir con `segunda_lectura`**: esto lo decide una persona y vive en Mongo; aquello lo aporta la máquina y vive en un sidecar. Los dos conviven en el detalle. |
+| `correcciones` | Los datos que una persona **completó a mano** porque el motor no los supo leer (típico en las escaneadas): `{file_id, campos: [{campo, valor, valor_motor, nota, autor, actualizado_en}], actualizado_en}`. `valor_motor` es lo que había leído el motor —`null` si no leyó nada— y **se lee de la traza**, no se copia en Mongo. Corregir **no cambia `resultado`**: la corrección es una anotación al lado de la decisión, no una decisión nueva. |
 | `file_id` | El nombre del PDF **y la clave primaria de todo el sistema** (`2026-01-08_P001.pdf`). Con él se pide el detalle, el PDF, y se cruzan las decisiones. |
 | `resultado` · `result` | La decisión, y solo puede ser `PAGAR`, `NO_PAGAR` o `ESCALAR`. Es el mismo dato con dos nombres: `result` en el fichero de entrega, `resultado` en la API. |
 | `motivos` | Lista de motivos **en lenguaje natural**, pensados para que los lea un humano. `[]` (lista vacía) en un `PAGAR` limpio: **eso es lo bueno**, no un fallo. |
@@ -474,6 +475,11 @@ Los datos van bajo `/api`. `/health`, `/docs` y `/` quedan fuera del prefijo.
 | `GET` | `/api/facturas` | traza | La tabla del visor: listar y filtrar decisiones | `X-API-Key` · `If-None-Match` (opcional) | `200` (con `ETag`) · `304` sin cambios · `400` · `503` |
 | `GET` | `/api/facturas/{file_id}` | traza | El detalle: motivos, hechos y campos de una factura | `X-API-Key` | `200` · `404` · `503` |
 | `GET` | `/api/facturas/{file_id}/pdf` | disco | El PDF original, para incrustarlo en un `<iframe>` | `X-API-Key` | `200` PDF · `404` · `503` |
+| `GET` | `/api/facturas/{file_id}/anclajes` | traza + caché OCR | **Dónde está dentro del PDF cada dato leído**, para resaltarlo en el visor | `X-API-Key` | `200` · `404` · `503` |
+| `PUT` | `/api/facturas/{file_id}/revision` | Mongo (`revisiones`) | Marcar una escalada como `PENDIENTE`/`RESUELTA` | `X-API-Key` | `200` · `400` · `404` · `503` |
+| `GET` | `/api/facturas/{file_id}/correcciones` | Mongo (`correcciones`) + traza | Los datos que una persona completó a mano, **contrastados con lo que leyó el motor** | `X-API-Key` | `200` · `404` · `503` |
+| `PUT` | `/api/facturas/{file_id}/correcciones` | Mongo (`correcciones`) | **Completar a mano** un dato que el motor no supo leer | `X-API-Key` | `200` · `400` · `404` · `422` · `503` |
+| `DELETE` | `/api/facturas/{file_id}/correcciones` | Mongo (`correcciones`) | Deshacer una corrección, o todas | `X-API-Key` | `200` · `400` · `404` · `503` |
 | `GET` | `/api/asientos` | Mongo | El catálogo del ERP simulado | `X-API-Key` | `200` · `503` |
 | `GET` | `/api/asientos/{asiento_id}` | Mongo | Un asiento concreto | `X-API-Key` | `200` · `404` · `503` |
 | `GET` | `/api/snapshots` | Mongo | Las descargas del ERP y cuál está vigente | `X-API-Key` | `200` · `503` |
@@ -483,7 +489,18 @@ Los datos van bajo `/api`. `/health`, `/docs` y `/` quedan fuera del prefijo.
 | `GET` | `/api/expedientes/{file_id}` | Mongo (`expedientes`) | Un expediente concreto con su OCR y su decisión | `X-API-Key` | `200` · `404` · `503` |
 | `POST` | `/api/ocr` | proxy al OCR | Leer un PDF suelto sin pasar por el motor | `X-API-Key` + multipart | `200` · `400` · `413` · `422` · `502` · `503` · `504` |
 | `GET` | `/api/meta` | configuración | Saber qué versión y qué configuración está viva | `X-API-Key` | `200` |
-| `GET` | `/` | frontend estático | Servir el visor si `UI_DIR` (el build del panel, `ui/dist`) tiene `index.html`; si no, JSON informativo | — | `200` siempre |
+| `GET` | `/` y las rutas del panel | frontend estático | Servir el visor si `UI_DIR` (el build del panel, `ui/dist`) tiene `index.html`; si no, JSON informativo | — | `200` siempre |
+
+> **Las rutas del panel también son rutas de la API.** `/facturas`, `/facturas/{file_id}`,
+> `/escalabilidad` y `/trazabilidad` no existen en el disco: las resuelve react-router **en el
+> navegador**. Si no se sirviera `index.html` en ellas, abrir un enlace directo o recargar (F5)
+> daría el 404 JSON de Starlette (`{"detail":"Not Found"}`) aunque el visor cargase bien en `/`. De
+> eso se encarga `VisorSPA` (`app/main.py`), que cae a `index.html` solo cuando la ruta **no es un
+> fichero** y **no es de la API**. La superficie de la API (`/api/*`, `/health*`, `/docs`,
+> `/redoc`, `/openapi.json`) queda fuera a propósito: ahí un 404 sigue siendo JSON, para que un
+> error no se disfrace de página. Es el mismo `rewrite` que Vercel aplica en el despliegue estático
+> (`ui/README.md` §5), y por eso un fichero que falta también aquí responde `200 text/html`: el
+> cliente lo detecta comprobando el `content-type` (`esJson`) antes de parsear.
 
 ### 3.2 Parámetros
 
@@ -529,6 +546,52 @@ parte de lo que el listado sirve.
 (`^[^\W_][\w.\-]{0,180}$`, `\w` Unicode): sin barras, sin `..`, sin rutas absolutas y sin
 espacios. Admite acentos porque el corpus real los trae (`FA-2116_mensajería.pdf`): son 65 de
 las 500 facturas de la traza y con la clase ASCII anterior devolvían `422 peticion_invalida`.
+
+**`GET /api/facturas/{file_id}/anclajes`** — no tiene parámetros. Devuelve **dónde está cada dato
+dentro del PDF** para que el visor lo resalte. Trae **dos caminos distintos** porque son dos
+problemas distintos, y se distinguen por `origen`:
+
+```json
+{"file_id": "2026-01-08_P001.pdf", "sha256": "12a5e1ef…", "origen": "capa_texto",
+ "paginas": [], "aviso": null,
+ "campos": [{"campo": "nif", "etiqueta": "NIF", "valor": "B46102331",
+             "tokens": ["b46102331"], "pistas": ["nif", "cif"], "anclas": []}]}
+
+{"file_id": "copia_2026_0518.pdf", "sha256": "06a1a3d6…", "origen": "ocr",
+ "paginas": [{"pagina": 0, "ancho": 595.5, "alto": 842.0}],
+ "aviso": null,
+ "campos": [{"campo": "pedido", "etiqueta": "Pedido", "valor": "PO-2026-0721",
+             "tokens": ["po20260721"], "pistas": ["pedido", "po", "ref"],
+             "anclas": [{"pagina": 0, "bbox": [74.0, 161.5, 172.5, 180.75],
+                         "texto": "Peddo PO-2026-0721", "confianza": 0.95,
+                         "aproximado": false}]}]}
+```
+
+* **Capa de texto** (`origen: "capa_texto"`): cada campo trae `tokens` (el valor **normalizado**:
+  alfanuméricos en minúsculas, sin acentos) y `anclas` vacío. El rectángulo lo resuelve **el
+  navegador** con el mismo `pdf.js` que pinta la página. Calcularlo en el servidor daría cajas que
+  no cuadran: dos extractores de texto no parten las líneas igual.
+* **Escaneadas** (`origen: "ocr"`): además de `tokens` viene `anclas` ya resuelto, **en puntos del
+  PDF** — el servidor divide las coordenadas de la caché por la `escala` del render (píxeles del
+  bitmap, hasta 288 dpi). El visor debe **preferir `anclas` cuando hay**, porque una escaneada no
+  tiene capa de texto donde buscar los `tokens`. `paginas` da el tamaño de cada página **también en
+  puntos** (`595.5 × 842.0` es un A4), que es lo que necesita el visor para escalar. El `sha256` de
+  la traza localiza el fichero en la caché del motor (`OCR_CACHE_DIR`); si no está, `aviso` lo dice
+  y `anclas` viene vacío.
+* Los `tokens` se calculan **siempre** (son el valor que se puede comparar); lo que cambia entre los
+  dos orígenes es quién resuelve la caja: el navegador con `pdf.js`, o el servidor desde la caché.
+  Por eso un campo puede traer `tokens` y `anclas` vacío sin que nada vaya mal.
+* **Normalizar es lo que permite comparar**: el motor guarda el valor canónico (`3012.89`) y el PDF
+  escribe el suyo (`3.012,89 EUR`), así que ambos lados se reducen a alfanuméricos minúsculos.
+  La coincidencia es **aproximada** cuando hace falta (`aproximado: true`), porque el OCR no solo
+  sustituye caracteres, también los **elide** (`PO-2026-0480` → `PD-2026-0480`) y los **añade**
+  (`IBAN` → `1BAN`). Un token de menos de 6 caracteres nunca se aproxima, y por debajo de 4 no se
+  busca: **un resaltado equivocado es peor que ninguno**.
+* `confianza` es `0.95` si la línea que casa contiene además la etiqueta del campo (`TOTAL`, `NIF`),
+  `0.7` si casa suelta y `0.5` si es aproximada.
+* **Solo lectura**: no decide nada ni escribe nada. `campos` buscados: `pedido`, `nif`, `iban`,
+  `fecha`, `base`, `iva`, `total`. Los que vienen del ERP (`asiento`, `importe_erp`…) se excluyen a
+  propósito: no están en el documento y buscarlos da falsos positivos.
 
 **`GET /api/expedientes`**
 
@@ -975,6 +1038,25 @@ no de la API.
 `decision` va a `null` mientras `estado_proceso` no sea `COMPLETADA` (el validador `oneOf` de Mongo
 lo exige). `tamano_bytes` es `long` (`Int64`) y `sha256` casa `^[a-f0-9]{64}$`.
 
+**`ocr.paginas_geo`: la geometría para resaltar.** Cuando la subida pide OCR (`?ocr=true`), además
+de `ocr.lineas` se guarda `ocr.paginas_geo`: las mismas líneas con su caja, **la escala del render y
+el tamaño de la página**. Va aparte porque `ocr.lineas[].bbox` está en píxeles del bitmap y no
+incluye con qué escala se generó: sin `escala` una caja no se puede volver a poner sobre el PDF. La
+forma es la misma que la de la caché del motor (`motor/.cache/ocr/<sha256>.json`), para que el visor
+resuelva igual las escaneadas del lote y las que entran por la API:
+
+```json
+"ocr": {"motor": "rapidocr", "lineas": [ /* … */ ], "disponible": true, "paginas": 1,
+        "paginas_geo": [{"pagina": 0, "escala": 4.0, "ancho": 2382.0, "alto": 3368.0,
+                         "lineas": [{"texto": "TOTAL: 1.234,50 EUR", "score": 0.97,
+                                     "caja": [1200.0, 1608.0, 2080.0, 1712.0]}]}]}
+```
+
+Para pasar una `caja` a **puntos del PDF** (que es como pinta el visor) se divide por `escala`. La
+geometría se guarda **en el momento de la subida** y no después porque el payload del OCR se descarta
+al terminar la petición: es la única ocasión de conservarla. Si el OCR no devuelve cajas (motor
+`cloud`) o no se pidió, el campo no existe y la factura se lee igual, solo que sin resaltado.
+
 **Subir sin OCR** (lo normal: solo se guarda el PDF):
 
 ```console
@@ -1045,6 +1127,83 @@ content-disposition: inline; filename="2026-01-08_P001.pdf"
 > **La subida escribe.** Con `API_KEY` sin definir y el `8010` abierto, cualquiera que llegue al
 > puerto puede meter documentos. Ver el aviso de §2.4.
 
+### 3.9 Completar a mano los datos que faltan (`/correcciones`)
+
+El motor no siempre lee todo. En las 471 con capa de texto suele sacar los siete datos; en las
+**escaneadas** es normal que se quede sin NIF, sin IBAN o sin pedido. Hasta ahora eso era un callejón
+sin salida en el visor: se veía el PDF, se veía que faltaba el NIF, y no había dónde apuntarlo.
+
+Estos tres endpoints son ese sitio. **No cambian la decisión del motor** — y esa es la parte
+importante, no un detalle de implementación:
+
+* `resultado` sale de la traza (`outcomes_traza.jsonl`), que es **de solo lectura**.
+* La corrección vive en su propia colección de Mongo (`correcciones`), **al lado** de la decisión.
+* Si completar un NIF pudiera mover un `ESCALAR` a `PAGAR`, la traza dejaría de contar lo que de
+  verdad pasó y el sistema perdería justo lo que lo hace auditable: que la decisión y su evidencia
+  son inmutables y se pueden revisar meses después.
+
+Los campos corregibles son los que **están dentro del documento**: `pedido`, `nif`, `iban`, `fecha`,
+`base`, `iva` y `total`. Lo que viene del ERP (`asiento`, `importe_erp`, `estado_erp`, `nif_maestro`)
+**no se acepta**: no está en el PDF, así que la persona que mira el documento no puede verificarlo.
+
+**`GET /api/facturas/{file_id}/correcciones`**
+
+```json
+{"file_id": "2026-0233-A_catering.pdf",
+ "actualizado_en": "2026-09-20T05:43:59.912000",
+ "campos": [{"campo": "nif", "valor": "B90233418", "valor_motor": "B96233419",
+             "nota": "leido del sello", "autor": "ana",
+             "actualizado_en": "2026-09-20T05:43:59.870000"},
+            {"campo": "iban", "valor": "ES2100491500051234567890",
+             "valor_motor": "ES1800815290070001234567", "nota": null, "autor": "ana",
+             "actualizado_en": "2026-09-20T05:43:59.870000"}]}
+```
+
+* `valor_motor` es **lo que leyó el motor**, o `null` si no leyó nada. Es lo que permite pintar el
+  contraste en el visor («el motor leyó `B96233419`, tú dices `B90233418`») y, sobre todo, distinguir
+  **completar un hueco** (`valor_motor: null`) de **corregir un error de lectura**.
+* `valor_motor` **no se guarda en Mongo**: se lee de la traza en cada petición. Guardarlo sería una
+  copia que se queda obsoleta en cuanto el lote se reproduce.
+* Sin correcciones, `campos` es `[]` y `actualizado_en` es `null`. Nunca `404` por eso.
+* Si Mongo no responde, la respuesta es `200` con `campos: []`: la corrección es un extra y **no
+  puede impedir ver la factura**. (En el detalle pasa lo mismo con `revision`.)
+
+**`PUT /api/facturas/{file_id}/correcciones`**
+
+```json
+{"campos": {"nif": {"valor": "B90233418", "nota": "leido del sello"},
+            "iban": {"valor": "ES2100491500051234567890"}},
+ "autor": "ana"}
+```
+
+* `valor` es obligatorio y se recorta de espacios. Vacío o solo espacios → `400 valor_vacio` (para
+  quitar una corrección se borra, no se pone en blanco). Máximo **200** caracteres.
+* `nota` (≤ 500) y `autor` (≤ 120) son opcionales. Una nota en blanco se guarda como `null`.
+* **Es una fusión, no un reemplazo**: mandar solo `total` **no** borra el `nif` ya corregido. El
+  visor puede guardar campo a campo según el operador los completa.
+* Se puede mandar **un campo o los siete** de una vez.
+* La respuesta es la misma forma que la del `GET`, ya con todo lo que hay guardado.
+* Un campo no corregible → `400 campo_no_corregible`; `campos` vacío → `400 sin_campos`; falta
+  `valor` → `422` (lo valida Pydantic, no la lógica). **La validación va antes de escribir**: una
+  petición con un campo bueno y otro malo no deja medio guardado el bueno.
+
+**`DELETE /api/facturas/{file_id}/correcciones`**
+
+| Parámetro | Descripción |
+|---|---|
+| `campo` | Opcional. Si se omite, **borra todas**. Si se indica, solo esa. Un campo no corregible → `400 campo_no_corregible`. |
+
+* Borrar lo que no existe devuelve `200` con `campos: []`, no `404`: el resultado buscado es el
+  mismo.
+* Al quitar el último campo se borra el documento entero de Mongo. Un `campos: {}` huérfano haría
+  que el visor pintase un formulario vacío como si hubiera algo que mostrar.
+
+> **Qué guarda Mongo** (colección `correcciones`, un documento por factura, `_id` = `file_id`):
+> `{_id, campos: {<campo>: {valor, nota, autor, actualizado_en}}, creado_en, actualizado_en}`. El
+> validador del esquema (`docker/mongosh/02-schema-init.js`) rechaza cualquier clave que no sea uno
+> de los siete campos corregibles y cualquier `valor` fuera de `1..200` caracteres. El usuario de la
+> API (`albertitos_app`) ya es `readWrite`; el límite lo pone la capa de acceso, no los permisos.
+
 ---
 
 ## 4. Variables de entorno
@@ -1069,7 +1228,7 @@ Mongo vive en `maisa/.env`, que no se versiona.
 | `ERP_URL` | `http://127.0.0.1:8009` | Informativo; la API no consulta el ERP. |
 | `OUTPUTS_DIR` | `maisa/outputs` (repo) / `/datos/outputs` (Docker) | Traza y entrega del motor. Solo lectura. |
 | `FACTURAS_DIR` | `maisa/data/facturas` / `/datos/facturas` | PDFs originales. Solo lectura. |
-| `UI_DIR` | `maisa/ui/dist` / `/datos/ui/dist` | **Build** del frontend (`npm run build`), no su código fuente. Vite lo deja en `ui/dist`, que es lo que hay que servir: apuntando a `maisa/ui` se sirve la plantilla de Vite, que carga `/src/main.tsx` y deja el navegador en blanco. Si hay `index.html`, `/` lo sirve; si no, `/` devuelve un JSON informativo. La decisión se toma **en cada petición**, así que añadir o quitar el fichero no requiere reiniciar. |
+| `UI_DIR` | `maisa/ui/dist` / `/datos/ui/dist` | **Build** del frontend (`npm run build`), no su código fuente. Vite lo deja en `ui/dist`, que es lo que hay que servir: apuntando a `maisa/ui` se sirve la plantilla de Vite, que carga `/src/main.tsx` y deja el navegador en blanco. Si hay `index.html`, `/` lo sirve; si no, `/` devuelve un JSON informativo. La decisión se toma **en cada petición**, así que añadir o quitar el fichero no requiere reiniciar. Las demás rutas del panel que no son ficheros (`/facturas`, `/escalabilidad`, ...) también devuelven ese `index.html` (`VisorSPA`): ver §3.1. |
 | `CORS_ORIGINS` | 4 orígenes locales | Lista blanca separada por comas. Vacío = solo orígenes locales. `*` se acepta pero **desactiva las credenciales**. |
 | `CORS_ALLOW_CREDENTIALS` | `false` | Nunca `true` junto con `*`. |
 | `API_KEY` | vacío | Si se define, exige `X-API-Key` en todo salvo `/health`, `/health/ready`, `/docs` y `/openapi.json`. Si está vacío, la API arranca en **modo abierto** (lo avisa en el log y en `/api/meta`). |

@@ -1,0 +1,377 @@
+{
+  "procedencia": {
+    "generado_por": "maisa/ui/tools/generar_escalabilidad.py",
+    "fuente": "maisa/motor/docs/bench.json",
+    "medido_por": "maisa/motor/tools/bench.py",
+    "medido_en": "2026-09-19T11:11:53+0000",
+    "nota": "Todo lo que trae `medido: true` se cronometró en esta máquina. Lo que trae `medido: false` es extrapolación con el modelo declarado."
+  },
+  "hardware": {
+    "cpu_logicos": 2,
+    "memoria_total_gb": 11.65,
+    "plataforma": "Linux-6.17.0-1020-oracle-aarch64-with-glibc2.39",
+    "python": "3.12.3",
+    "carga_media_al_inicio": [
+      5.51,
+      4.85,
+      4.59
+    ],
+    "nota": "maquina compartida: la carga media se registra por medicion (ver 'carga' en cada bloque)"
+  },
+  "capacidad": {
+    "medido": true,
+    "lote": 500,
+    "mejor_trabajadores": 4,
+    "mejor_mediana_s": 3.69,
+    "mejor_facturas_por_s": 135.501,
+    "mejor_rango_relativo_pct": 8.65,
+    "con_traza": {
+      "trabajadores": 4,
+      "segundos": 4.7396,
+      "eventos": 1002
+    },
+    "trabajadores": [
+      {
+        "trabajadores": 1,
+        "mediana_s": 4.7576,
+        "min_s": 4.6681,
+        "max_s": 5.2029,
+        "rango_relativo_pct": 11.24,
+        "facturas_por_s": 105.095
+      },
+      {
+        "trabajadores": 2,
+        "mediana_s": 4.3893,
+        "min_s": 4.0157,
+        "max_s": 4.7243,
+        "rango_relativo_pct": 16.14,
+        "facturas_por_s": 113.913
+      },
+      {
+        "trabajadores": 4,
+        "mediana_s": 3.69,
+        "min_s": 3.662,
+        "max_s": 3.9813,
+        "rango_relativo_pct": 8.65,
+        "facturas_por_s": 135.501
+      },
+      {
+        "trabajadores": 8,
+        "mediana_s": 3.7768,
+        "min_s": 3.6082,
+        "max_s": 3.8765,
+        "rango_relativo_pct": 7.1,
+        "facturas_por_s": 132.387
+      }
+    ],
+    "fases": [
+      {
+        "fase": "Cargar Excel + snapshot",
+        "segundos": 0.1055,
+        "reparto_pct": 2.8
+      },
+      {
+        "fase": "Leer los 500 PDF",
+        "segundos": 3.5681,
+        "reparto_pct": 95.4
+      },
+      {
+        "fase": "Decidir las 500 facturas",
+        "segundos": 0.0626,
+        "reparto_pct": 1.7
+      },
+      {
+        "fase": "Emitir el JSONL",
+        "segundos": 0.0027,
+        "reparto_pct": 0.1
+      }
+    ],
+    "total_fases_s": 3.7389,
+    "decision_ms_por_factura": 0.125,
+    "reparto_lectura": {
+      "capa_texto": 471,
+      "ocr": 29,
+      "pct_capa_texto": 94.2,
+      "pct_ocr": 5.8
+    },
+    "lectura_texto": {
+      "ms_por_factura": 7.09,
+      "facturas_por_s": 141.05
+    },
+    "lectura_cache": {
+      "ms_por_factura": 3.039,
+      "facturas_por_s": 329.038
+    },
+    "ocr": {
+      "servicio_s_por_factura": 4.4667,
+      "facturas_por_hora_por_ranura": 806.0,
+      "paraleliza_el_contenedor": false,
+      "speedup_1_a_4_hilos": 1.03,
+      "frio_serial_s_por_factura": 4.076,
+      "frio_serial_facturas_por_s": 0.2375
+    }
+  },
+  "limites": [
+    {
+      "titulo": "El OCR es el cuello de botella",
+      "magnitud": "4,47 s por factura escaneada",
+      "detalle": "El servicio de visión atiende 806 facturas escaneadas por hora y por ranura, y no paraleliza: subir de 1 a 4 hilos acelera ×1,03. Todo el gasto del sistema vive aquí, y solo afecta al 5,8 % del lote.",
+      "origen": "bench.json · endpoint · ocr_frio_serial vs ocr_frio_4"
+    },
+    {
+      "titulo": "La capa de texto comparte GIL",
+      "magnitud": "×1,29 de 1 a 4 trabajadores",
+      "detalle": "Leer los 500 PDF es el 95,4 % del tiempo, y los hilos de Python no reparten ese trabajo entre núcleos: pasar de 1 a 4 trabajadores baja de 4,76 s a 3,69 s. El siguiente escalón es repartir el directorio entre procesos, no subir el número de hilos.",
+      "origen": "bench.json · lote_500_caliente · por_trabajadores"
+    },
+    {
+      "titulo": "La caché de OCR no está firmada",
+      "magnitud": "sin sello criptográfico",
+      "detalle": "Quien pueda escribir en `.cache/ocr` puede cambiar el texto que se lee y, con él, el motivo que se publica. La caché está indexada por sha256 del PDF, así que la clave es fuerte, pero el contenido no lleva firma.",
+      "origen": "motor/docs/resiliencia.md §6.2"
+    },
+    {
+      "titulo": "El límite de peticiones del ERP es por cliente",
+      "magnitud": "10 req/s, autolimitado a 8",
+      "detalle": "El cliente se frena a 8 req/s con un 20 % de margen, pero el presupuesto es por cliente: ocho procesos en paralelo se pisan entre sí y necesitan un reparto explícito del límite antes de replicar.",
+      "origen": "motor/docs/resiliencia.md §3.2 y §6.5"
+    },
+    {
+      "titulo": "El ERP falla cada diez consultas",
+      "magnitud": "1 de cada 10 · 3 absorbidos en 30 peticiones",
+      "detalle": "`ORA-00600` no es una avería puntual del ERP de Miralmar: es su tasa de fallo. El bridge devuelve error interno en la décima consulta autenticada, así que el número de reintentos crece con el volumen y no con la gravedad del incidente. Los 516 asientos se descargan enteros en 30 peticiones con 3 absorbidos y 0 errores al llamante; en la prueba de 320 consultas fueron 35. Es un crecimiento lineal, y es lo que hay que presupuestar al multiplicar el lote: no la caída, la tasa.",
+      "origen": "motor/docs/resiliencia.md §3.1 y §3.3 · panel de reintentos del ERP"
+    },
+    {
+      "titulo": "La sesión del ERP caduca por peticiones, no por consultas",
+      "magnitud": "renovación por réplica",
+      "detalle": "Los reintentos consumen usos de sesión. Con varias réplicas, la renovación preventiva tiene que ir por réplica; compartirla multiplica las caídas.",
+      "origen": "motor/docs/resiliencia.md §6.6"
+    },
+    {
+      "titulo": "El lote no se reanuda desde el CLI",
+      "magnitud": "4,14 s de reejecución en caliente",
+      "detalle": "La reanudación existe en el motor (`continuar=True`) pero no está cableada a `procesa.py`: si el proceso muere, hoy se reejecuta el lote. En caliente cuesta 4,14 s; a 50 000 facturas deja de ser gratis.",
+      "origen": "motor/docs/resiliencia.md §6.4"
+    },
+    {
+      "titulo": "Las entradas se cargan por worker",
+      "magnitud": "0,105 s a 516 asientos",
+      "detalle": "El Excel del maestro y el snapshot del ERP se leen enteros en cada proceso. A 1 000 000 de facturas el cuello deja de ser la lectura y pasa a ser cargar el maestro N veces: toca índice compartido o lectura por rango.",
+      "origen": "bench.json · desglose_4 · carga_entradas_s"
+    },
+    {
+      "titulo": "Solo se lee PDF",
+      "magnitud": "0 lectores para otros formatos",
+      "detalle": "El pipeline actual abre PDF y nada más. Un correo, una imagen suelta o una hoja de cálculo no tienen por dónde entrar: no hay nada que cronometrar porque no hay lector.",
+      "origen": "bench.json · no_medido"
+    },
+    {
+      "titulo": "No hay tarifa en euros",
+      "magnitud": "vCPU·s, no €",
+      "detalle": "No tenemos la tarifa de esta máquina, así que publicamos vCPU·s y la fórmula. Quien sepa el precio por vCPU·s la multiplica y obtiene euros; nosotros no inventamos el número.",
+      "origen": "bench.json · no_medido"
+    }
+  ],
+  "coste": {
+    "medido": true,
+    "hoy_eur": 0,
+    "nota_hoy": "0 € y seguirá en 0 €: todo corre en local (capa de texto + OCR en contenedor + ERP en localhost). No hay llamadas de pago, ni credenciales, ni red externa.",
+    "unidad": "vCPU-s del servicio OCR",
+    "por_factura_texto_vcpu_s": 0,
+    "por_factura_cache_vcpu_s": 0,
+    "por_factura_escaneada_vcpu_s": 4.4667,
+    "formula_tiempo": "T(N) = t_fijo + N * (f_texto*c_texto + f_ocr*c_ocr_del_regimen/S_ocr + c_decision)   [S_ocr solo si el termino es OCR en frio]",
+    "formula_euros": "coste_EUR = N_escaneadas * s_OCR_por_factura * precio_EUR_por_vCPU_s  (el precio NO se mide aqui: no tenemos tarifa de esta maquina)",
+    "regimenes": {
+      "A_estacionario": "c_ocr_del_regimen = c_cache_ocr (la escaneada ya esta en cache)",
+      "B_lote_nuevo": "c_ocr_del_regimen = c_ocr_frio, dividido por S_ocr si paraleliza",
+      "C_peor_caso": "f_texto = 0, f_ocr = 1 y c_ocr_del_regimen = c_ocr_frio"
+    },
+    "constantes": {
+      "t_fijo_s": 0.1055,
+      "c_texto_s_por_factura": 0.00709,
+      "c_cache_ocr_s_por_factura": 0.003039,
+      "c_ocr_s_por_factura_serial": 4.076,
+      "S_ocr_paralelismo_medido": 1.03,
+      "c_decision_s_por_factura": 0.000125,
+      "f_texto": 0.942,
+      "f_ocr": 0.058
+    },
+    "contraste": {
+      "regimen": "A_estacionario_cache_caliente",
+      "medido_s": 3.69,
+      "modelo_s": 3.6,
+      "error_relativo_pct": -2.6
+    },
+    "escenarios": [
+      {
+        "clave": "A_estacionario_cache_caliente",
+        "nombre": "Régimen estacionario",
+        "cuando": "Lo de cada día",
+        "descripcion": "lo de cada dia: mismo reparto que La Caja y las escaneadas ya vistas (la cache es por sha256 del PDF, asi que no se vuelven a pagar)",
+        "coste_ocr_s": 0.003,
+        "tiempos_s": {
+          "5000": 35.0,
+          "50000": 349.1,
+          "1000000": 6980.3
+        },
+        "facturas_por_s": {
+          "5000": 142.83,
+          "50000": 143.22,
+          "1000000": 143.26
+        }
+      },
+      {
+        "clave": "B_lote_nuevo_mix_de_la_caja",
+        "nombre": "Lote nuevo con el mix de La Caja",
+        "cuando": "El sábado",
+        "descripcion": "un lote nuevo con el mismo mix: el 5,8 % de escaneadas paga OCR en frio",
+        "coste_ocr_s": 4.076,
+        "tiempos_s": {
+          "5000": 1183.9,
+          "50000": 11838.1,
+          "1000000": 236759.0
+        },
+        "facturas_por_s": {
+          "5000": 4.22,
+          "50000": 4.22,
+          "1000000": 4.22
+        }
+      },
+      {
+        "clave": "C_peor_caso_todo_escaneado_nuevo",
+        "nombre": "Peor caso: todo escaneado nuevo",
+        "cuando": "Sin caché",
+        "descripcion": "peor caso: el 100 % de los PDFs son escaneos que nadie ha visto antes",
+        "coste_ocr_s": 4.076,
+        "tiempos_s": {
+          "5000": 19824.4,
+          "50000": 198243.4,
+          "1000000": 3964865.7
+        },
+        "facturas_por_s": {
+          "5000": 0.25,
+          "50000": 0.25,
+          "1000000": 0.25
+        }
+      }
+    ],
+    "objetivos": [
+      500,
+      5000,
+      50000,
+      1000000
+    ],
+    "vcpu": {
+      "para_10000_escaneadas": 44667.0,
+      "para_1000000_escaneadas": 4466700.0
+    }
+  },
+  "plan": {
+    "volumen": [
+      {
+        "titulo": "Repartir por `file_id` y añadir procesos, no hilos",
+        "detalle": "El motor es sin estado y la salida es un JSONL que se concatena: no hay coordinación entre fragmentos. Se trocea el directorio en N partes y se lanzan N procesos. Medido: el lote caliente baja de 4,76 s a 3,69 s al pasar de 1 a 4 trabajadores, y ahí se acaba el GIL.",
+        "coste": "0 €",
+        "cuando": "Primer paso, cualquier volumen"
+      },
+      {
+        "titulo": "Confiar en la caché de OCR (es la palanca grande)",
+        "detalle": "La caché es por sha256 del PDF, no por nombre: un documento ya visto cuesta 3,04 ms y 0 vCPU·s de OCR. A 50 000 facturas con el mix real, el gasto de visión es de 12 953 vCPU·s una sola vez; después, cero. Reejecutar el lote completo es gratis, y por eso el escenario del sábado no asusta.",
+        "coste": "0 €",
+        "cuando": "Continuo, desde hoy"
+      },
+      {
+        "titulo": "Dar al OCR su propio pool (o varias réplicas)",
+        "detalle": "Es el único término que no es lineal con la CPU disponible: 4,47 s por factura y ranura, y el contenedor solo acelera ×1,03. A 10× escala se le dan ranuras dedicadas en vez de dejar que compita con la lectura de texto por los mismos núcleos.",
+        "coste": "Coste del OCR",
+        "cuando": "Al pasar de ~5 000 facturas nuevas"
+      },
+      {
+        "titulo": "No bajar el umbral de la capa de texto",
+        "detalle": "Cada punto de `calidad_texto_minima` que se baja manda más facturas a visión: es la variable que mueve el coste de 0 a 4,08 vCPU·s por factura. La política conservadora es no bajarlo; el precio es alguna revisión humana de más, y ese precio se paga con gusto.",
+        "coste": "0 €",
+        "cuando": "Decisión de política, no de capacidad"
+      },
+      {
+        "titulo": "Trocear las entradas antes que el motor",
+        "detalle": "`t_fijo` (Excel + snapshot) son 0,105 s a 516 asientos, y hoy cada worker lo paga entero. A 1 000 000 de facturas el cuello pasa a ser cargar el maestro: índice en memoria compartida o lectura por rango.",
+        "coste": "0 €",
+        "cuando": "A partir de ~100 000 facturas"
+      },
+      {
+        "titulo": "Repartir el presupuesto de 429 entre réplicas",
+        "detalle": "El freno de 8 req/s es por cliente. Escalar en horizontal sin repartir el límite hace que las réplicas se pisen: hay que fijar cuota por proceso y renovar la sesión por réplica.",
+        "coste": "0 €",
+        "cuando": "Antes de la segunda réplica"
+      },
+      {
+        "titulo": "Cablear la reanudación al CLI",
+        "detalle": "El motor ya sabe continuar un lote (`continuar=True`) y encadenar el hash de la traza. Falta exponerlo en `procesa.py`: a 50 000 facturas, reejecutar porque un proceso murió deja de ser gratis.",
+        "coste": "0 €",
+        "cuando": "Antes de pasar de ~10 000 facturas"
+      }
+    ],
+    "tipos_archivo": [
+      {
+        "tipo": "Correo (.eml / .msg)",
+        "lector": "Cuerpo + adjuntos",
+        "detalle": "El cuerpo pasa a `texto` y cada adjunto PDF entra por el lector actual. El `file_id` es el del mensaje y los adjuntos cuelgan de él, para no contar dos veces la misma factura.",
+        "ocr": "Solo el adjunto escaneado",
+        "estado": "Contrato listo, falta el lector"
+      },
+      {
+        "tipo": "Imagen suelta (.jpg / .png / .tiff)",
+        "lector": "Visión directa",
+        "detalle": "No hay capa de texto: entra en el peldaño de visión y sale con `metodo=vision_ocr`. La caché por sha256 ya cubre el reprocesado, así que una imagen vista no se vuelve a pagar.",
+        "ocr": "Siempre, 4,08 s",
+        "estado": "Requiere un peldaño de entrada nuevo"
+      },
+      {
+        "tipo": "Hoja de cálculo (.xlsx / .csv)",
+        "lector": "Celdas → candidatos",
+        "detalle": "El maestro ya se lee de Excel, así que el motor de celdas existe. Lo que falta es mapear columnas a los candidatos (`nif`, `iban`, `pedido`, `fecha`, `base`, `iva`, `total`) con su confianza.",
+        "ocr": "Nunca",
+        "estado": "Aprovecha el lector del maestro"
+      },
+      {
+        "tipo": "Factura electrónica (XML / UBL / FacturaE)",
+        "lector": "Determinista",
+        "detalle": "El caso más barato y el más exacto: campos etiquetados, sin visión y sin regex. Ya hay precedente en el proyecto leyendo XML en ISO-8859-1, así que la trampa de codificación está identificada.",
+        "ocr": "Nunca",
+        "estado": "El más rentable de añadir"
+      },
+      {
+        "tipo": "Documento de texto (.docx / .odt)",
+        "lector": "Texto del documento",
+        "detalle": "Se extrae el texto y se aplica la misma extracción por patrones que hoy corre sobre la capa de texto del PDF: el escalón `capa_texto` ya está medido a 7,09 ms y 0 vCPU·s.",
+        "ocr": "Nunca, si trae texto",
+        "estado": "Reutiliza la extracción actual"
+      }
+    ],
+    "pasos_tipo_nuevo": [
+      "Un lector que devuelva el contrato `Lectura` (`file_id`, `paginas`, `metodo`, candidatos de `nif`/`iban`/`pedido`/`fecha`/`base`/`iva`/`total`, `texto`, `texto_ilegible`, `sospechosos`). El motor de decisión no cambia: consume lecturas, no PDFs.",
+      "Un valor nuevo en el enum de `escalon` de la traza (`capa_texto`, `cache_ocr`, `vision_ocr`, `degradado`…). Sin él, la lectura no se puede auditar.",
+      "El `sha256` del contenido como clave de caché, igual que hoy: es lo que hace que un documento ya visto cueste 0.",
+      "El mapa de etiquetas del panel (`ETIQUETA_ESCALON` en `src/theme.ts`), que hoy es cerrado de dos valores.",
+      "Una prueba por tipo en el banco de oro, con su `file_id` y su resultado esperado: el motor no decide si no puede decidir."
+    ]
+  },
+  "supuestos": [
+    "El reparto de La Caja (94,2 % capa de texto / 5,8 % escaneadas) se mantiene.",
+    "La cache OCR es por sha256 del PDF: un documento ya visto no se vuelve a pagar, asi que en regimen estacionario el OCR se paga una vez por documento nuevo.",
+    "El escalon OCR paraleliza con el factor S_ocr medido; si el contenedor es single-thread real, S_ocr es 1 y el escenario C no mejora al subir trabajadores.",
+    "El coste de decision es lineal en el numero de facturas (una factura, una decision; no hay estado compartido entre facturas).",
+    "La maquina es la de este hackathon (2 vCPU, 11 GB). Mas nucleos no aceleran la capa de texto (GIL + pypdf) pero si el OCR (I/O + proceso externo).",
+    "Se asume que el Excel y el snapshot crecen poco: t_fijo se mide a 516 asientos y 11 proveedores; a 1 M de facturas habria que shardear las entradas.",
+    "El coste por factura escaneada se mide con el contenedor OCR de este entorno; otro motor o otro hardware cambian c_ocr, no la estructura del modelo."
+  ],
+  "no_medido": [
+    "Coste en EUR: no tenemos la tarifa de esta maquina, asi que damos vCPU·s y la formula.",
+    "Latencia del ERP real: el lote se mide contra el snapshot; una consulta en vivo paga ademas el rate-limit de 10 req/s del bridge (medido en otro sitio, no aqui).",
+    "Tipos de archivo distintos de PDF (emails, hojas de calculo): el pipeline actual no los lee; no hay nada que cronometrar.",
+    "Comportamiento con varios procesos en paralelo sobre la misma cache OCR.",
+    "La calidad del OCR (aciertos): esto mide tiempo, no acierto."
+  ]
+}

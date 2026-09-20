@@ -376,6 +376,134 @@ export interface FacturaDetalle {
     segunda_lectura: SegundaLectura | null;
     /** El mismo objeto que devuelve el listado. No hace falta pedir la tabla. */
     resumen: FacturaResumen;
+    /**
+     * Lo que el operador ha corregido a mano. Viene en el detalle para que el
+     * visor no tenga que pedirlo aparte; `campos: []` es lo normal.
+     */
+    correcciones: Correcciones;
+}
+
+/**
+ * Los siete campos que la API sabe localizar dentro del documento.
+ *
+ * No es una lista abierta como `campos`: son justo los que están escritos en el
+ * papel. Los que vienen del ERP (`asiento`, `importe_erp`, `nif_maestro`...) se
+ * quedan fuera a propósito, porque buscar en el PDF un dato que no está escrito
+ * en él solo puede dar un falso positivo.
+ */
+export const CAMPOS_ANCLABLES = [
+    "pedido",
+    "nif",
+    "iban",
+    "fecha",
+    "base",
+    "iva",
+    "total",
+] as const;
+export type CampoAnclable = (typeof CAMPOS_ANCLABLES)[number];
+
+/** De dónde salieron los datos del documento. `ocr` solo en 29 de las 500. */
+export type OrigenAnclajes = "capa_texto" | "ocr";
+
+/** Una caja donde está escrito un dato, en puntos del PDF y con origen arriba-izquierda. */
+export interface Ancla {
+    /** Índice de página, empezando en cero. */
+    pagina: number;
+    /** `[x0, y0, x1, y1]` en puntos del PDF. `y` crece hacia abajo. */
+    bbox: [number, number, number, number];
+    /** La línea del OCR donde se encontró. Útil para depurar, no para pintar. */
+    texto: string;
+    /** 0.95 con la etiqueta al lado, 0.7 suelto, 0.5 con erratas. */
+    confianza: number;
+    /** `true` cuando el token no casaba exacto y se aceptó una errata del OCR. */
+    aproximado: boolean;
+}
+
+/**
+ * El tamaño de una página **en puntos del PDF**, no en píxeles del bitmap.
+ *
+ * La API ya ha dividido por la escala del OCR (hasta 288 dpi), así que esto y
+ * los `bbox` están en la misma unidad y el navegador solo tiene que multiplicar
+ * por la escala a la que pinte. A4 = 595.5 x 842.
+ */
+export interface PaginaGeo {
+    pagina: number;
+    ancho: number;
+    alto: number;
+}
+
+/** Un campo con todo lo necesario para buscarlo en el documento. */
+export interface CampoAnclado {
+    campo: CampoAnclable;
+    /** En castellano, para el rótulo: `Base imponible`. */
+    etiqueta: string;
+    /** El valor que leyó el motor, tal cual. */
+    valor: string;
+    /**
+     * Con lo que hay que buscar. Normalmente uno; la fecha trae varios porque el
+     * motor la guarda en ISO (`2026-01-08`) y el papel la escribe en español
+     * (`08/01/2026`). Ya vienen normalizados: minúsculas y sin separadores.
+     */
+    tokens: string[];
+    /**
+     * Palabras que suelen acompañar al dato en el documento (`nif`, `cif`). Sirven
+     * para distinguir el dato de una cifra que se le parece.
+     */
+    pistas: string[];
+    /**
+     * Dónde está escrito, según el OCR. **Vacío en las 471 con capa de texto**:
+     * ahí el navegador tiene el texto de verdad y busca el mismo, que es más
+     * exacto que fiarse de cajas de un OCR que no hizo falta.
+     */
+    anclas: Ancla[];
+}
+
+/** `GET /api/facturas/{file_id}/anclajes` — dónde está escrito cada dato. */
+export interface Anclajes {
+    file_id: string;
+    sha256: string;
+    origen: OrigenAnclajes;
+    /** Vacío cuando `origen` es `capa_texto`. */
+    paginas: PaginaGeo[];
+    campos: CampoAnclado[];
+    /**
+     * Por qué no se puede resaltar, o `null`. Hoy solo se rellena en un caso: una
+     * escaneada cuya caché de OCR es anterior a que la caché guardara cajas.
+     */
+    aviso: string | null;
+}
+
+/** Una corrección guardada, con el contraste contra lo que leyó el motor. */
+export interface CorreccionGuardada {
+    campo: CampoAnclable;
+    /** Lo que dice el operador. */
+    valor: string;
+    /**
+     * Lo que leyó el motor, o `null` si no leyó nada.
+     *
+     * **No se guarda en Mongo**: se recalcula de la traza en cada respuesta. Una
+     * copia en la base de datos se quedaría obsoleta en cuanto el lote se
+     * reprodujera, y el contraste es justo lo que hay que poder enseñar.
+     */
+    valor_motor: string | null;
+    nota: string | null;
+    /** Quién lo corrigió. Texto libre, no un usuario autenticado. */
+    autor: string | null;
+    actualizado_en: string;
+}
+
+/**
+ * `GET /api/facturas/{file_id}/correcciones` — los datos completados a mano.
+ *
+ * Es **una anotación, no una decisión**: corregir un campo no cambia el
+ * `resultado` de la factura. El motor sigue diciendo lo que dijo y la API no
+ * decide nada; el operador solo deja escrito lo que ha visto.
+ */
+export interface Correcciones {
+    file_id: string;
+    campos: CorreccionGuardada[];
+    /** `null` cuando no hay ninguna corrección. */
+    actualizado_en: string | null;
 }
 
 /**
@@ -462,6 +590,178 @@ export interface Snapshot {
     reintentos: Record<string, number>;
     duracion_ms: number;
     esquema_version: string;
+}
+
+/**
+ * Una dependencia de la API tal como la mide `GET /health`.
+ *
+ * Las claves propias de cada dependencia van todas opcionales en la misma
+ * interfaz (`db` solo la trae `mongo`, `url` y `motores` solo `ocr`, `bucket`
+ * solo `escritura`) y el índice abierto deja entrar las que la API añada. Es
+ * deliberado: cerrar esto en una unión de tres formas obligaría a tocar el
+ * panel cada vez que el servicio gane una dependencia, y lo que se quiere es
+ * **enseñarla aunque no se sepa nombrarla**.
+ */
+export interface Dependencia {
+    ok: boolean;
+    nombre: string;
+    /**
+     * Cuánto tardó la comprobación, en milisegundos. Es una medida del momento,
+     * no un umbral: `2,8 ms` contra `900 ms` dice más que un `ok`, y por eso se
+     * enseña al lado y no en lugar del estado.
+     */
+    latencia_ms: number;
+    /** Solo en `mongo`: la base contra la que se concilia. */
+    db?: string;
+    /**
+     * Solo en `mongo`: los índices que el esquema declara y la base no tiene.
+     * Vacío es lo normal, y una lista con algo es trabajo pendiente de verdad.
+     */
+    indices_faltantes?: Record<string, string[]>;
+    /** Solo en `ocr`. */
+    url?: string;
+    estado_ocr?: string;
+    /** `auto` | `local` | `nube`. Cómo está configurado, no qué motor contestó. */
+    motor?: string;
+    motores?: MotoresOcr;
+    /** Solo en `escritura`: el bucket de PDFs y sus tres colecciones. */
+    bucket?: string;
+    expedientes?: number;
+    pdfs?: number;
+    eventos?: number;
+    [clave: string]: unknown;
+}
+
+/**
+ * Los dos motores de OCR que la API lleva configurados.
+ *
+ * Están aquí porque el **estado del cortocircuito** (`circuit`) es la única
+ * señal de error que el servicio publica sobre sí mismo: cuando la nube encadena
+ * fallos, el motor deja de intentarlo durante un minuto y todo lo ilegible
+ * empieza a escalarse. Sin este dato, "hoy se escala más" no tendría explicación
+ * en pantalla.
+ */
+export interface MotoresOcr {
+    local?: {
+        enabled?: boolean;
+        /** `false` significa que el modelo no está en memoria todavía. */
+        loaded?: boolean;
+        runtime?: string;
+        models?: Record<string, string>;
+        [clave: string]: unknown;
+    };
+    cloud?: {
+        enabled?: boolean;
+        model?: string;
+        base_url?: string;
+        /** `"configurado"` o `"ausente"`. La API nunca devuelve el token. */
+        token?: string;
+        /**
+         * Cuántos fallos seguidos de la nube abren el cortacircuitos. Es el
+         * divisor del contador que se enseña (`2 de 3`), así que sin él el
+         * número de fallos no diría si está cerca del límite o no.
+         */
+        max_failures?: number;
+        circuit?: {
+            failures?: number;
+            /** `closed` | `open` | `half-open`. Con guion, como lo publica el servicio. */
+            circuit?: string;
+            cooldown_remaining?: number;
+            last_error?: string | null;
+            [clave: string]: unknown;
+        };
+        [clave: string]: unknown;
+    };
+    [clave: string]: unknown;
+}
+
+/**
+ * `GET /health` — la salud de las dependencias de la API.
+ *
+ * Es la fuente de **estado** y de **errores** del panel de trazabilidad, y se
+ * enseña aunque vaya todo bien, por el mismo motivo que la tarjeta de salud del
+ * listado: media base de datos caída y una base de datos que responde se
+ * parecen demasiado si la única que habla es la que va mal.
+ *
+ * Dos matices que el contrato obliga a respetar:
+ *
+ * 1. **`/health` siempre contesta 200.** El 503 vive en `/health/ready`, que
+ *    depende del OCR. Por eso aquí se mira `criticas_caidas` y no el código
+ *    HTTP, y por eso `fuente.ts` no usa ninguna de las dos para elegir fuente.
+ *
+ * 2. **`estado` se deja como `string`.** Hoy es `"ok"`, pero es un valor que
+ *    calcula el servicio y compararlo contra una lista cerrada solo serviría
+ *    para que el panel se rompa el día que publique otro.
+ */
+export interface Salud {
+    estado: string;
+    servicio: string;
+    dependencias: Record<string, Dependencia>;
+    /** Las que, caídas, dejan la API sin poder hacer su trabajo. */
+    dependencias_criticas: string[];
+    /** El subconjunto de las críticas que **no** contesta. Vacío es lo normal. */
+    criticas_caidas: string[];
+    datos: {
+        /** La traza que sostiene el listado: cuántas facturas y cuántas rotas. */
+        traza: { ok: boolean; facturas: number; lineas_invalidas: number };
+        [clave: string]: unknown;
+    };
+}
+
+/**
+ * `GET /api/meta` — qué versión es esto y cómo está montado.
+ *
+ * Es la fuente de **versiones** del panel: la de la API, la del motor
+ * (`versiones_norma` es la que decide si una factura se juzgó con la norma que
+ * se está enseñando) y las rutas de los ficheros que sostienen la traza.
+ *
+ * Se usa también como **evidencia**: `traza_paths` y `entrega_existe` son la
+ * cadena de custodia. Un expediente sin el fichero del que salió es una captura
+ * de pantalla, no una prueba.
+ */
+export interface Meta {
+    api_version: string;
+    servicio: string;
+    /** `true` cuando la API no pide `X-API-Key`. Hoy lo es. */
+    modo_abierto: boolean;
+    motor: {
+        /**
+         * Cuántas facturas van con cada versión de la norma. Hoy una sola clave,
+         * y el día que haya dos es exactamente lo que hay que ver aquí.
+         */
+        versiones_norma: Record<string, number>;
+        facturas_en_traza: number;
+        lineas_invalidas: number;
+    };
+    configuracion: {
+        /** `uri_sanitizada` viene con la contraseña ya tapada por la API. */
+        mongo: { db: string; uri_sanitizada: string; timeout_ms: number; modo: string };
+        ocr: { url: string };
+        erp: { url: string; nota: string };
+        datos: {
+            outputs_dir: string;
+            facturas_dir: string;
+            facturas_dirs: string[];
+            traza_existe: boolean;
+            /** Los NDJSON de los que sale el listado. Son dos: un lote por fichero. */
+            traza_paths: string[];
+            entrega_existe: boolean;
+            cola_existe: boolean;
+            ocr_cache_dir?: string;
+            ocr_cache_existe?: boolean;
+        };
+        ui: { dir: string; index_html: string; disponible: boolean };
+        api: {
+            puerto: number;
+            api_key_requerida: boolean;
+            cors_origins: string[];
+            cors_abierto: boolean;
+            dependencias_criticas: string[];
+            max_upload_mb: number;
+            limite_paginacion: { por_defecto: number; maximo: number };
+            subidas: { habilitadas: boolean; [clave: string]: unknown };
+        };
+    };
 }
 
 /**

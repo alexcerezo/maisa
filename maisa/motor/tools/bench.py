@@ -10,8 +10,11 @@ crudos en ``docs/bench.json`` mas una tabla legible en ``docs/capacidad.md``.
 Que mide:
 
 1. **Lote completo de 500 con cache caliente** para ``--trabajadores`` 1, 2, 4 y
-   8, con ``--repeticiones`` pasadas por configuracion: se reporta mediana,
-   minimo, maximo, desviacion tipica y rango relativo (nunca una sola muestra).
+   8, con ``--repeticiones`` pasadas por configuracion, y para **los dos repartos
+   de la lectura** (``--modos hilos procesos``): se reporta mediana, minimo,
+   maximo, desviacion tipica y rango relativo (nunca una sola muestra). Los dos
+   repartos se miden seguidos, para que la comparacion sea una medida y no un
+   numero de otro dia.
 2. **Desglose por fase** (carga de entradas / lectura / decision / emision) para
    saber donde se va el tiempo y poder extrapolar con una formula explicita.
 3. **OCR en frio** sobre una muestra pequena de facturas escaneadas, copiadas a
@@ -54,6 +57,29 @@ from maisa import emit, lectura, procesa as P  # noqa: E402
 
 DOCS = RAIZ / "docs"
 OCR_URL = lectura.OCR_URL
+
+#: Los dos repartos del lote que se miden, en el orden en que se publican.
+#: ``hilos`` es lo que habia; ``procesos`` es lo que hay. Se miden los dos
+#: porque la comparacion es la evidencia de que el GIL era el cuello, y una
+#: cifra sin su contraste no demuestra nada.
+MODOS_LECTURA = ("hilos", "procesos")
+
+
+@contextlib.contextmanager
+def _con_modo(modo: str | None):
+    """Fija ``MAISA_LECTURA_MODO`` durante un bloque (restaura lo que hubiera)."""
+    previo = os.environ.get("MAISA_LECTURA_MODO")
+    if modo is None:
+        os.environ.pop("MAISA_LECTURA_MODO", None)
+    else:
+        os.environ["MAISA_LECTURA_MODO"] = modo
+    try:
+        yield
+    finally:
+        if previo is None:
+            os.environ.pop("MAISA_LECTURA_MODO", None)
+        else:
+            os.environ["MAISA_LECTURA_MODO"] = previo
 
 
 # ----------------------------------------------------------------- utilidades
@@ -147,13 +173,18 @@ def _reparto_escalones(ruta_traza: Path) -> tuple[collections.Counter, list[str]
 
 
 # ------------------------------------------------------------------- medidas
-def mide_lote(facturas: Path, args, trabajadores: int, traza: bool) -> dict:
-    """Cronometra el lote completo end-to-end (lo que se entrega, tal cual)."""
+def mide_lote(facturas: Path, args, trabajadores: int, traza: bool,
+              modo: str | None = None) -> dict:
+    """Cronometra el lote completo end-to-end (lo que se entrega, tal cual).
+
+    ``modo`` fuerza el reparto de la lectura (``hilos`` | ``procesos``); ``None``
+    deja el que traiga el motor por defecto.
+    """
     with tempfile.TemporaryDirectory(prefix="bench-lote-") as tmp:
         salida = Path(tmp) / "outcomes.jsonl"
         carga0, carga1 = _carga(), None
         t0 = time.perf_counter()
-        with _callado():
+        with _callado(), _con_modo(modo):
             P.procesa(facturas, args.xlsx, args.config, args.snapshot, None, salida,
                       trabajadores, args.lote, traza_hash=traza)
         segundos = time.perf_counter() - t0
@@ -442,8 +473,10 @@ def extrapola(med: dict, n_objetivo: list[int]) -> dict:
             "single-thread real, S_ocr es 1 y el escenario C no mejora al subir trabajadores.",
             "El coste de decision es lineal en el numero de facturas (una factura, una "
             "decision; no hay estado compartido entre facturas).",
-            "La maquina es la de este hackathon (2 vCPU, 11 GB). Mas nucleos no aceleran "
-            "la capa de texto (GIL + pypdf) pero si el OCR (I/O + proceso externo).",
+            "La maquina es la de este hackathon (2 vCPU, 11 GB). Mas nucleos aceleran "
+            "la lectura (el lote va por procesos desde el cambio de reparto) y el OCR "
+            "solo si se le dan ranuras propias: el contenedor OCR no paraleliza por si "
+            "mismo.",
             "Se asume que el Excel y el snapshot crecen poco: t_fijo se mide a 516 asientos "
             "y 11 proveedores; a 1 M de facturas habria que shardear las entradas.",
             "El coste por factura escaneada se mide con el contenedor OCR de este entorno; "
@@ -477,27 +510,49 @@ def escribe_md(med: dict, ext: dict, maquina: dict, ruta: Path) -> None:
              "extrapolacion y va marcada como tal.")
     L.append("")
 
-    L.append("## 1. Lote completo de 500 (cache caliente) por numero de trabajadores")
+    L.append("## 1. Lote completo de 500 (cache caliente) por reparto y trabajadores")
     L.append("")
     L.append(f"{med['lote_500_caliente']['repeticiones']} repeticiones por configuracion, "
              "end-to-end (`python -m maisa.procesa`), escribiendo `outcomes.jsonl` y "
-             "contando las lineas emitidas.")
+             "contando las lineas emitidas. Se miden los **dos repartos** de la lectura "
+             "en la misma sesion, uno detras de otro: `hilos` es el reparto historico y "
+             "`procesos` trocea el directorio por `file_id`.")
     L.append("")
-    filas = []
-    for w, est in sorted(med["lote_500_caliente"]["por_trabajadores"].items(), key=lambda kv: int(kv[0])):
-        filas.append([
-            w, est["n"], f"{est['min']:.2f}", f"**{est['mediana']:.2f}**", f"{est['max']:.2f}",
-            f"{est['desv_tipica']:.2f}", f"{est['rango_relativo_pct']:.1f} %",
-            f"{n_lote / est['mediana']:.1f}",
-        ])
-    L.append(tabla_md(filas, ["trabajadores", "n", "min (s)", "mediana (s)", "max (s)",
-                              "desv. típ.", "rango rel.", "facturas/s (mediana)"]))
+    por_modo = med["lote_500_caliente"].get("por_modo") or {
+        med["lote_500_caliente"].get("modo_mejor", "?"): med["lote_500_caliente"]["por_trabajadores"]
+    }
+    for modo, por_trabajadores in por_modo.items():
+        L.append(f"### Reparto: `{modo}`")
+        L.append("")
+        filas = []
+        for w, est in sorted(por_trabajadores.items(), key=lambda kv: int(kv[0])):
+            filas.append([
+                w, est["n"], f"{est['min']:.2f}", f"**{est['mediana']:.2f}**",
+                f"{est['max']:.2f}", f"{est['desv_tipica']:.2f}",
+                f"{est['rango_relativo_pct']:.1f} %", f"{n_lote / est['mediana']:.1f}",
+            ])
+        L.append(tabla_md(filas, ["trabajadores", "n", "min (s)", "mediana (s)", "max (s)",
+                                  "desv. típ.", "rango rel.", "facturas/s (mediana)"]))
+        L.append("")
+    for modo, por_trabajadores in por_modo.items():
+        w_min = min(por_trabajadores, key=lambda w: por_trabajadores[w]["mediana"])
+        base = por_trabajadores[w_min]["mediana"]
+        L.append(f"- `{modo}`: mejor en **{w_min} trabajador(es)** con **{base:.2f} s** "
+                 f"({n_lote / base:.1f} facturas/s).")
+    if len(por_modo) > 1:
+        L.append("")
+        L.append("**La comparacion es la medida.** A igualdad de trabajadores, el reparto "
+                 "por procesos hace el trabajo de CPU en paralelo de verdad; los hilos "
+                 "de Python no reparten `pypdf` entre nucleos porque comparten GIL. "
+                 "El contraste de las dos tablas de arriba, medidas seguidas, es la "
+                 "evidencia de que el GIL era el cuello y de cuanto se ha recuperado.")
     L.append("")
+    modo_mejor = med["lote_500_caliente"].get("modo_mejor", "?")
     mejor_w = med["lote_500_caliente"]["mejor_trabajadores"]
     mejor = med["lote_500_caliente"]["por_trabajadores"][mejor_w]
-    L.append(f"- Mejor configuracion medida: **--trabajadores {mejor_w}** con "
-             f"**{mejor['mediana']:.2f} s** de mediana ({n_lote / mejor['mediana']:.1f} facturas/s) "
-             f"y una dispersion de {mejor['rango_relativo_pct']:.1f} % entre pasadas.")
+    L.append(f"- Mejor configuracion medida: **--modos {modo_mejor} --trabajadores {mejor_w}** "
+             f"con **{mejor['mediana']:.2f} s** de mediana ({n_lote / mejor['mediana']:.1f} "
+             f"facturas/s) y una dispersion de {mejor['rango_relativo_pct']:.1f} % entre pasadas.")
     t_traza = med.get("lote_500_con_traza")
     if t_traza:
         delta = t_traza["segundos"] - mejor["mediana"]
@@ -682,17 +737,12 @@ def escribe_md(med: dict, ext: dict, maquina: dict, ruta: Path) -> None:
              f"{fases['por_factura_decision_ms']:.2f} ms/factura), es el escalon de "
              "lectura. Por orden de rentabilidad:")
     L.append("")
-    L.append(f"1. **Repartir por `file_id` y anadir procesos, no hilos.** El lote ya se "
-             f"procesa con `--trabajadores`; a {_num(n10)} facturas se shardea el "
-             "directorio en N trozos y se lanzan N procesos. El motor es **sin estado** "
-             "y la salida es un JSONL que se concatena: no hay coordinacion. Medido en "
-             f"esta maquina, el lote caliente baja de "
-             f"{med['lote_500_caliente']['por_trabajadores'][sorted(med['lote_500_caliente']['por_trabajadores'], key=int)[0]]['mediana']:.2f} s "
-             f"a {mejor['mediana']:.2f} s al pasar de "
-             f"{sorted(med['lote_500_caliente']['por_trabajadores'], key=int)[0]} a "
-             f"{mejor_w} trabajadores (x{med['lote_500_caliente']['por_trabajadores'][sorted(med['lote_500_caliente']['por_trabajadores'], key=int)[0]]['mediana'] / mejor['mediana']:.2f}): "
-             "el trabajo paraleliza, pero los hilos comparten GIL; el siguiente escalon "
-             "es repartir el directorio entre procesos, no hilos.")
+    L.append(f"1. **Repartir por `file_id` entre procesos: hecho.** El lote ya se lee "
+             f"con procesos, no con hilos (ver §1): el directorio se trocea y la salida "
+             f"se concatena en orden en el padre, sin coordinacion, porque el motor es "
+             f"**sin estado**. Lo que queda por escalar aqui es replicar el lote entero "
+             f"en varias maquinas: a {_num(n10)} facturas se shardea el directorio en N "
+             f"trozos y se lanza un proceso por trozo, dentro o fuera de esta maquina.")
     L.append(f"2. **La cache de OCR es la palanca grande.** El escenario del sabado "
              f"(40 facturas nuevas + regla nueva) y el 'reprocesar todo' son gratis: "
              f"{cc['por_factura_s'] * 1000:.2f} ms por escaneada ya vista. A 50.000 "
@@ -774,6 +824,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Mide de verdad la capacidad del pipeline de La Caja.")
     ap.add_argument("--repeticiones", type=int, default=3, help="pasadas por configuracion (>=3 recomendado)")
     ap.add_argument("--trabajadores", type=int, nargs="+", default=[1, 2, 4, 8])
+    ap.add_argument("--modos", nargs="+", default=list(MODOS_LECTURA),
+                    choices=list(MODOS_LECTURA),
+                    help="repartos de la lectura que se miden y se comparan")
     ap.add_argument("--muestra-ocr", type=int, default=10, help="facturas escaneadas para el OCR en frio")
     ap.add_argument("--muestra-endpoint", type=int, default=5, help="peticiones directas al servicio OCR")
     ap.add_argument("--objetivos", type=int, nargs="+", default=[5000, 50000, 1000000],
@@ -802,6 +855,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.rapido:
         args.repeticiones = 1
         args.trabajadores = [4]
+        args.modos = ["hilos", "procesos"]
         args.muestra_ocr = 3
         args.muestra_endpoint = 2
 
@@ -821,21 +875,34 @@ def main(argv: list[str] | None = None) -> int:
     n_ocr = len(pdfs) - n_texto
     print(f"[bench] reparto: capa_texto={n_texto} ocr={n_ocr} ({dict(escalones)})")
 
-    # 2) lote completo, varias pasadas por configuracion de trabajadores
-    por_trabajadores: dict[str, dict] = {}
-    for w in args.trabajadores:
-        muestras = []
-        r = None
-        for i in range(args.repeticiones):
-            r = mide_lote(args.facturas, args, w, traza=False)
-            muestras.append(r["segundos"])
-            print(f"[bench]   trabajadores={w} pasada {i + 1}/{args.repeticiones}: "
-                  f"{r['segundos']:.2f} s ({r['facturas_por_s']:.1f} facturas/s)")
-        est = _estadistica(muestras)
-        est["facturas_por_s"] = round(len(pdfs) / est["mediana"], 3)
-        est["carga_final"] = r["carga_despues"]
-        por_trabajadores[str(w)] = est
+    # 2) lote completo, varias pasadas por configuracion de trabajadores y de
+    #    reparto. Los dos modos se miden en la misma sesion, back-to-back: la
+    #    diferencia entre ellos es la medida del GIL, y comparar numeros de
+    #    sesiones distintas (o de cargas distintas) no seria una medida.
+    por_modo: dict[str, dict[str, dict]] = {}
+    for modo in args.modos:
+        por_trabajadores: dict[str, dict] = {}
+        for w in args.trabajadores:
+            muestras = []
+            r = None
+            for i in range(args.repeticiones):
+                r = mide_lote(args.facturas, args, w, traza=False, modo=modo)
+                muestras.append(r["segundos"])
+                print(f"[bench]   {modo} trabajadores={w} pasada {i + 1}/{args.repeticiones}: "
+                      f"{r['segundos']:.2f} s ({r['facturas_por_s']:.1f} facturas/s)")
+            est = _estadistica(muestras)
+            est["facturas_por_s"] = round(len(pdfs) / est["mediana"], 3)
+            est["carga_final"] = r["carga_despues"]
+            por_trabajadores[str(w)] = est
+        por_modo[modo] = por_trabajadores
+    modo_mejor = min(
+        por_modo,
+        key=lambda m: min(est["mediana"] for est in por_modo[m].values()),
+    )
+    por_trabajadores = por_modo[modo_mejor]
     mejor_w = min(por_trabajadores, key=lambda w: por_trabajadores[w]["mediana"])
+    print(f"[bench] mejor reparto: {modo_mejor} a {mejor_w} trabajadores "
+          f"({por_trabajadores[mejor_w]['mediana']:.2f} s)")
 
     # 3) desglose por fase
     print("[bench] desglose por fases (4 trabajadores)...")
@@ -874,6 +941,8 @@ def main(argv: list[str] | None = None) -> int:
         "lote_500_caliente": {
             "repeticiones": args.repeticiones,
             "facturas": len(pdfs),
+            "por_modo": por_modo,
+            "modo_mejor": modo_mejor,
             "por_trabajadores": por_trabajadores,
             "mejor_trabajadores": mejor_w,
             "mediana": por_trabajadores[mejor_w]["mediana"],

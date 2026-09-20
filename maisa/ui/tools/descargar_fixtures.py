@@ -17,9 +17,17 @@ Que escribe (todo bajo `--out`, por defecto `public/data/`)
     manifiesto.json          cuando se congelo, de donde y cuantos. Trazabilidad.
     estadisticas.json        GET /api/estadisticas      -> los contadores
     snapshots.json           GET /api/snapshots        -> la salud del ERP
+    salud.json               GET /health               -> la salud de las dependencias
+    meta.json                GET /api/meta             -> version del servicio y norma
     facturas.json            GET /api/facturas -> la tabla entera (paginando)
     facturas/<slug>.json     GET /api/facturas/{file_id} -> un detalle por factura
     pdfs/<slug>              unos pocos PDFs, para el <iframe> sin API
+
+`salud.json` y `meta.json` son las dos unicas copias que no son una foto de los
+DATOS sino del SERVICIO. Se congelan igual porque el panel de trazabilidad tiene
+que poder ensenar el estado y las versiones tambien sin API, pero llevan al lado
+la fecha del manifiesto: una `latencia_ms` de hace tres dias presentada como un
+latido seria una mentira, y es justo el dato que se va a mirar.
 
 Por que los detalles van en ficheros sueltos: el detalle solo se pide cuando
 alguien abre UNA factura. Un unico `detalles.json` de 1,5 MB obligaria a
@@ -77,7 +85,7 @@ PDFS = [
     "2026-03-28_P002.pdf",       # NO_PAGAR con hecho `duro`: pago duplicado
     "2026-04-08_P007.pdf",       # NO_PAGAR con `sospechosos`: "el erp miente"
     "2026-0233-A_catering.pdf",  # ESCALAR: pedido repetido en el lote
-    "2026-06-04_P006.pdf",       # ESCALAR con texto sospechoso en el documento
+    "2026-06-04_P006.pdf",       # NO_PAGAR: `duro` (pago duplicado) + inyeccion ignorada
     "copia_2026_0518.pdf",       # vision_ocr: escaneo ilegible, identidad heredada
     "FA-2508_consultoría.pdf",   # ESCALAR con medio listado a null
     "2026-07-09_P010.pdf",       # `ordenes_resultado`: instrucciones en el PDF
@@ -227,6 +235,30 @@ def main() -> int:
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
         snapshots = None
         print("snapshots: no disponibles (%s)" % exc, file=sys.stderr)
+
+    # El estado del servicio y sus versiones, para el panel de trazabilidad. No es
+    # fatal, por el mismo motivo que los snapshots: quedarse sin la foto del
+    # servicio degrada una seccion, no el congelado entero.
+    #
+    # `/health` se pide SIN comprobar el codigo: contesta 200 aunque haya una
+    # dependencia caida (el 503 vive en `/health/ready`), asi que un `ok: false`
+    # aqui es el dato que se viene a buscar y no un fallo que haya que tragarse.
+    salud = None
+    try:
+        salud = json.loads(pedir(base, "/health", args.timeout))
+        escribir(out / "salud.json", compacto(salud))
+        print("salud  : estado=%s, dependencias=%s" % (salud.get("estado"), ", ".join(sorted(salud.get("dependencias", {})))))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        print("salud  : no disponible (%s)" % exc, file=sys.stderr)
+
+    meta = None
+    try:
+        meta = json.loads(pedir(base, "/api/meta", args.timeout))
+        escribir(out / "meta.json", compacto(meta))
+        versiones = meta.get("motor", {}).get("versiones_norma", {})
+        print("meta   : api=%s, norma=%s" % (meta.get("api_version"), versiones))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        print("meta   : no disponible (%s)" % exc, file=sys.stderr)
 
     def descargar_detalle(file_id: str) -> dict | None:
         try:

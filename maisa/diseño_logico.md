@@ -132,6 +132,42 @@ db.createCollection("expedientes", {
                   score: { bsonType: "double", minimum: 0, maximum: 1 }
                 }
               }
+            },
+            // Geometria del OCR por pagina, en pixeles del render. Va aparte de
+            // `lineas` porque necesita la `escala` para volver a puntos del PDF:
+            // sin ella no se puede pintar el resaltado. Misma forma que la cache
+            // del motor, para que el visor lea igual las escaneadas del lote y
+            // las que entran por la API.
+            paginas_geo: {
+              bsonType: "array",
+              maxItems: 100,
+              items: {
+                bsonType: "object",
+                required: ["pagina", "escala", "lineas"],
+                properties: {
+                  pagina: { bsonType: "int", minimum: 0 },
+                  escala: { bsonType: ["double", "int", "long"], minimum: 0, exclusiveMinimum: true },
+                  ancho: { bsonType: ["double", "int", "long"], minimum: 0, exclusiveMinimum: true },
+                  alto: { bsonType: ["double", "int", "long"], minimum: 0, exclusiveMinimum: true },
+                  lineas: {
+                    bsonType: "array",
+                    maxItems: 2000,
+                    items: {
+                      bsonType: "object",
+                      required: ["texto", "caja"],
+                      properties: {
+                        texto: { bsonType: "string" },
+                        caja: {
+                          bsonType: "array",
+                          minItems: 4, maxItems: 4,
+                          items: { bsonType: ["double", "int", "long"] }
+                        },
+                        score: { bsonType: "double", minimum: 0, maximum: 1 }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         },
@@ -277,6 +313,16 @@ db.createCollection("expedientes", {
       { pagina: 0, texto: "NIF: B12345678", bbox: [122.0, 78.0, 320.0, 100.0], score: 0.981 },
       { pagina: 0, texto: "Pedido: PED-2024-0912", bbox: [122.0, 104.0, 360.0, 126.0], score: 0.964 },
       { pagina: 0, texto: "TOTAL: 1.234,50 EUR", bbox: [300.0, 402.0, 520.0, 428.0], score: 0.972 }
+    ],
+    // Las mismas lineas con la escala del render: las `bbox` de arriba estan en
+    // pixeles del bitmap y estas se pueden volver a poner sobre el PDF.
+    paginas_geo: [
+      {
+        pagina: 0, escala: 4.0, ancho: 2382.0, alto: 3368.0,
+        lineas: [
+          { texto: "TOTAL: 1.234,50 EUR", caja: [1200.0, 1608.0, 2080.0, 1712.0], score: 0.972 }
+        ]
+      }
     ]
   },
 

@@ -52,6 +52,7 @@ from maisa.lectura import (  # noqa: E402
     _escribe_cache,
     _lee_cache,
     _ocr_url,
+    _paginas_geo,
     _paginas_respuesta,
     _peticion_ocr,
     capa_texto,
@@ -116,6 +117,7 @@ def precalienta_una(
         ruta_cache, sha, paginas,
         "vision_nube" if de_nube else "vision_ocr",
         firma or firma_motor(), firma_nube_actual or firma_nube(),
+        geo=_paginas_geo(datos),
     )
     return "nube" if de_nube else "ok"
 

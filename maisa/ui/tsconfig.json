@@ -38,6 +38,11 @@
         /* Vite compila y emite; `tsc` solo comprueba. Así el `build` falla por un tipo
        mal puesto antes de producir un bundle. */
         "noEmit": true,
+        /* Los ficheros de `tools/` se cargan con `node` a pelo (por ejemplo
+       `node tools/verificar_paridad.ts`) y Node no adivina extensiones: el import
+       tiene que decir `./types.ts`. Sin esta opcion, `tsc` rechaza esos imports y
+       el script no se puede ni comprobar. */
+        "allowImportingTsExtensions": true,
         "types": [
             "vite/client",
             "node"

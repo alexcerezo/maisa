@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from fastapi import Depends, Header, Query, Request
 
 from .almacen import AlmacenFacturas
+from .anclajes import CacheGeo
 from .config import Settings
 from .errors import ApiError
 from .mongo_repo import MongoRepo
@@ -25,6 +26,11 @@ def get_settings(request: Request) -> Settings:
 
 def get_traza(request: Request) -> TrazaStore:
     return request.app.state.traza
+
+
+def get_geo(request: Request) -> CacheGeo:
+    """Geometria de OCR del motor: la caja de cada linea de las escaneadas."""
+    return request.app.state.geo
 
 
 def get_entrega(request: Request) -> EntregaStore:

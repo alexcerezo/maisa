@@ -13,6 +13,12 @@ creible:
    invalida lo cacheado en vez de servir texto de otro motor. Las entradas de
    nube se validan contra la firma de la nube y las locales contra la local:
    son motores independientes y no deben invalidarse entre si.
+
+   Desde la ``version`` 3 la entrada guarda ademas ``geo``: la **caja** de cada
+   linea reconocida y el tamano de la pagina que se renderizo. Es lo que permite
+   resaltar el dato dentro del PDF en el visor. El texto sigue siendo lo unico
+   obligatorio: una entrada sin ``geo`` (o sin cajas) se acepta y se lee igual,
+   solo que esa factura no se podra resaltar.
 3. **Vision local** (``POST {OCR_URL}/ocr?engine=local``): con timeout de
    conexion y de lectura separados y reintentos con backoff exponencial.
 4. **Vision en la nube** (``POST {OCR_URL}/ocr?engine=cloud``), **apagada por
@@ -34,15 +40,19 @@ contenedor de OCR.
 """
 from __future__ import annotations
 
+import collections
 import hashlib
+import hmac
 import json
+import multiprocessing
 import os
 import re
+import sys
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import requests
@@ -56,8 +66,9 @@ OCR_URL = os.environ.get("MAISA_OCR_URL") or "http://127.0.0.1:8866"
 CACHE_OCR = Path(__file__).resolve().parents[2] / ".cache" / "ocr"
 
 #: Version del formato del fichero de cache. Solo se aceptan esta y la legacy
-#: (sin campo ``version``).
-VERSION_CACHE = 2
+#: (sin campo ``version``). La 3 anade ``geo`` (cajas de las lineas) y es
+#: **opcional** dentro de la entrada: sin ella el texto se lee igual.
+VERSION_CACHE = 3
 
 #: Prefijo del ``motor`` de una entrada leida por la nube. El campo ``motor``
 #: identifica **quien produjo el texto**, no quien lo leeria hoy: una entrada
@@ -133,6 +144,9 @@ class _EntradaCache:
     entradas legacy (sin ``proveedor``) se deduce del prefijo ``nube:`` de
     ``motor``; si tampoco hay, se asume local, que es lo que eran todas las
     anteriores a la nube.
+
+    ``geo`` es la lista de paginas con sus cajas (``version`` 3). Vacia en las
+    entradas anteriores: son validas, pero no se pueden resaltar.
     """
 
     texto: str
@@ -140,6 +154,7 @@ class _EntradaCache:
     escalon: str = "vision_ocr"
     proveedor: str = "local"
     motor: str = ""
+    geo: list[dict] = field(default_factory=list)
 
     @property
     def nube(self) -> bool:
@@ -153,6 +168,7 @@ class _Intento:
     paginas: list[str]
     reintentos: int = 0
     proveedor: str = "ninguno"
+    geo: list[dict] = field(default_factory=list)
 
     @property
     def texto(self) -> str:
@@ -384,6 +400,75 @@ def _paginas_respuesta(datos: dict) -> list[str]:
     return []
 
 
+def _caja_envolvente(box: object) -> list[float] | None:
+    """Poligono de 4 puntos del OCR -> ``[x0, y0, x1, y1]``.
+
+    El servicio devuelve la caja como cuatro esquinas; para pintar un resaltado
+    basta su envolvente, que ademas ocupa la mitad en disco.
+    """
+    if not isinstance(box, list) or not box:
+        return None
+    xs: list[float] = []
+    ys: list[float] = []
+    for punto in box:
+        if not isinstance(punto, (list, tuple)) or len(punto) < 2:
+            return None
+        try:
+            xs.append(float(punto[0]))
+            ys.append(float(punto[1]))
+        except (TypeError, ValueError):
+            return None
+    if len(xs) != 4:
+        return None
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _paginas_geo(datos: dict) -> list[dict]:
+    """Cajas de las lineas reconocidas, por pagina, con el tamano del render.
+
+    Las coordenadas del OCR estan en **pixeles del bitmap** que se renderizo, no
+    en puntos del PDF: sin ``escala`` no se pueden volver a poner sobre la
+    pagina. Por eso se guardan juntos y por eso ``escala`` es obligatoria para
+    que la entrada sirva: una caja sin su escala es una caja inutil.
+
+    Devuelve ``[]`` cuando el servicio no mando cajas (``include_boxes=false``) o
+    el documento no trae lineas: la factura se lee igual, solo que sin resaltado.
+    """
+    resultados = datos.get("results")
+    if not isinstance(resultados, list):
+        return []
+    paginas: list[dict] = []
+    for indice, pagina in enumerate(resultados):
+        if not isinstance(pagina, dict):
+            continue
+        escala = pagina.get("scale")
+        if not isinstance(escala, (int, float)) or float(escala) <= 0:
+            continue
+        tamano = pagina.get("size") if isinstance(pagina.get("size"), dict) else {}
+        ancho, alto = tamano.get("width"), tamano.get("height")
+        lineas: list[dict] = []
+        for linea in pagina.get("lines") or []:
+            if not isinstance(linea, dict):
+                continue
+            texto = linea.get("text")
+            caja = _caja_envolvente(linea.get("box"))
+            if not isinstance(texto, str) or not texto.strip() or caja is None:
+                continue
+            fila: dict = {"texto": texto, "caja": caja}
+            score = linea.get("score")
+            if isinstance(score, (int, float)):
+                fila["score"] = round(float(score), 6)
+            lineas.append(fila)
+        if not lineas:
+            continue
+        pagina_geo: dict = {"pagina": indice, "escala": float(escala), "lineas": lineas}
+        if isinstance(ancho, (int, float)) and isinstance(alto, (int, float)):
+            pagina_geo["ancho"] = float(ancho)
+            pagina_geo["alto"] = float(alto)
+        paginas.append(pagina_geo)
+    return paginas
+
+
 def _intenta(
     ruta: Path,
     motor: str = "local",
@@ -420,7 +505,9 @@ def _intenta(
         else:
             paginas = _paginas_respuesta(datos)
             if paginas:
-                return _Intento(paginas=paginas, reintentos=usados, proveedor=motor)
+                return _Intento(
+                    paginas=paginas, reintentos=usados, proveedor=motor, geo=_paginas_geo(datos)
+                )
             # Un 200 sin texto no mejora reintentando: el documento no da mas.
             error, reintentable = "el motor de vision no reconocio texto", False
         if not reintentable:
@@ -449,6 +536,133 @@ def ocr_contenedor(
 
 
 # ---------------------------------------------------------------------- cache
+#: Variable con la clave de firma de la cache. Fuera de `.cache/` a proposito:
+#: una clave guardada junto a lo que firma no defiende de quien puede escribir
+#: en el directorio, que es justo el atacante del que nos protegemos.
+CLAVE_CACHE_ENV = "MAISA_CACHE_CLAVE"
+_CLAVE_CACHE: bytes | None = None
+_CLAVE_CACHE_VISTA = False
+#: Contadores de la cache en esta ejecucion: lo que se leyo, lo que se rechazo.
+CACHE_CONTADORES: collections.Counter = collections.Counter()
+
+
+def _clave_de_fichero_env() -> str:
+    """``MAISA_CACHE_CLAVE`` del `.env` del repo, si existe.
+
+    El motor no lo lee por su cuenta (lo arranca el operador, no el compose), pero
+    `maisa/.env` es el unico sitio del repo donde viven los secretos, asi que se
+    acepta como origen de la clave para que la firma funcione sin exportar nada a
+    mano. La variable de entorno siempre gana sobre el fichero.
+    """
+    ruta = Path(__file__).resolve().parents[3] / ".env"
+    try:
+        for linea in ruta.read_text(encoding="utf-8").splitlines():
+            linea = linea.strip()
+            if linea.startswith("#") or "=" not in linea:
+                continue
+            nombre, _, valor = linea.partition("=")
+            if nombre.strip() == CLAVE_CACHE_ENV:
+                return valor.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
+def _clave_cache() -> bytes | None:
+    """Clave de firma, o ``None`` si no hay ninguna configurada.
+
+    Se consulta una vez por proceso. Sin clave no se firma y no se puede
+    verificar: la cache funciona igual que antes, pero `estado_cache()` lo
+    declara en vez de callarlo.
+
+    La variable de entorno definida **y vacia** significa "firma apagada a
+    proposito": no se cae al `.env`. Es lo que usan los tests (que no pueden
+    depender de que el repo tenga clave) y lo que querra un despliegue que
+    prefiera no firmar antes que firmar con un secreto que no controla.
+    """
+    global _CLAVE_CACHE, _CLAVE_CACHE_VISTA
+    if not _CLAVE_CACHE_VISTA:
+        if CLAVE_CACHE_ENV in os.environ:
+            crudo = os.environ[CLAVE_CACHE_ENV].strip()
+        else:
+            crudo = _clave_de_fichero_env()
+        _CLAVE_CACHE = crudo.encode("utf-8") if crudo else None
+        _CLAVE_CACHE_VISTA = True
+    return _CLAVE_CACHE
+
+
+def reinicia_clave_cache() -> None:
+    """Vuelve a mirar el entorno en busca de la clave de firma.
+
+    La clave se lee una sola vez por proceso (es un secreto, no cambia a media
+    ejecucion); esto existe para que los tests puedan cambiarla entre casos.
+    """
+    global _CLAVE_CACHE_VISTA
+    _CLAVE_CACHE_VISTA = False
+
+
+def firma_entrada(datos: dict) -> str:
+    """HMAC-SHA256 de la entrada de cache, sin contar el propio campo ``hmac``.
+
+    El JSON se canonicaliza (claves ordenadas, sin espacios) para que el sello no
+    dependa del orden en que se escribio el fichero ni de quien lo reescriba.
+    """
+    clave = _clave_cache()
+    if clave is None:
+        return ""
+    cuerpo = {k: v for k, v in datos.items() if k != "hmac"}
+    serializado = json.dumps(
+        cuerpo, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hmac.new(clave, serializado, hashlib.sha256).hexdigest()
+
+
+def verifica_cache(directorio: Path | None = None) -> dict:
+    """Audita el directorio de cache: cuantas entradas van firmadas y cuantas no.
+
+    Devuelve ``{"total", "firmadas_ok", "manipuladas", "sin_firma", "ilegibles",
+    "sin_clave"}``. ``manipuladas`` son entradas con sello que **no** cuadra: eso
+    es exactamente lo que el sello existe para detectar. ``sin_clave`` cuenta las
+    firmadas que no se han podido verificar por no haber clave en el entorno.
+    """
+    raiz = directorio or CACHE_OCR
+    informe = collections.Counter(total=0, firmadas_ok=0, manipuladas=0,
+                                  sin_firma=0, ilegibles=0, sin_clave=0)
+    if not raiz.is_dir():
+        return dict(informe)
+    for ruta in sorted(raiz.glob("*.json")):
+        informe["total"] += 1
+        try:
+            datos = json.loads(ruta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            informe["ilegibles"] += 1
+            continue
+        if not isinstance(datos, dict):
+            informe["ilegibles"] += 1
+            continue
+        sello = datos.get("hmac")
+        if not isinstance(sello, str) or not sello:
+            informe["sin_firma"] += 1
+            continue
+        esperado = firma_entrada(datos)
+        if not esperado:
+            informe["sin_clave"] += 1
+        elif hmac.compare_digest(esperado, sello):
+            informe["firmadas_ok"] += 1
+        else:
+            informe["manipuladas"] += 1
+    return dict(informe)
+
+
+def estado_cache() -> dict:
+    """Como va la cache en esta ejecucion (contadores de lectura, no del disco)."""
+    return {
+        "clave_configurada": _clave_cache() is not None,
+        "variable": CLAVE_CACHE_ENV,
+        **{k: int(v) for k, v in CACHE_CONTADORES.items()},
+    }
+
+
 def _lee_cache(ruta_cache: Path, sha: str, firma: str, firma_nube: str = "") -> _EntradaCache | None:
     """Entrada de cache si sigue valiendo; ``None`` para releer.
 
@@ -470,9 +684,28 @@ def _lee_cache(ruta_cache: Path, sha: str, firma: str, firma_nube: str = "") -> 
     try:
         datos = json.loads(ruta_cache.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        CACHE_CONTADORES["ilegibles"] += 1
         return None
     if not isinstance(datos, dict) or datos.get("sha256") != sha:
         return None
+
+    sello = datos.get("hmac")
+    if isinstance(sello, str) and sello:
+        esperado = firma_entrada(datos)
+        if not esperado:
+            # Hay sello pero no hay clave: la entrada es utilizable, pero no se
+            # puede afirmar que sea la que escribio el OCR. Se cuenta para que
+            # `estado_cache()` pueda decirlo.
+            CACHE_CONTADORES["firmadas_sin_clave"] += 1
+        elif not hmac.compare_digest(esperado, sello):
+            # Contenido cambiado despues de escribirse: se relee en vez de servir
+            # texto que nadie ha reconocido.
+            CACHE_CONTADORES["manipuladas"] += 1
+            return None
+        else:
+            CACHE_CONTADORES["firmadas_ok"] += 1
+    else:
+        CACHE_CONTADORES["sin_firma"] += 1
 
     version = datos.get("version")
     if isinstance(version, str) and version.strip().isdigit():
@@ -491,14 +724,53 @@ def _lee_cache(ruta_cache: Path, sha: str, firma: str, firma_nube: str = "") -> 
 
     escalon = datos.get("escalon") or ("vision_nube" if de_nube else "vision_ocr")
     proveedor = "nube" if de_nube else "local"
+    geo = _geo_cache(datos.get("geo"))
     paginas = datos.get("paginas")
     if isinstance(paginas, list) and paginas:
         limpias = [p if isinstance(p, str) else "" for p in paginas]
-        return _EntradaCache("\n".join(limpias), limpias, escalon, proveedor, motor)
+        return _EntradaCache("\n".join(limpias), limpias, escalon, proveedor, motor, geo)
     texto = datos.get("texto")
     if isinstance(texto, str) and texto:
-        return _EntradaCache(texto, [texto], escalon, proveedor, motor)
+        return _EntradaCache(texto, [texto], escalon, proveedor, motor, geo)
     return None
+
+
+def _geo_cache(crudo: object) -> list[dict]:
+    """``geo`` del fichero, saneado.
+
+    Una entrada con ``geo`` corrupta no puede tumbar la lectura: se descarta la
+    geometria y se queda el texto, que es lo que de verdad hace falta para
+    decidir. Perder el resaltado es barato; perder la factura, no.
+    """
+    if not isinstance(crudo, list):
+        return []
+    paginas: list[dict] = []
+    for pagina in crudo:
+        if not isinstance(pagina, dict):
+            continue
+        escala = pagina.get("escala")
+        indice = pagina.get("pagina")
+        if not isinstance(escala, (int, float)) or float(escala) <= 0:
+            continue
+        if not isinstance(indice, int) or indice < 0:
+            continue
+        lineas = [
+            {"texto": linea["texto"], "caja": [float(v) for v in linea["caja"]]}
+            for linea in (pagina.get("lineas") or [])
+            if isinstance(linea, dict)
+            and isinstance(linea.get("texto"), str)
+            and isinstance(linea.get("caja"), list)
+            and len(linea["caja"]) == 4
+        ]
+        if not lineas:
+            continue
+        saneada: dict = {"pagina": indice, "escala": float(escala), "lineas": lineas}
+        for clave in ("ancho", "alto"):
+            valor = pagina.get(clave)
+            if isinstance(valor, (int, float)):
+                saneada[clave] = float(valor)
+        paginas.append(saneada)
+    return paginas
 
 
 def _escribe_cache(
@@ -508,13 +780,22 @@ def _escribe_cache(
     escalon: str,
     firma: str,
     firma_nube: str = "",
+    geo: list[dict] | None = None,
 ) -> None:
-    """Escribe la entrada versionada. Un fallo de disco no aborta la lectura.
+    """Escribe la entrada versionada y firmada. Un fallo de disco no aborta la lectura.
 
     ``motor`` es **el motor que produjo el texto**, no el local. Antes se
     estampaba siempre la firma local, asi que una lectura de la nube quedaba
     etiquetada como local: se invalidaba (o no) por el modelo equivocado y el
     corpus parecia leido por un solo motor cuando lo habian leido dos.
+
+    ``geo`` solo se escribe cuando hay cajas: una clave vacia en 500 ficheros es
+    ruido en el diff y no aporta nada.
+
+    ``hmac`` sella el contenido entero. Sin clave configurada la entrada se
+    escribe **sin sello** (es lo que eran todas las anteriores); con clave, una
+    entrada manipulada se detecta al leerla y se vuelve a pedir al OCR en vez de
+    servir texto cambiado.
     """
     de_nube = escalon == "vision_nube"
     datos = {
@@ -526,6 +807,11 @@ def _escribe_cache(
         "paginas": paginas,
         "texto": "\n".join(paginas),
     }
+    if geo:
+        datos["geo"] = geo
+    sello = firma_entrada(datos)
+    if sello:
+        datos["hmac"] = sello
     try:
         ruta_cache.parent.mkdir(parents=True, exist_ok=True)
         ruta_cache.write_text(json.dumps(datos, ensure_ascii=False), encoding="utf-8")
@@ -536,6 +822,12 @@ def _escribe_cache(
 # -------------------------------------------------------- presupuesto de nube
 _NUBE_USADAS = 0
 _NUBE_LOCK = threading.Lock()
+#: Contador compartido entre procesos (``multiprocessing.Value``) cuando el lote
+#: se lee con procesos. Sin el, cada proceso tendria su propio presupuesto y el
+#: tope de nube se multiplicaria por el numero de trabajadores.
+_NUBE_COMPARTIDO = None
+#: Protege la creacion/destruccion del contador compartido (no su valor).
+_NUBE_COMPARTIDO_LOCK = threading.Lock()
 
 
 def reinicia_presupuesto_nube() -> None:
@@ -543,12 +835,26 @@ def reinicia_presupuesto_nube() -> None:
     global _NUBE_USADAS
     with _NUBE_LOCK:
         _NUBE_USADAS = 0
+    if _NUBE_COMPARTIDO is not None:
+        with _NUBE_COMPARTIDO.get_lock():
+            _NUBE_COMPARTIDO.value = 0
 
 
 def _toma_presupuesto_nube() -> bool:
-    """Reserva una llamada a la nube; ``False`` si el presupuesto esta agotado."""
+    """Reserva una llamada a la nube; ``False`` si el presupuesto esta agotado.
+
+    El presupuesto es **por ejecucion**, no por trabajador: con procesos el
+    contador tiene que ser el mismo objeto en todos ellos o el tope de
+    ``MAISA_OCR_NUBE_MAX`` se multiplicaria por el numero de hijos.
+    """
     global _NUBE_USADAS
     tope = _entero_env("MAISA_OCR_NUBE_MAX", NUBE_MAX_POR_DEFECTO)
+    if _NUBE_COMPARTIDO is not None:
+        with _NUBE_COMPARTIDO.get_lock():
+            if _NUBE_COMPARTIDO.value >= max(0, tope):
+                return False
+            _NUBE_COMPARTIDO.value += 1
+            return True
     with _NUBE_LOCK:
         if _NUBE_USADAS >= max(0, tope):
             return False
@@ -666,7 +972,7 @@ def lee(
         )
 
     if usar_cache:
-        _escribe_cache(ruta_cache, sha, elegido.paginas, escalon, firma, firma_n)
+        _escribe_cache(ruta_cache, sha, elegido.paginas, escalon, firma, firma_n, elegido.geo)
     return _documento(
         lectura, sha, escalon, False, arranque, max(calidad, calidad_ocr),
         motor=firma_n if escalon == "vision_nube" else firma,
@@ -688,15 +994,90 @@ def _lee_o_degrada(ruta: Path, umbral_calidad: float) -> Documento:
 
 
 def lee_lote(
-    rutas: list[Path], trabajadores: int = 3, umbral_calidad: float = 0.6
+    rutas: list[Path],
+    trabajadores: int = 3,
+    umbral_calidad: float = 0.6,
+    modo: str | None = None,
 ) -> list[Documento]:
     """Lee un lote en paralelo conservando el orden y sin abortar nunca.
 
     Devuelve exactamente un `Documento` por ruta, en el orden de entrada: una
     factura que reviente sale degradada en su sitio, porque la entrega son las
     500 decisiones y no 499 mas una excepcion.
+
+    ``modo`` es ``"procesos"`` | ``"hilos"`` | ``None`` (lo que diga
+    ``MAISA_LECTURA_MODO``, por defecto procesos en POSIX). Se admiten los dos
+    porque miden cosas distintas:
+
+    - **hilos** reparten la espera de red (el OCR es una llamada HTTP y el hilo
+      se suelta), pero no reparten el trabajo de CPU: extraer la capa de texto
+      de un PDF es puro Python y el GIL lo serializa. Medido: 4,76 s -> 3,69 s
+      al pasar de 1 a 4 hilos, es decir ×1,29 con 4 hilos en 2 nucleos.
+    - **procesos** reparten tambien la CPU, a cambio de pagar el arranque del
+      interprete y de serializar cada `Documento` de vuelta al padre.
+
+    El reparto es por `file_id` (el directorio troceado), que es lo que hace
+    posible lanzar varios procesos sobre el mismo lote: el motor no tiene estado
+    y la salida se concatena en el padre, en orden.
+
+    ``lee_lote`` nunca degrada por culpa del paralelismo: si el pool de procesos
+    no se puede levantar (sin ``fork``, sin permisos) cae a hilos en vez de
+    fallar.
     """
     if not rutas:
         return []
+    if modo is None:
+        modo = os.environ.get("MAISA_LECTURA_MODO", "").strip().lower()
+    if trabajadores <= 1:
+        return [_lee_o_degrada(r, umbral_calidad) for r in rutas]
+    if modo == "procesos" or (not modo and _puede_usar_procesos()):
+        try:
+            return _lee_lote_procesos(rutas, trabajadores, umbral_calidad)
+        except (OSError, RuntimeError, ValueError) as exc:
+            # Un pool que no arranca no puede costar una entrega: se relee con
+            # hilos. El aviso va a stderr porque el numero de trabajadores es
+            # una decision de capacidad y conviene enterarse de que no se aplico.
+            print(f"aviso: sin procesos ({_corto(exc)}); se relee con hilos",
+                  file=sys.stderr)
     with ThreadPoolExecutor(max_workers=trabajadores) as pool:
         return list(pool.map(lambda r: _lee_o_degrada(r, umbral_calidad), rutas))
+
+
+def _puede_usar_procesos() -> bool:
+    """Si este interprete puede trocear el lote en procesos de verdad.
+
+    ``fork`` es lo que hace que el hijo herede el maestro ya cargado y la cache
+    de firmas sin volver a pagarlos. Sin ``fork`` (Windows) un hijo arranca el
+    interprete entero y vuelve a leer el Excel: sale mas caro que los hilos.
+    """
+    return hasattr(os, "fork") and "fork" in multiprocessing.get_all_start_methods()
+
+
+def _lee_lote_procesos(
+    rutas: list[Path], trabajadores: int, umbral_calidad: float
+) -> list[Documento]:
+    """Trocea el lote en procesos con el presupuesto de nube compartido."""
+    global _NUBE_COMPARTIDO
+    contexto = multiprocessing.get_context("fork")
+    trozo = max(1, len(rutas) // (trabajadores * 4))
+    with _NUBE_COMPARTIDO_LOCK:
+        creado = _NUBE_COMPARTIDO is None
+        if creado:
+            _NUBE_COMPARTIDO = contexto.Value("i", _NUBE_USADAS)
+    try:
+        with ProcessPoolExecutor(
+            max_workers=trabajadores, mp_context=contexto
+        ) as pool:
+            return list(pool.map(
+                _lee_o_degrada_par, [(r, umbral_calidad) for r in rutas], chunksize=trozo
+            ))
+    finally:
+        if creado:
+            with _NUBE_COMPARTIDO_LOCK:
+                _NUBE_COMPARTIDO = None
+
+
+def _lee_o_degrada_par(par: tuple[Path, float]) -> Documento:
+    """``_lee_o_degrada`` con la firma que necesita `ProcessPoolExecutor`."""
+    ruta, umbral_calidad = par
+    return _lee_o_degrada(ruta, umbral_calidad)

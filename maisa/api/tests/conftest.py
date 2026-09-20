@@ -25,6 +25,7 @@ from app.almacen import (
     lineas_desde_ocr,
     motor_desde_engine,
     normalizar_file_id,
+    paginas_geo_desde_ocr,
 )
 from app.config import Settings
 from app.deps import get_almacen, get_mongo, get_ocr
@@ -117,7 +118,7 @@ REGISTROS = [
         ],
         "lote": 1,
         "sha256": "b" * 64,
-        "escalon_lectura": "vision",
+        "escalon_lectura": "cache_ocr",
         "calidad_lectura": 0.87,
         "segundos_lectura": 1.5,
         "sospechosos": ["2026-02-31"],
@@ -237,6 +238,14 @@ def ui_dir(tmp_path: Path) -> Path:
     return directorio
 
 
+@pytest.fixture
+def ocr_cache_dir(tmp_path: Path) -> Path:
+    """Cache de OCR vacia: los tests que la necesiten escriben su propia geometria."""
+    directorio = tmp_path / "ocr_cache"
+    directorio.mkdir()
+    return directorio
+
+
 def construir_settings(
     outputs_dir: Path,
     facturas_dir: Path,
@@ -245,12 +254,18 @@ def construir_settings(
     api_key: str | None = None,
     mongo_uri: str = "mongodb://127.0.0.1:1/albertitos",
     facturas_lote2_dir: Path | None = None,
+    ocr_cache_dir: Path | None = None,
 ) -> Settings:
     # El lote 2 se deriva del lote 1 para que un `facturas_dir` temporal no
     # arrastre el directorio real del repositorio: los tests tienen que ser
     # herméticos tambien con dos lotes.
     if facturas_lote2_dir is None:
         facturas_lote2_dir = facturas_dir.parent / "facturas_lote2" / "facturas_primin"
+    # La cache de OCR del motor tampoco puede ser la real: si un test leyera
+    # `motor/.cache/ocr`, el resultado dependeria de lo que hubiera en el disco
+    # de quien ejecuta los tests.
+    if ocr_cache_dir is None:
+        ocr_cache_dir = outputs_dir.parent / "ocr_cache"
     return Settings(
         mongo_uri=mongo_uri,
         mongo_db="albertitos",
@@ -259,6 +274,7 @@ def construir_settings(
         outputs_dir=outputs_dir,
         facturas_dir=facturas_dir,
         facturas_lote2_dir=facturas_lote2_dir,
+        ocr_cache_dir=ocr_cache_dir,
         ui_dir=ui_dir,
         api_key=api_key,
         health_timeout_s=0.5,
@@ -301,6 +317,7 @@ class FakeMongo:
         asientos: list[dict] | None = None,
         snapshots: list[dict] | None = None,
         revisiones: dict[str, dict] | None = None,
+        correcciones: dict[str, dict] | None = None,
         *,
         error: str | None = None,
     ) -> None:
@@ -309,6 +326,7 @@ class FakeMongo:
         self.asientos = asientos if asientos is not None else ASIENTOS
         self.snapshots = snapshots if snapshots is not None else SNAPSHOTS
         self.revisiones: dict[str, dict] = revisiones if revisiones is not None else {}
+        self.correcciones: dict[str, dict] = correcciones if correcciones is not None else {}
 
     def _comprobar(self) -> None:
         if self._error:
@@ -371,6 +389,49 @@ class FakeMongo:
         self.revisiones[file_id] = doc
         return doc
 
+    async def listar_correcciones(self, file_ids: list[str]) -> dict[str, dict]:
+        self._comprobar()
+        return {file_id: self.correcciones[file_id] for file_id in file_ids if file_id in self.correcciones}
+
+    async def obtener_correcciones(self, file_id: str) -> dict | None:
+        self._comprobar()
+        return self.correcciones.get(file_id)
+
+    async def guardar_correcciones(self, file_id: str, campos: dict, autor: str | None = None) -> dict:
+        """Fusiona por campo, como el `$set` con rutas punteadas del repositorio real.
+
+        Importante: **no guarda el valor del motor**. Igual que en Mongo, eso se
+        lee de la traza al devolver la respuesta.
+        """
+        self._comprobar()
+        doc = self.correcciones.get(file_id) or {"_id": file_id, "campos": {},
+                                                 "creado_en": "2026-01-01T00:00:00"}
+        doc["campos"] = dict(doc["campos"])
+        for campo, dato in campos.items():
+            doc["campos"][campo] = {
+                "valor": dato["valor"],
+                "nota": dato.get("nota"),
+                "autor": autor,
+                "actualizado_en": "2026-01-01T00:00:00",
+            }
+        doc["actualizado_en"] = "2026-01-01T00:00:00"
+        self.correcciones[file_id] = doc
+        return doc
+
+    async def borrar_correcciones(self, file_id: str, campo: str | None = None) -> dict | None:
+        self._comprobar()
+        doc = self.correcciones.get(file_id)
+        if doc is None:
+            return None
+        if campo is None:
+            del self.correcciones[file_id]
+            return None
+        doc["campos"] = {k: v for k, v in doc["campos"].items() if k != campo}
+        if not doc["campos"]:
+            del self.correcciones[file_id]
+            return None
+        return doc
+
 
 class FakeOcr:
     """Doble de OcrClient."""
@@ -408,7 +469,32 @@ class FakeOcr:
             "segundos_proxy": 0.81,
             "bytes_enviados": len(contenido),
             "stats": {"mean_score": 0.93},
-            "bruto": {"text": self._texto, "engine": engine or "local"},
+            # Forma real de `/ocr`: por pagina, con la escala del render y el
+            # tamano del bitmap. Las cajas van en pixeles, no en puntos.
+            "bruto": {
+                "text": self._texto,
+                "engine": engine or "local",
+                "pages": 1,
+                "results": [
+                    {
+                        "page": 1,
+                        "scale": 4.0,
+                        "size": {"width": 2382, "height": 3368},
+                        "lines": [
+                            {
+                                "text": "FACTURA 123",
+                                "score": 0.95,
+                                "box": [[100, 200], [500, 200], [500, 260], [100, 260]],
+                            },
+                            {
+                                "text": "TOTAL 100,00",
+                                "score": 0.91,
+                                "box": [[100, 3000], [900, 3000], [900, 3070], [100, 3070]],
+                            },
+                        ],
+                    }
+                ],
+            },
         }
 
 
@@ -461,6 +547,7 @@ class FakeAlmacen:
 
         lineas = lineas_desde_ocr((ocr or {}).get("bruto") or {})
         motor = motor_desde_engine((ocr or {}).get("motor"), bool(lineas))
+        geo = paginas_geo_desde_ocr((ocr or {}).get("bruto") or {})
         estado = ESTADO_TRAS_OCR if ocr is not None else ESTADO_INICIAL
         ahora = datetime.now(timezone.utc)
         documento: dict = {
@@ -479,6 +566,8 @@ class FakeAlmacen:
             "ocr": {"motor": motor, "lineas": lineas, "disponible": ocr is not None},
             "decision": None,
         }
+        if geo:
+            documento["ocr"]["paginas_geo"] = geo
         self.expedientes[file_id] = documento
         self.pdfs[file_id] = contenido
 

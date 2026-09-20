@@ -29,11 +29,16 @@
 import { esJson } from "./config";
 import { parametrosDeConsulta, type FiltrosApi } from "./filtros";
 import type {
+    Anclajes,
+    CampoAnclable,
+    Correcciones,
     ErrorApi,
     Estadisticas,
     FacturaDetalle,
     FacturaResumen,
+    Meta,
     Pagina,
+    Salud,
     Snapshot,
 } from "./types";
 
@@ -104,6 +109,16 @@ interface OpcionesPeticion {
     apiKey: string | null;
     tiempoMs?: number;
     acepta?: string;
+    /**
+     * `GET` si se omite. Solo lo usan las correcciones, que son lo unico que el
+     * panel escribe.
+     */
+    metodo?: "GET" | "PUT" | "DELETE";
+    /**
+     * Se manda como JSON. `undefined` = sin cuerpo: un `DELETE` de todo no lleva
+     * ninguno, y mandar `"null"` o `{}` seria inventarse una peticion distinta.
+     */
+    cuerpo?: unknown;
 }
 
 /**
@@ -129,9 +144,21 @@ async function pedir(ruta: string, opciones: OpcionesPeticion): Promise<Response
     // la inyecte, este fichero no se entera y sigue funcionando.
     if (opciones.apiKey) cabeceras["X-API-Key"] = opciones.apiKey;
 
+    const metodo = opciones.metodo ?? "GET";
+    let cuerpo: string | undefined;
+    if (opciones.cuerpo !== undefined) {
+        cabeceras["Content-Type"] = "application/json";
+        cuerpo = JSON.stringify(opciones.cuerpo);
+    }
+
     let respuesta: Response;
     try {
-        respuesta = await fetch(url, { headers: cabeceras, signal: control.signal });
+        respuesta = await fetch(url, {
+            method: metodo,
+            headers: cabeceras,
+            body: cuerpo,
+            signal: control.signal,
+        });
     } catch (exc) {
         throw new ErrorPeticion(
             agotado
@@ -224,6 +251,43 @@ export async function pedirSnapshots(
     return leerJson<Pagina<Snapshot>>(respuesta, ruta);
 }
 
+/**
+ * El tiempo maximo de `/health`. Mas largo que el de la comprobacion de fuente
+ * porque esta ruta **no** decide de donde salen los datos: recorre las
+ * dependencias una a una y una que este lenta no debe cortar la pantalla. Si se
+ * agota, la seccion de estado lo dice y el resto de la pagina sigue contando lo
+ * que sabe.
+ */
+const TIEMPO_SALUD = 8000;
+
+/**
+ * La salud de las dependencias: Mongo, el OCR y el bucket de escritura.
+ *
+ * Aqui **no** se comprueba nada despues de leerla, y es lo correcto: `/health`
+ * contesta 200 aunque haya una dependencia caida (el 503 vive en
+ * `/health/ready`). O sea que `ok: false` no es un fallo de la peticion, es el
+ * dato que se ha venido a buscar. Tratarlo como error dejaria la seccion de
+ * estado en blanco justo cuando importa.
+ */
+export async function pedirSalud(acceso: AccesoApi, tiempoMs = TIEMPO_SALUD): Promise<Salud> {
+    const ruta = "/health";
+    const respuesta = await pedir(ruta, { ...acceso, tiempoMs });
+    return leerJson<Salud>(respuesta, ruta);
+}
+
+/**
+ * Que version es esto y como esta montado.
+ *
+ * Trae la version de la API y la de la norma con la que se juzgaron las
+ * facturas, que es la mitad de la trazabilidad: sin saber con que norma se
+ * decidio, el resultado de una factura no se puede reproducir.
+ */
+export async function pedirMeta(acceso: AccesoApi, tiempoMs = TIEMPO_COMPROBACION): Promise<Meta> {
+    const ruta = "/api/meta";
+    const respuesta = await pedir(ruta, { ...acceso, tiempoMs });
+    return leerJson<Meta>(respuesta, ruta);
+}
+
 /** Una pagina del listado. Normalmente no se llama directamente. */
 export async function listarFacturas(
     acceso: AccesoApi,
@@ -305,4 +369,63 @@ export async function pedirPdf(acceso: AccesoApi, fileId: string, tiempoMs?: num
         );
     }
     return await respuesta.blob();
+}
+
+/**
+ * Donde esta escrito cada dato dentro del documento.
+ *
+ * Devuelve **dos cosas distintas segun el origen** y hay que tratarlas como
+ * tales: en `capa_texto` trae los `tokens` para que los busque el navegador en el
+ * texto real del PDF, y en `ocr` trae las `anclas` ya resueltas, porque ahi no
+ * hay texto que buscar. Las 471 con capa de texto llegan con `anclas: []`; las 29
+ * escaneadas, con `tokens` que solo sirven de pista.
+ */
+export async function pedirAnclajes(acceso: AccesoApi, fileId: string): Promise<Anclajes> {
+    const ruta = `/api/facturas/${encodeURIComponent(fileId)}/anclajes`;
+    const respuesta = await pedir(ruta, acceso);
+    return leerJson<Anclajes>(respuesta, ruta);
+}
+
+/** Las correcciones que ya hay guardadas para una factura. */
+export async function pedirCorrecciones(acceso: AccesoApi, fileId: string): Promise<Correcciones> {
+    const ruta = `/api/facturas/${encodeURIComponent(fileId)}/correcciones`;
+    const respuesta = await pedir(ruta, acceso);
+    return leerJson<Correcciones>(respuesta, ruta);
+}
+
+/**
+ * Guarda campos corregidos a mano.
+ *
+ * **Fusiona, no reemplaza**: se puede mandar un solo campo y los que ya estaban
+ * se quedan como estaban. Es lo que permite guardar campo a campo desde el
+ * formulario sin llevarse por delante lo corregido antes.
+ *
+ * La respuesta es el estado completo ya guardado, asi que quien llama no tiene
+ * que recomponerlo por su cuenta ni volver a pedirlo.
+ */
+export async function guardarCorrecciones(
+    acceso: AccesoApi,
+    fileId: string,
+    campos: Record<string, { valor: string; nota?: string }>,
+    autor?: string,
+): Promise<Correcciones> {
+    const ruta = `/api/facturas/${encodeURIComponent(fileId)}/correcciones`;
+    const cuerpo: { campos: typeof campos; autor?: string } = { campos };
+    // El `autor` vacio se omite en vez de mandarse en blanco: la API lo guarda
+    // como `null` y "sin autor" es la ausencia del campo, no una cadena vacia.
+    if (autor && autor.trim()) cuerpo.autor = autor.trim();
+    const respuesta = await pedir(ruta, { ...acceso, metodo: "PUT", cuerpo });
+    return leerJson<Correcciones>(respuesta, ruta);
+}
+
+/** Deshace una correccion, o todas si se omite `campo`. */
+export async function borrarCorrecciones(
+    acceso: AccesoApi,
+    fileId: string,
+    campo?: CampoAnclable,
+): Promise<Correcciones> {
+    const sufijo = campo ? `?campo=${encodeURIComponent(campo)}` : "";
+    const ruta = `/api/facturas/${encodeURIComponent(fileId)}/correcciones${sufijo}`;
+    const respuesta = await pedir(ruta, { ...acceso, metodo: "DELETE" });
+    return leerJson<Correcciones>(respuesta, ruta);
 }

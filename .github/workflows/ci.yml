@@ -8,6 +8,23 @@
 #              produce el motor hoy, el banco de oro no puede haberse movido, y
 #              la copia de la raiz tiene que ser la misma.
 #
+# Y dos puertas sueltas, fuera de esa escalera porque no comparten nada con ella:
+#
+#   panel    el JSON de capacidad y coste que sirve `/escalabilidad` en el panel
+#            tiene que ser el que produce hoy `ui/tools/generar_escalabilidad.py`
+#            a partir de `motor/docs/bench.json`. Mismo criterio que la puerta 4
+#            con `outcomes.jsonl`: un artefacto versionado que se deriva de una
+#            medida solo vale si se puede reproducir. Sin esto, la pagina puede
+#            estar enseñando la capacidad de hace tres commits y nadie se entera.
+#   api      la suite de `maisa/api`, que NO entra en la puerta 2 (esa es la del
+#            motor). Es hermetica a proposito: los tests apuntan Mongo a un
+#            puerto cerrado y sustituyen el OCR por dobles, asi que no hace
+#            falta levantar nada. Cubre el contrato HTTP que ve el navegador;
+#            entre otras cosas, que `/escalabilidad` (una ruta del panel, no un
+#            fichero) devuelva el `index.html` y que `/api/nope` siga siendo
+#            JSON. Sin esta puerta, recargar en cualquier ruta del panel podia
+#            volver a dar el 404 de Starlette sin que CI dijera nada.
+#
 # La puerta 3 es la que de verdad protege: no comprobamos que el codigo "hace
 # algo", comprobamos que **decide lo mismo dos veces**. Un motor de pagos que
 # cambia de opinion entre ejecuciones no es un motor, es una moneda al aire.
@@ -56,6 +73,41 @@ jobs:
       - run: python -m pip install --upgrade pip ruff
       - name: ruff
         run: ruff check .
+
+  panel:
+    name: panel (JSON de escalabilidad al dia)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # `defaults` de arriba pone `maisa`, pero el script resuelve sus rutas
+        # desde su propia ubicacion, asi que da igual desde donde se llame.
+        working-directory: maisa
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Sin `pip install`: el script es stdlib pura y lee `motor/docs/bench.json`,
+      # que se versiona. Es la puerta mas barata del CI.
+      - name: el JSON del panel es el que produce el generador
+        run: python ui/tools/generar_escalabilidad.py --check
+
+  api:
+    name: api (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # `requirements.txt` es lo que va dentro de la imagen; `requirements-dev.txt`
+      # solo añade pytest. Los tests no necesitan Mongo ni el OCR: los doblan.
+      - run: python -m pip install --upgrade pip -r api/requirements.txt -r api/requirements-dev.txt
+      # `api/pytest.ini` declara `pythonpath = .` y `testpaths = tests`, asi que
+      # esto funciona recien clonado sin exportar nada.
+      - name: pytest
+        working-directory: maisa/api
+        run: python -m pytest
 
   tests:
     name: tests (pytest)

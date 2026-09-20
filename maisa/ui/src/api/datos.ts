@@ -15,9 +15,15 @@
 
 import {
     ErrorPeticion,
+    borrarCorrecciones as borrarCorreccionesApi,
+    guardarCorrecciones as guardarCorreccionesApi,
+    pedirAnclajes,
+    pedirCorrecciones,
     pedirDetalle,
     pedirEstadisticas,
+    pedirMeta,
     pedirPdf,
+    pedirSalud,
     pedirSnapshots,
     pedirTodasLasFacturas,
 } from "./cliente";
@@ -26,6 +32,8 @@ import {
     RUTA_ESTADISTICAS,
     RUTA_FACTURAS,
     RUTA_MANIFIESTO,
+    RUTA_META,
+    RUTA_SALUD,
     RUTA_SNAPSHOTS,
     hayPdfCongelado,
     rutaDetalle,
@@ -37,7 +45,18 @@ import {
     aplicarFiltrosExtra,
     type FiltrosVista,
 } from "./filtros";
-import type { Estadisticas, FacturaDetalle, FacturaResumen, Pagina, Snapshot } from "./types";
+import type {
+    Anclajes,
+    CampoAnclable,
+    Correcciones,
+    Estadisticas,
+    FacturaDetalle,
+    FacturaResumen,
+    Meta,
+    Pagina,
+    Salud,
+    Snapshot,
+} from "./types";
 
 /** De donde se esta leyendo. */
 export type Fuente = "vivo" | "congelado";
@@ -127,6 +146,35 @@ export async function cargarSnapshots(acceso: Acceso): Promise<Pagina<Snapshot>>
         return pedirSnapshots({ api: acceso.api, apiKey: acceso.apiKey });
     }
     return bajarJson<Pagina<Snapshot>>(RUTA_SNAPSHOTS, "las descargas del ERP del congelado");
+}
+
+/**
+ * La salud de las dependencias, del origen que toque.
+ *
+ * Va por `Acceso` por el mismo motivo que `cargarSnapshots`: el estado es un
+ * dato vivo y la rama congelada existe para que la seccion de estado no
+ * desaparezca justo cuando la API no contesta. Pero lo que se ensena entonces es
+ * una **foto**, con la fecha del manifiesto al lado, no un latido.
+ */
+export async function cargarSalud(acceso: Acceso): Promise<Salud> {
+    if (acceso.fuente === "vivo") {
+        return pedirSalud({ api: acceso.api, apiKey: acceso.apiKey });
+    }
+    return bajarJson<Salud>(RUTA_SALUD, "la salud del congelado");
+}
+
+/**
+ * La version del servicio y la configuracion con la que se juzgo la traza.
+ *
+ * `versiones_norma` es lo que hace reproducible una decision: la factura que se
+ * sigue en el panel se juzgo con `norma_v3.2` y la pantalla lo tiene que poder
+ * decir sin abrir el JSON. Por eso se pide aqui y no se da por sabido.
+ */
+export async function cargarMeta(acceso: Acceso): Promise<Meta> {
+    if (acceso.fuente === "vivo") {
+        return pedirMeta({ api: acceso.api, apiKey: acceso.apiKey });
+    }
+    return bajarJson<Meta>(RUTA_META, "la version del servicio en el congelado");
 }
 
 /**
@@ -229,6 +277,71 @@ export async function cargarPdf(acceso: Acceso, fileId: string): Promise<Blob> {
         );
     }
     return await respuesta.blob();
+}
+
+/**
+ * Donde esta escrito cada dato dentro del PDF.
+ *
+ * **Sin API no hay resaltado, y se dice.** El anclaje no es un adorno que se
+ * pueda adivinar en el cliente: lo decide la API, que es la que tiene la traza y
+ * la cache de OCR. Recalcularlo aqui seria tener dos respuestas distintas a la
+ * misma pregunta —y la del panel seria la equivocada en cuanto el motor cambie
+ * como busca—, asi que el congelado se queda sin resaltado y lo explica en vez
+ * de inventarse cajas.
+ */
+export async function cargarAnclajes(acceso: Acceso, fileId: string): Promise<Anclajes> {
+    if (acceso.fuente === "vivo") {
+        return pedirAnclajes({ api: acceso.api, apiKey: acceso.apiKey }, fileId);
+    }
+    throw new ErrorPeticion(
+        "Sin API no se puede saber dónde está escrito cada dato: el anclaje sale de la traza, " +
+            "que solo tiene el servidor.",
+        { ruta: `/api/facturas/${fileId}/anclajes`, codigo: "congelado_sin_anclajes" },
+    );
+}
+
+/** Las correcciones guardadas de una factura. */
+export async function cargarCorrecciones(acceso: Acceso, fileId: string): Promise<Correcciones> {
+    if (acceso.fuente === "vivo") {
+        return pedirCorrecciones({ api: acceso.api, apiKey: acceso.apiKey }, fileId);
+    }
+    // En congelado no hay Mongo detras: la respuesta honesta es "no hay ninguna",
+    // no un error. El formulario se deshabilita por separado (ver `SIN_ESCRITURA`).
+    return { file_id: fileId, campos: [], actualizado_en: null };
+}
+
+/**
+ * Guarda campos corregidos a mano. **Solo con API**: es lo unico que el panel
+ * escribe, y escribe en Mongo.
+ */
+export async function guardarCorrecciones(
+    acceso: Acceso,
+    fileId: string,
+    campos: Record<string, { valor: string; nota?: string }>,
+    autor?: string,
+): Promise<Correcciones> {
+    if (acceso.fuente !== "vivo") {
+        throw new ErrorPeticion(
+            "No se puede guardar sin conexión con la API: las correcciones van a la base de datos.",
+            { ruta: `/api/facturas/${fileId}/correcciones`, codigo: "congelado_sin_escritura" },
+        );
+    }
+    return guardarCorreccionesApi({ api: acceso.api, apiKey: acceso.apiKey }, fileId, campos, autor);
+}
+
+/** Deshace una correccion, o todas si se omite `campo`. */
+export async function borrarCorrecciones(
+    acceso: Acceso,
+    fileId: string,
+    campo?: CampoAnclable,
+): Promise<Correcciones> {
+    if (acceso.fuente !== "vivo") {
+        throw new ErrorPeticion(
+            "No se puede deshacer sin conexión con la API: las correcciones están en la base de datos.",
+            { ruta: `/api/facturas/${fileId}/correcciones`, codigo: "congelado_sin_escritura" },
+        );
+    }
+    return borrarCorreccionesApi({ api: acceso.api, apiKey: acceso.apiKey }, fileId, campo);
 }
 
 /**

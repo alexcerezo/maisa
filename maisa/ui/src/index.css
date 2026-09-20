@@ -120,6 +120,73 @@
     --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* --- Capa de texto del visor de PDF (`pdf.js`) -----------------------------
+
+   Portado a mano de `pdfjs-dist/web/pdf_viewer.css`. No se puede importar aquel
+   fichero: arrastra `@import` de tipografias e iconos que Vite resolveria como
+   assets y acabarian en el bundle. Aqui va solo lo que hace falta para que los
+   `<span>` del texto queden invisibles, encima del dibujo, alineados con lo que
+   se ve y seleccionables.
+
+   `--total-scale-factor` lo pone el visor (la escala a la que pinta la pagina) y
+   es lo que convierte `--font-height`, que viene en unidades del PDF, a pixeles.
+   Sin el, `calc()` no resuelve, la declaracion de `font-size` se descarta y los
+   `<span>` se quedan a tamano cero: el texto sigue ahi pero no se puede
+   seleccionar porque no ocupa nada.
+
+   Dos diferencias a proposito con el original: `z-index: 2` en vez de `0`, para
+   que el texto quede por encima de las cajas del resaltado, que van en el 1; y
+   sin la parte de subrayado del editor, que aqui no se usa. */
+.textLayer {
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    opacity: 1;
+    line-height: 1;
+    letter-spacing: normal;
+    word-spacing: normal;
+    -webkit-text-size-adjust: none;
+    text-size-adjust: none;
+    forced-color-adjust: none;
+    transform-origin: 0 0;
+    caret-color: CanvasText;
+    color-scheme: only light;
+    z-index: 2;
+
+    --min-font-size: 1;
+    --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.textLayer :is(span, br) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+    z-index: 1;
+    --font-height: 0;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    --scale-x: 1;
+    --rotate: 0deg;
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.textLayer .markedContent {
+    display: contents;
+}
+
+.textLayer ::selection {
+    background: rgb(0 0 255 / 0.25);
+    color: transparent;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

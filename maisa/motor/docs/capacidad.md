@@ -4,6 +4,12 @@ Generado por `maisa/tools/bench.py` el 2026-09-19T11:11:53+0000 sobre 2 vCPU / 1
 
 > Regla de la casa: si una cifra no esta en la columna *medido*, es una extrapolacion y va marcada como tal.
 
+Este documento es la version larga. La version que se puede enseñar esta en pantalla: el panel
+(`maisa/ui`) sirve la capacidad, los limites, la formula de coste y el plan de crecimiento en
+**`/escalabilidad`**, derivados del mismo `docs/bench.json` por
+`maisa/ui/tools/generar_escalabilidad.py`. Si se toca el banco de medidas, hay que regenerar los
+dos: el script del panel lleva `--check` justo para eso.
+
 ## 1. Lote completo de 500 (cache caliente) por numero de trabajadores
 
 3 repeticiones por configuracion, end-to-end (`python -m maisa.procesa`), escribiendo `outcomes.jsonl` y contando las lineas emitidas.

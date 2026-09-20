@@ -42,6 +42,32 @@
     }
   }
 
+  // Forma de un dato completado a mano (`correcciones.campos.<campo>`). Es una
+  // funcion y no una constante para devolver un objeto nuevo por campo:
+  // `$jsonSchema` no admite `definitions`/`$ref` (Mongo responde "keyword
+  // 'definitions' is not currently supported"), asi que se repite.
+  function correccion() {
+    return {
+      bsonType: "object",
+      required: ["valor", "actualizado_en"],
+      properties: {
+        valor: {
+          bsonType: "string",
+          minLength: 1,
+          maxLength: 200,
+          description: "Lo que el operador dice que pone el documento"
+        },
+        nota: {
+          bsonType: ["string", "null"],
+          maxLength: 500,
+          description: "De donde lo ha sacado, para el que revise despues"
+        },
+        autor: { bsonType: ["string", "null"], maxLength: 120 },
+        actualizado_en: { bsonType: "date" }
+      }
+    };
+  }
+
   // ---------------------------------------------------------------------
   // Forma canónica de un campo extraído: { estado, valor, rastro }.
   //
@@ -133,6 +159,42 @@
               paginas: { bsonType: "int", minimum: 0 },
               duracion_ms: { bsonType: "int", minimum: 0 },
               disponible: { bsonType: "bool" },
+              // Geometria del OCR por pagina, en pixeles del render. Va aparte
+              // de `lineas` porque necesita la `escala` para volver a puntos
+              // del PDF: sin ella no se puede pintar el resaltado. Misma forma
+              // que la cache del motor, para que el visor lea igual las
+              // escaneadas del lote y las que entran por la API.
+              paginas_geo: {
+                bsonType: "array",
+                maxItems: 100,
+                items: {
+                  bsonType: "object",
+                  required: ["pagina", "escala", "lineas"],
+                  properties: {
+                    pagina: { bsonType: "int", minimum: 0 },
+                    escala: { bsonType: ["double", "int", "long"], minimum: 0, exclusiveMinimum: true },
+                    ancho: { bsonType: ["double", "int", "long"], minimum: 0, exclusiveMinimum: true },
+                    alto: { bsonType: ["double", "int", "long"], minimum: 0, exclusiveMinimum: true },
+                    lineas: {
+                      bsonType: "array",
+                      maxItems: 2000,
+                      items: {
+                        bsonType: "object",
+                        required: ["texto", "caja"],
+                        properties: {
+                          texto: { bsonType: "string" },
+                          caja: {
+                            bsonType: "array",
+                            minItems: 4, maxItems: 4,
+                            items: { bsonType: ["double", "int", "long"] }
+                          },
+                          score: { bsonType: "double", minimum: 0, maximum: 1 }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               lineas: {
                 bsonType: "array",
                 maxItems: 2000,
@@ -631,6 +693,70 @@
         _id: 2,
         aplicada_en: new Date(),
         descripcion: "Anade coleccion revisiones (estado de revision humana de ESCALAR)",
+        hash_script: null
+      }
+    },
+    { upsert: true }
+  );
+
+  // =====================================================================
+  // 11. correcciones — datos que un operador completa a mano
+  // =====================================================================
+  // Segunda coleccion que escribe la API. En las facturas que el motor no
+  // pudo leer enteras (sobre todo ESCALAR), el operador mira el PDF y teclea
+  // el NIF, el IBAN o el pedido que faltan. Se guarda **al lado** de la
+  // decision, nunca encima: `resultado` sale de la traza, que es de solo
+  // lectura. Si completar un dato cambiara el PAGAR/ESCALAR, la traza dejaria
+  // de contar lo que de verdad paso.
+  //
+  // Un documento por factura; un subdocumento por campo corregido. El valor
+  // que leyo el motor no se copia aqui: se lee de la traza cuando hace falta
+  // (`GET /api/facturas/{file_id}/correcciones`), para que no se quede
+  // obsoleto si el lote se reproduce.
+  ensureCollection("correcciones", {
+    validator: {
+      $jsonSchema: {
+        bsonType: "object",
+        title: "Datos de una factura completados a mano",
+        required: ["_id", "campos", "actualizado_en"],
+        properties: {
+          _id: { bsonType: "string", description: "file_id: nombre exacto del PDF" },
+          campos: {
+            bsonType: "object",
+            description: "Solo los campos corregidos; puede haber uno o varios",
+            minProperties: 1,
+            maxProperties: 7,
+            // `definitions`/`$ref` no estan soportados por `$jsonSchema`, asi
+            // que la forma de un campo corregido se repite en los siete.
+            properties: {
+              pedido: correccion(),
+              nif: correccion(),
+              iban: correccion(),
+              fecha: correccion(),
+              base: correccion(),
+              iva: correccion(),
+              total: correccion()
+            },
+            additionalProperties: false
+          },
+          creado_en: { bsonType: "date" },
+          actualizado_en: { bsonType: "date" }
+        }
+      }
+    },
+    validationLevel: "strict",
+    validationAction: "error"
+  });
+
+  db.correcciones.createIndex({ actualizado_en: -1 }, { name: "ix_actualizado" });
+
+  db.migraciones.updateOne(
+    { _id: 3 },
+    {
+      $setOnInsert: {
+        _id: 3,
+        aplicada_en: new Date(),
+        descripcion: "Anade coleccion correcciones (datos completados a mano por un operador)",
         hash_script: null
       }
     },

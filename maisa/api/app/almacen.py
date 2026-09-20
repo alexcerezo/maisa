@@ -65,6 +65,7 @@ MOTORES = ("rapidocr", "pytesseract", "pdfplumber", "paddleocr_vl", "ninguno")
 
 TIPOS_EVENTO = ("EXPEDIENTE_ESTADO", "OCR_OK", "OCR_FAIL")
 MAX_LINEAS_OCR = 2000
+MAX_PAGINAS_GEO = 100
 
 # Un `file_id` legitimo es "<fecha>_<proveedor>.pdf". El patron corta cualquier
 # intento de salir de un directorio (barras, "..", rutas absolutas) y es el
@@ -205,6 +206,68 @@ def lineas_desde_ocr(bruto: dict[str, Any]) -> list[dict]:
             if fila is not None:
                 salida.append(fila)
     return salida[:MAX_LINEAS_OCR]
+
+
+def paginas_geo_desde_ocr(bruto: dict[str, Any]) -> list[dict]:
+    """Geometria por pagina del payload del OCR, en el formato de la cache del motor.
+
+    `lineas_desde_ocr` guarda la caja pero **pierde la escala de la pagina**, y
+    sin escala la caja no se puede pintar sobre el PDF: el OCR mide en pixeles
+    del bitmap renderizado (hasta 288 dpi) y el visor pinta en puntos. Esta
+    funcion conserva escala y tamano del render junto a las lineas, con la misma
+    forma que `motor/.cache/ocr/<sha256>.json` (`pagina`/`escala`/`ancho`/`alto`
+    y `lineas[].texto|score|caja`), para que el visor resuelva igual las
+    escaneadas del lote (que lee de la cache) y las que entran por la API.
+
+    Devuelve `[]` si el payload no trae geometria utilizable: la factura se lee
+    igual, solo que sin resaltado.
+    """
+    resultados = bruto.get("results")
+    if not isinstance(resultados, list):
+        return []
+    paginas: list[dict] = []
+    for indice, pagina in enumerate(resultados[:MAX_PAGINAS_GEO]):
+        if not isinstance(pagina, dict):
+            continue
+        escala = pagina.get("scale")
+        if not isinstance(escala, (int, float)) or float(escala) <= 0:
+            # Una caja sin su escala es una caja inutil.
+            continue
+        tamano = pagina.get("size") if isinstance(pagina.get("size"), dict) else {}
+        ancho, alto = tamano.get("width"), tamano.get("height")
+        tiene_tamano = (
+            isinstance(ancho, (int, float))
+            and isinstance(alto, (int, float))
+            and float(ancho) > 0
+            and float(alto) > 0
+        )
+        lineas: list[dict] = []
+        for linea in pagina.get("lines") or []:
+            if not isinstance(linea, dict):
+                continue
+            texto = linea.get("text")
+            caja = _bbox_desde_box(linea.get("box"))
+            if not isinstance(texto, str) or not texto.strip() or caja is None:
+                continue
+            fila: dict[str, Any] = {"texto": texto, "caja": caja}
+            score = linea.get("score")
+            if isinstance(score, (int, float)) and 0.0 <= float(score) <= 1.0:
+                fila["score"] = round(float(score), 6)
+            lineas.append(fila)
+        if not lineas:
+            continue
+        # El validador de Mongo acota `lineas` a 2000 por pagina: se corta aqui
+        # para no escribir un documento que el esquema rechace.
+        entrada: dict[str, Any] = {
+            "pagina": indice,
+            "escala": float(escala),
+            "lineas": lineas[:MAX_LINEAS_OCR],
+        }
+        if tiene_tamano:
+            entrada["ancho"] = float(ancho)
+            entrada["alto"] = float(alto)
+        paginas.append(entrada)
+    return paginas
 
 
 def motor_desde_engine(engine: Any, hay_lineas: bool) -> str:
@@ -349,6 +412,7 @@ class AlmacenFacturas:
         motor = motor_desde_engine((ocr or {}).get("motor"), bool(lineas))
         estado = ESTADO_TRAS_OCR if ocr is not None else ESTADO_INICIAL
         paginas = (ocr or {}).get("paginas")
+        geo = paginas_geo_desde_ocr((ocr or {}).get("bruto") or {})
 
         documento: dict[str, Any] = {
             "_id": file_id,
@@ -381,6 +445,8 @@ class AlmacenFacturas:
         if isinstance(paginas, int) and paginas >= 0:
             documento["documento"]["paginas"] = paginas
             documento["ocr"]["paginas"] = paginas
+        if geo:
+            documento["ocr"]["paginas_geo"] = geo
         if ocr is not None and isinstance(ocr.get("segundos_proxy"), (int, float)):
             documento["ocr"]["duracion_ms"] = int(float(ocr["segundos_proxy"]) * 1000)
         if ocr is not None and isinstance(ocr.get("texto"), str) and ocr["texto"].strip():

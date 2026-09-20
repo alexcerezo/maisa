@@ -21,6 +21,7 @@
 
 import {
     createContext,
+    useCallback,
     useContext,
     useEffect,
     useMemo,
@@ -29,16 +30,31 @@ import {
     type ReactNode,
 } from "react";
 
+import { ErrorPeticion } from "./cliente";
 import {
+    borrarCorrecciones,
+    cargarAnclajes,
     cargarDetalle,
     cargarFacturas,
+    cargarMeta,
     cargarPdf,
+    cargarSalud,
     cargarSnapshots,
+    guardarCorrecciones,
     type ConjuntoFacturas,
 } from "./datos";
+import { cargarEscalabilidad, type Escalabilidad } from "./escalabilidad";
 import { elegirFuente, type EstadoFuente } from "./fuente";
 import type { FiltrosVista } from "./filtros";
-import type { FacturaDetalle, Snapshot } from "./types";
+import type {
+    Anclajes,
+    CampoAnclable,
+    Correcciones,
+    FacturaDetalle,
+    Meta,
+    Salud,
+    Snapshot,
+} from "./types";
 
 export interface ResultadoPeticion<T> {
     datos: T | null;
@@ -213,6 +229,19 @@ export function useFacturas(
 }
 
 /**
+ * El banco de medidas de capacidad y coste.
+ *
+ * Es el único hook que **no** espera a `useFuente`: el fichero que lee es un
+ * artefacto estático del build, así que está disponible en vivo y en congelado, y
+ * hacerle esperar la comprobación de la API retrasaría una pantalla que no
+ * depende de ella. La clave de la petición es fija porque no hay nada que la
+ * cambie.
+ */
+export function useEscalabilidad(): ResultadoPeticion<Escalabilidad> {
+    return usePeticion("escalabilidad", cargarEscalabilidad);
+}
+
+/**
  * La salud de la descarga del ERP.
  *
  * Si espera a `useFuente`, al contrario que `useEscalabilidad`: los snapshots
@@ -231,6 +260,33 @@ export function useSnapshots(): ResultadoPeticion<Snapshot[]> {
     });
 }
 
+/**
+ * La salud de las dependencias de la API.
+ *
+ * Espera a `useFuente` como `useSnapshots`: en congelado se lee `salud.json`, que
+ * es una foto del día del congelado, y en vivo se pregunta a `/health`. La clave
+ * lleva la fuente delante para que cambiar de origen vuelva a pedirlo en vez de
+ * dejar en pantalla la latencia de la otra fuente.
+ */
+export function useSalud(): ResultadoPeticion<Salud> {
+    const { estado } = useFuente();
+    const clave = estado ? `${estado.fuente}\u0001salud` : null;
+    return usePeticion(clave, async () => {
+        if (!estado) throw new Error("Se ha pedido la salud antes de saber la fuente.");
+        return cargarSalud(estado.acceso);
+    });
+}
+
+/** La versión del servicio y la norma con la que se juzgó la traza. */
+export function useMeta(): ResultadoPeticion<Meta> {
+    const { estado } = useFuente();
+    const clave = estado ? `${estado.fuente}\u0001meta` : null;
+    return usePeticion(clave, async () => {
+        if (!estado) throw new Error("Se ha pedido la versión antes de saber la fuente.");
+        return cargarMeta(estado.acceso);
+    });
+}
+
 /** El expediente de una factura. */
 export function useDetalle(fileId: string | undefined): ResultadoPeticion<FacturaDetalle> {
     const { estado } = useFuente();
@@ -242,8 +298,17 @@ export function useDetalle(fileId: string | undefined): ResultadoPeticion<Factur
 }
 
 export interface PdfCargado {
-    /** URL local del navegador (`blob:`), lista para un `<iframe src>`. */
+    /** URL local del navegador (`blob:`), lista para un `<a href>`. */
     url: string | null;
+    /**
+     * El PDF en si. Lo pide el visor con `arrayBuffer()` y se lo pasa a `pdf.js`.
+     *
+     * Se prefiere el `Blob` a darle la URL a `pdf.js` porque asi el fichero viaja
+     * una sola vez y al worker como buffer transferido, sin depender de que el
+     * worker pueda resolver una URL `blob:` (que puede, pero es una suposicion de
+     * mas que no hace falta hacer).
+     */
+    blob: Blob | null;
     error: Error | null;
     cargando: boolean;
 }
@@ -261,12 +326,14 @@ export interface PdfCargado {
 export function usePdf(fileId: string | undefined): PdfCargado {
     const { estado } = useFuente();
     const [url, setUrl] = useState<string | null>(null);
+    const [blob, setBlob] = useState<Blob | null>(null);
     const [error, setError] = useState<Error | null>(null);
     const [cargando, setCargando] = useState(false);
 
     useEffect(() => {
         if (!estado || !fileId) {
             setUrl(null);
+            setBlob(null);
             setError(null);
             setCargando(false);
             return;
@@ -276,14 +343,16 @@ export function usePdf(fileId: string | undefined): PdfCargado {
         setCargando(true);
         setError(null);
         cargarPdf(estado.acceso, fileId)
-            .then((blob) => {
+            .then((datos) => {
                 if (!vivo) return;
-                creada = URL.createObjectURL(blob);
+                creada = URL.createObjectURL(datos);
+                setBlob(datos);
                 setUrl(creada);
             })
             .catch((exc) => {
                 if (!vivo) return;
                 setUrl(null);
+                setBlob(null);
                 setError(exc instanceof Error ? exc : new Error(String(exc)));
             })
             .finally(() => {
@@ -298,5 +367,140 @@ export function usePdf(fileId: string | undefined): PdfCargado {
         };
     }, [estado, fileId]);
 
-    return { url, error, cargando };
+    return { url, blob, error, cargando };
+}
+
+/**
+ * Donde esta escrito cada dato dentro del documento.
+ *
+ * Va aparte del detalle y no dentro porque **es opcional**: el detalle sin
+ * anclajes se sigue pudiendo ver, y sin conexion no hay anclajes. Si esto
+ * fallara, el visor tiene que seguir pintando el PDF.
+ */
+export function useAnclajes(fileId: string | undefined): ResultadoPeticion<Anclajes> {
+    const { estado } = useFuente();
+    const clave = estado && fileId ? `${estado.fuente}\u0001anclajes\u0001${fileId}` : null;
+    return usePeticion(clave, async () => {
+        if (!estado || !fileId) throw new Error("Se han pedido los anclajes sin factura.");
+        return cargarAnclajes(estado.acceso, fileId);
+    });
+}
+
+export interface EdicionCorrecciones {
+    /** Lo que hay guardado ahora mismo. Nunca `null`: vacio es `campos: []`. */
+    correcciones: Correcciones;
+    /** `true` mientras se escribe en la API. */
+    guardando: boolean;
+    /** El ultimo fallo **al escribir**. Se limpia al reintentar. */
+    error: Error | null;
+    /**
+     * `false` sin API. El formulario se deshabilita en vez de ofrecer un guardado
+     * que va a fallar: es mejor decir "hace falta conexion" antes de que el
+     * operador escriba los datos y los pierda.
+     */
+    sePuedeEscribir: boolean;
+    /** `true` si esa factura tiene alguna correccion guardada. */
+    hayCorrecciones: boolean;
+    /** Guarda campo a campo. Devuelve `true` si se ha guardado. */
+    guardar: (
+        campos: Record<string, { valor: string; nota?: string }>,
+        autor?: string,
+    ) => Promise<boolean>;
+    /** Deshace una correccion, o todas. Devuelve `true` si se ha deshecho. */
+    deshacer: (campo?: CampoAnclable) => Promise<boolean>;
+}
+
+/** El estado vacio de una factura sin correcciones. */
+function sinCorrecciones(fileId: string): Correcciones {
+    return { file_id: fileId, campos: [], actualizado_en: null };
+}
+
+/**
+ * Las correcciones de una factura, con escritura.
+ *
+ * **Arranca del detalle y no de una peticion propia.** El detalle ya trae las
+ * correcciones, asi que pedirlas otra vez al abrir el visor seria una vuelta de
+ * red para el mismo dato. Cuando el detalle se vuelve a pedir (al reintentar), el
+ * valor del servidor manda y pisa el local: el servidor es el que tiene razon.
+ *
+ * Esto **no** toca la decision. Corregir un campo no recalcula el `resultado` ni
+ * los motivos, y no puede: el motor decide con la traza y el panel solo anota lo
+ * que ha visto un humano. La pantalla lo dice al lado del formulario.
+ */
+export function useCorrecciones(
+    fileId: string,
+    inicial: Correcciones | undefined,
+): EdicionCorrecciones {
+    const { estado } = useFuente();
+    const [correcciones, setCorrecciones] = useState<Correcciones>(
+        inicial ?? sinCorrecciones(fileId),
+    );
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState<Error | null>(null);
+
+    useEffect(() => {
+        // El congelado guardado antes de que existieran las correcciones no trae
+        // la clave, de ahi el `??`: `undefined` es "ninguna", no "no lo se".
+        setCorrecciones(inicial ?? sinCorrecciones(fileId));
+        setError(null);
+    }, [inicial, fileId]);
+
+    const sePuedeEscribir = estado?.fuente === "vivo";
+
+    const escribir = useCallback(
+        async (accion: () => Promise<Correcciones>): Promise<boolean> => {
+            if (!estado || estado.fuente !== "vivo") {
+                setError(
+                    new ErrorPeticion(
+                        "No se puede guardar sin conexión con la API: las correcciones van a la base de datos.",
+                        { ruta: `/api/facturas/${fileId}/correcciones`, codigo: "congelado_sin_escritura" },
+                    ),
+                );
+                return false;
+            }
+            setGuardando(true);
+            setError(null);
+            try {
+                setCorrecciones(await accion());
+                return true;
+            } catch (exc) {
+                setError(exc instanceof Error ? exc : new Error(String(exc)));
+                return false;
+            } finally {
+                setGuardando(false);
+            }
+        },
+        [estado, fileId],
+    );
+
+    const guardar = useCallback(
+        (campos: Record<string, { valor: string; nota?: string }>, autor?: string) =>
+            escribir(() => {
+                if (!estado) throw new Error("Se ha corregido una factura sin saber la fuente.");
+                return guardarCorrecciones(estado.acceso, fileId, campos, autor);
+            }),
+        [escribir, estado, fileId],
+    );
+
+    const deshacer = useCallback(
+        (campo?: CampoAnclable) =>
+            escribir(() => {
+                if (!estado) throw new Error("Se ha corregido una factura sin saber la fuente.");
+                return borrarCorrecciones(estado.acceso, fileId, campo);
+            }),
+        [escribir, estado, fileId],
+    );
+
+    return useMemo(
+        () => ({
+            correcciones,
+            guardando,
+            error,
+            sePuedeEscribir,
+            hayCorrecciones: correcciones.campos.length > 0,
+            guardar,
+            deshacer,
+        }),
+        [correcciones, guardando, error, sePuedeEscribir, guardar, deshacer],
+    );
 }

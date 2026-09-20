@@ -82,7 +82,32 @@ def test_sube_con_ocr_y_guarda_las_lineas(cliente_con_fakes, fake_almacen, fake_
     assert fake_ocr.llamadas[0]["detalle"] is True
     assert fake_ocr.llamadas[0]["engine"] == "local"
     assert fake_ocr.llamadas[0]["nombre"] == NOMBRE
-    assert fake_almacen.expedientes[NOMBRE]["ocr"]["lineas"] == []
+
+    guardado = fake_almacen.expedientes[NOMBRE]["ocr"]
+    assert [ln["texto"] for ln in guardado["lineas"]] == ["FACTURA 123", "TOTAL 100,00"]
+    assert guardado["lineas"][0]["bbox"] == [100.0, 200.0, 500.0, 260.0]
+
+
+def test_sube_con_ocr_y_guarda_la_geometria_para_resaltar(cliente_con_fakes, fake_almacen):
+    """Sin `escala` la caja no se puede volver a poner sobre el PDF."""
+    subir(cliente_con_fakes, ocr=True)
+
+    geo = fake_almacen.expedientes[NOMBRE]["ocr"]["paginas_geo"]
+    (entrada,) = geo
+    assert entrada["pagina"] == 0
+    assert entrada["escala"] == 4.0
+    assert entrada["ancho"] == 2382.0
+    assert entrada["alto"] == 3368.0
+    assert entrada["lineas"][1] == {
+        "texto": "TOTAL 100,00",
+        "caja": [100.0, 3000.0, 900.0, 3070.0],
+        "score": 0.91,
+    }
+
+
+def test_sin_ocr_no_hay_geometria_que_resaltar(cliente_con_fakes, fake_almacen):
+    subir(cliente_con_fakes, ocr=False)
+    assert "paginas_geo" not in fake_almacen.expedientes[NOMBRE]["ocr"]
 
 
 def test_engine_auto_no_se_propaga_al_ocr(cliente_con_fakes, fake_ocr):

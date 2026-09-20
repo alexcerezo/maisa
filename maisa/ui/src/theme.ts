@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 
 import type { Gravedad, Severidad } from "./api/severidad";
-import type { EstadoCola, Regla, Resultado } from "./api/types";
+import type { CampoAnclable, EstadoCola, Regla, Resultado } from "./api/types";
 
 /** El texto que se lee en el badge. En castellano, como el resto del panel. */
 export const ETIQUETA_RESULTADO: Record<Resultado, string> = {
@@ -217,9 +217,109 @@ export const EXPLICACION_COLA: Record<EstadoCola, string> = {
 };
 
 /**
+ * El estado de una dependencia, leído de `GET /health`.
+ *
+ * Los nombres llegan como claves de programa (`escritura`), así que pasan por
+ * aquí antes de la pantalla. Una que no esté se enseña cruda en vez de
+ * desaparecer: si el servicio gana una dependencia, esconderla sería justo lo
+ * contrario de lo que hace este panel.
+ */
+export const ETIQUETA_DEPENDENCIA: Record<string, string> = {
+    mongo: "MongoDB",
+    ocr: "Motor de OCR",
+    escritura: "Almacén de expedientes",
+};
+
+/**
+ * Qué se rompe si esa dependencia no responde. Va en el `Tooltip`.
+ *
+ * Es lo que hace falta para leer un `ok: false`: "el OCR no responde" no dice
+ * nada por sí solo, y "las facturas que no traen texto se escalan" sí.
+ */
+export const EXPLICACION_DEPENDENCIA: Record<string, string> = {
+    mongo: "El catálogo de asientos del ERP contra el que se concilia. Si no responde, el listado sigue saliendo del fichero de traza, pero no hay contra qué comparar los pedidos.",
+    ocr: "El servicio que lee los PDF que no traen capa de texto. Si no responde, esas facturas se escalan en vez de decidirse.",
+    escritura: "El bucket donde se guardan los expedientes subidos y sus eventos. Si no responde, la API no puede aceptar facturas nuevas.",
+};
+
+/**
+ * El color de una dependencia que no responde.
+ *
+ * Ámbar y no rojo, siguiendo el criterio de la cabecera: el rojo de este panel
+ * significa "aquí hay una persona obligada" y una dependencia caída no obliga a
+ * nadie, informa. Es el mismo tono que usa la tarjeta de salud del listado para
+ * "Mongo no responde"; cambiarlo aquí haría que la misma avería se leyera de dos
+ * formas distintas en dos pantallas del mismo panel.
+ */
+export const CLASE_DEPENDENCIA_CAIDA = "text-amber-700 dark:text-amber-300";
+
+/**
+ * El estado del cortacircuitos del motor de OCR en la nube.
+ *
+ * Los tres valores son los de `state()` en `maisa/ocr_service/app/cloud.py` y
+ * significan cosas distintas que no conviene fundir:
+ *
+ * | `circuit`   | Significa                                        |
+ * | ----------- | ------------------------------------------------ |
+ * | `closed`    | La nube contesta; se le manda lo ilegible        |
+ * | `open`      | No se llama durante `cooldown` segundos          |
+ * | `half-open` | Se cuela un intento de prueba                    |
+ *
+ * Ojo con el guion: el valor real es `half-open`, no `half_open`. Escribirlo con
+ * guion bajo daría un estado sin etiqueta justo cuando el circuito está abierto,
+ * que es cuando más se mira esto.
+ */
+export const ETIQUETA_CIRCUITO: Record<string, string> = {
+    closed: "Cerrado",
+    open: "Abierto",
+    "half-open": "Semiabierto",
+};
+
+export const EXPLICACION_CIRCUITO: Record<string, string> = {
+    closed: "La nube está contestando. Cada documento que la capa de texto no resuelve se le manda a ella.",
+    open: "Se han encadenado fallos y no se llama a la nube durante el enfriamiento. Mientras tanto se usa el motor local, así que lo que no sepa leer se escala en vez de decidirse.",
+    "half-open": "El enfriamiento ha pasado y se cuela un intento de prueba. Si contesta, el circuito vuelve a cerrarse; si falla, se abre otra vez.",
+};
+
+/**
+ * El color del estado del cortacircuitos. Abierto es un aviso, no una avería:
+ * el sistema sigue decidiendo con el motor local, solo decide menos.
+ */
+export const CLASE_CIRCUITO: Record<string, string> = {
+    closed: "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300",
+    open: "border-amber-600/30 bg-amber-500/10 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-300",
+    "half-open":
+        "border-amber-600/30 bg-amber-500/10 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-300",
+};
+
+/**
  * El estado de cola de una factura, o `null` si nadie la ha releido.
  *
  * Se reexporta desde el contrato para que los componentes tengan un solo sitio
  * del que tirar (`@/theme`) sin que la regla viva dos veces.
  */
 export { estadoCola } from "./api/types";
+
+/**
+ * El nombre de cada dato que se puede completar a mano.
+ *
+ * Es la misma lista que `CAMPOS` en `api/app/anclajes.py` y que
+ * `CAMPOS_CORREGIBLES` en `api/app/mongo_repo.py`, y tiene que serlo: la API
+ * rechaza con un 400 cualquier campo que no esté en su lista, así que un campo
+ * de más aquí sería un formulario que no puede guardar. Los siete son los que
+ * deciden un pago —quién, a qué pedido, cuánto y cuándo— y por eso son los
+ * únicos que se pueden corregir.
+ *
+ * `Base imponible` y `Cuota de IVA` se escriben enteros y no con la etiqueta
+ * corta porque en el formulario sí hay sitio, y "Base" a secas se puede confundir
+ * con la base de otra cosa.
+ */
+export const ETIQUETA_CAMPO: Record<CampoAnclable, string> = {
+    pedido: "Pedido",
+    nif: "NIF",
+    iban: "IBAN",
+    fecha: "Fecha",
+    base: "Base imponible",
+    iva: "Cuota de IVA",
+    total: "Total",
+};

@@ -11,13 +11,61 @@
  * filas) y el estado de la fuente tiene que seguir visible mientras se baja. Un
  * aviso de "estas viendo el congelado" que se pierde al hacer scroll es un aviso
  * que no cumple su funcion.
+ *
+ * Los enlaces viven aqui y no en las paginas por el mismo motivo: son el
+ * mismo marco. Se pintan como icono solo en pantallas estrechas y con etiqueta a
+ * partir de `sm`, porque en un movil la cabecera ya lleva el distintivo de fuente
+ * y el conmutador de tema, y meter dos palabras mas la parte por la mitad.
  */
 
-import { Receipt } from "lucide-react";
+import { Receipt, Ruler, Route, TableProperties } from "lucide-react";
 import type { ReactNode } from "react";
+import { NavLink } from "react-router-dom";
 
 import { BadgeFuente, PieFuente } from "@/components/Fuente";
 import { BotonTema } from "@/components/tema";
+import { cn } from "@/lib/utils";
+
+/**
+ * Las secciones del panel.
+ *
+ * `/facturas` va sin `end` a proposito: el detalle de una factura sigue siendo
+ * la seccion de facturas, asi que el enlace tiene que quedarse marcado al abrir
+ * un expediente. Si se pusiera `end`, el menu se apagaria justo al entrar en el
+ * detalle y pareceria que se ha salido del panel.
+ *
+ * El orden es el del recorrido de una factura: la tabla (los datos), la traza
+ * (de donde sale un dato concreto) y el motor (si aguanta y cuanto cuesta). No
+ * es alfabetico a proposito: el menu es la unica pista de por donde empezar.
+ */
+const SECCIONES = [
+    { a: "/facturas", etiqueta: "Facturas", Icono: TableProperties },
+    { a: "/trazabilidad", etiqueta: "Trazabilidad", Icono: Route },
+    { a: "/escalabilidad", etiqueta: "Escalabilidad y coste", Icono: Ruler },
+] as const;
+
+function Navegacion() {
+    return (
+        <nav aria-label="Secciones" className="flex shrink-0 items-center gap-0.5">
+            {SECCIONES.map(({ a, etiqueta, Icono }) => (
+                <NavLink
+                    key={a}
+                    to={a}
+                    title={etiqueta}
+                    className={({ isActive }) =>
+                        cn(
+                            "inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground",
+                            isActive && "bg-muted font-medium text-foreground",
+                        )
+                    }
+                >
+                    <Icono className="size-4 shrink-0" />
+                    <span className="hidden sm:inline">{etiqueta}</span>
+                </NavLink>
+            ))}
+        </nav>
+    );
+}
 
 export default function Disposicion({ children }: { children: ReactNode }) {
     return (
@@ -34,6 +82,8 @@ export default function Disposicion({ children }: { children: ReactNode }) {
                             Conciliación de facturas
                         </span>
                     </div>
+
+                    <Navegacion />
 
                     <BadgeFuente />
                     <BotonTema />

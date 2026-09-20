@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import tempfile
 import threading
 import time
@@ -105,6 +106,10 @@ DEFAULTS = {
     # Tope de pixeles por pagina renderizada, para no agotar memoria en A3 a
     # escalas altas (una A3 a escala 5 son ~35 Mpx = 105 MB en RGB).
     "max_pixels": float(os.getenv("OCR_MAX_PIXELS", "2.4e7")),
+    # Tamano del pool de motores locales. Por defecto, la cuota de CPU del
+    # contenedor: mas motores que nucleos solo reparten el mismo tiempo de CPU
+    # entre mas bocas. 0 o vacio = automatico.
+    "workers": max(1, int(os.getenv("OCR_WORKERS") or 0) or nucleos_efectivos()),
     # --- Seleccion de motor -------------------------------------------------
     # auto  = nube primero, local como red de seguridad (recomendado)
     # cloud = solo nube: un fallo devuelve 503, sin gastar CPU
@@ -131,10 +136,54 @@ if DEFAULTS["engine"] not in ("auto", "cloud", "local"):
 # Motor OCR
 # --------------------------------------------------------------------------- #
 
-_engine: RapidOCR | None = None
-# RapidOCR no es thread-safe (mutá estado interno entre llamadas), y con 2
-# nucleos serializar es lo mas eficiente de todos modos.
-_infer_lock = threading.Lock()
+#: Cuota real de CPU del contenedor, que **no** es `os.cpu_count()`: en Docker
+#: sin `--cpuset-cpus` el proceso ve los nucleos del anfitrion aunque su cuota
+#: sea de dos. Dimensionar el pool por `cpu_count()` seria prometer paralelismo
+#: que la cuota no da: los motores se pelearian por el mismo tiempo de CPU y
+#: cada inferencia iria mas lenta, no mas rapido.
+def _cuota_cpu() -> float | None:
+    """Cuota de CPU en nucleos segun cgroup v2 (`cpu.max`) o v1, o `None`."""
+    for ruta, v1 in (("/sys/fs/cgroup/cpu.max", False), ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", True)):
+        try:
+            crudo = Path(ruta).read_text(encoding="utf-8").split()
+        except OSError:
+            continue
+        if v1:
+            if crudo and crudo[0] != "-1":
+                periodo = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text().split()
+                if periodo:
+                    return int(crudo[0]) / int(periodo[0])
+            continue
+        if len(crudo) >= 2 and crudo[0] != "max":
+            return int(crudo[0]) / int(crudo[1])
+    return None
+
+
+def nucleos_efectivos() -> int:
+    """Nucleos utilizables: la cuota del cgroup si la hay, si no los del sistema."""
+    cuota = _cuota_cpu()
+    if cuota:
+        return max(1, int(cuota))
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:  # pragma: no cover - solo en sistemas sin afinidad
+        return max(1, os.cpu_count() or 1)
+
+
+#: Motores locales vivos. Uno por worker y **cada uno usado por un solo hilo a
+#: la vez**: RapidOCR no es thread-safe (muta estado interno entre llamadas).
+#: Antes habia un unico motor detras de un `Lock` global, que serializaba todas
+#: las inferencias del servicio: cuatro peticiones simultaneas tardaban lo mismo
+#: que cuatro en fila (medido: 4.48 s una, 20.25 s las cuatro), y el lote de
+#: escaneos no bajaba de ahi. El cuello de botella no era el modelo, era el
+#: candado.
+#:
+#: `OMP_NUM_THREADS=1` es parte del trato: el paralelismo se pide por motores
+#: (uno por nucleo), no dentro de una inferencia. Medido con 2 nucleos, una
+#: inferencia tarda ~3.0 s con un hilo de OpenMP y ~3.9 s con dos, asi que
+#: repartir el trabajo es estrictamente mejor que ensancharlo.
+_engines: "queue.Queue[RapidOCR]" | None = None
+_engines_lock = threading.Lock()
 
 
 def _build_params() -> dict[str, Any]:
@@ -156,12 +205,35 @@ def _build_params() -> dict[str, Any]:
 
 
 def get_engine() -> RapidOCR:
-    global _engine
-    if _engine is None:
-        params = _build_params()
-        logger.info("Cargando modelos: %s", params)
-        _engine = RapidOCR(params=params)
-    return _engine
+    """Motor **nuevo**: construir un pool de motores, no compartir uno solo.
+
+    Cada motor cuesta RAM (medido: ~1.4 GB residentes con el motor cargado y
+    ~1.9 GB con dos), asi que se construyen de uno en uno y solo los que pide
+    `OCR_WORKERS`.
+    """
+    params = _build_params()
+    logger.info("Cargando modelos: %s", params)
+    return RapidOCR(params=params)
+
+
+def motor_pool() -> "queue.Queue[RapidOCR]":
+    """Cola con los motores locales ya cargados (se crea la primera vez).
+
+    El tamano lo fija `OCR_WORKERS` (por defecto, la cuota de CPU del
+    contenedor). `_run_page` saca un motor, infiere y lo devuelve: con la cola
+    vacia la peticion **espera**, que es lo que queremos (mejor en fila que
+    peleando por la CPU), pero sin bloquear a las demas si hay motor libre.
+    """
+    global _engines
+    if _engines is None:
+        with _engines_lock:
+            if _engines is None:
+                cola: "queue.Queue[RapidOCR]" = queue.Queue()
+                for _ in range(DEFAULTS["workers"]):
+                    cola.put(get_engine())
+                _engines = cola
+                logger.info("Pool de OCR listo: %d motor(es).", DEFAULTS["workers"])
+    return _engines
 
 
 def wants_local_engine() -> bool:

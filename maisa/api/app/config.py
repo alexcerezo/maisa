@@ -35,6 +35,11 @@ DEFAULT_FACTURAS_LOTE2_DIR = MAISA_DIR / "data" / "facturas_lote2" / "facturas_p
 # blanco en vez de avisar de que no hay ninguno: el peor fallo posible, porque
 # parece que funciona.
 DEFAULT_UI_DIR = MAISA_DIR / "ui" / "dist"
+# La cache de OCR del motor: `motor/.cache/ocr/<sha256>.json`. Es de donde sale
+# la geometria (la caja de cada linea) de las 29 facturas escaneadas, porque un
+# PDF sin capa de texto no tiene nada que buscar con `pdf.js`. El motor la
+# versiona en git a proposito, para que la entrega se reproduzca sin red.
+DEFAULT_OCR_CACHE_DIR = MAISA_DIR / "motor" / ".cache" / "ocr"
 
 # Por defecto, en Docker: el contenedor `mongo` de la red compartida. El nombre
 # `mongo` es el servicio de maisa/docker-compose.yml (DNS interno de Docker),
@@ -167,6 +172,7 @@ class Settings:
     outputs_dir: Path = DEFAULT_OUTPUTS_DIR
     facturas_dir: Path = DEFAULT_FACTURAS_DIR
     facturas_lote2_dir: Path = DEFAULT_FACTURAS_LOTE2_DIR
+    ocr_cache_dir: Path = DEFAULT_OCR_CACHE_DIR
     ui_dir: Path = DEFAULT_UI_DIR
     api_port: int = 8010
     cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
@@ -254,6 +260,7 @@ class Settings:
             outputs_dir=_env_path("OUTPUTS_DIR", DEFAULT_OUTPUTS_DIR),
             facturas_dir=_env_path("FACTURAS_DIR", DEFAULT_FACTURAS_DIR),
             facturas_lote2_dir=_env_path("FACTURAS_LOTE2_DIR", DEFAULT_FACTURAS_LOTE2_DIR),
+            ocr_cache_dir=_env_path("OCR_CACHE_DIR", DEFAULT_OCR_CACHE_DIR),
             ui_dir=_env_path("UI_DIR", DEFAULT_UI_DIR),
             api_port=_env_int("API_PORT", 8010),
             cors_origins=origins,
@@ -292,6 +299,11 @@ class Settings:
                 "traza_paths": [str(ruta) for ruta in self.traza_paths],
                 "entrega_existe": self.outcomes_path.is_file(),
                 "cola_existe": self.cola_path.is_file(),
+                # Sin esta carpeta las 29 escaneadas no pueden resaltar nada: el
+                # aviso va en /api/meta porque un visor sin resaltado parece un
+                # fallo del visor y es un volumen mal montado.
+                "ocr_cache_dir": str(self.ocr_cache_dir),
+                "ocr_cache_existe": self.ocr_cache_dir.is_dir(),
             },
             "ui": {
                 "dir": str(self.ui_dir),

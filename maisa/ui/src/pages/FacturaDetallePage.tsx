@@ -24,12 +24,20 @@
  *    decodificado (el listado enlaza con `encodeURIComponent`), así que se pasa tal
  *    cual a `useDetalle` y a `PanelDocumento`. Volver a codificarlo pediría un
  *    fichero con un `%` dentro del nombre, que no existe en el corpus.
+ *
+ * 4. **El documento y el formulario se miran.** El visor resalta dónde está escrito
+ *    cada dato y el formulario deja anotar lo que el motor no supo leer, así que los
+ *    dos hablan de los mismos siete campos. El estado que los une —cuál está
+ *    señalado— vive aquí, en la pantalla que compone los dos, y no dentro de
+ *    ninguno: si cada uno tuviera el suyo, señalar un dato en el PDF no haría nada
+ *    en el formulario, que es exactamente lo que se espera que haga.
  */
 
 import { ArrowLeft, FileQuestion } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
+import { CompletarDatos } from "@/components/Correcciones";
 import { FalloDeCarga } from "@/components/Estados";
 import { CamposCrudos, Sospechosos } from "@/components/Evidencia";
 import { AvisoFuente } from "@/components/Fuente";
@@ -46,7 +54,7 @@ import {
     EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useDetalle } from "@/api/hooks";
+import { useAnclajes, useCorrecciones, useDetalle } from "@/api/hooks";
 
 /**
  * El reparto de columnas, en una constante.
@@ -196,6 +204,22 @@ export default function FacturaDetallePage() {
     // que el `throw` que lleva dentro no llega a ocurrir.
     const detalle = useDetalle(fileId);
 
+    // Los anclajes se piden una sola vez aquí y se reparten: los necesita el visor
+    // para resaltar y el formulario para contrastar. Se lanzan a la vez que el
+    // detalle, en paralelo, y no cuando llegue: encadenarlos añadiría una vuelta de
+    // red a una pantalla que ya hace tres.
+    const anclajes = useAnclajes(fileId);
+
+    // Las correcciones salen del detalle, que ya las trae. Mientras el detalle no
+    // ha llegado son `undefined` —"no lo sé todavía"—, y el hook lo trata como
+    // "ninguna": pintar un formulario vacío y luego llenarlo se lee como un fallo.
+    const edicion = useCorrecciones(fileId ?? "", detalle.datos?.correcciones);
+
+    // El campo señalado, compartido por el visor y el formulario. Es un `string` y
+    // no un `CampoAnclable` porque llega de la URL y de un clic: quien lo escribe
+    // puede ser cualquiera de los dos, y cada uno valida lo suyo.
+    const [campoActivo, setCampoActivo] = useState<string | null>(null);
+
     if (!fileId) {
         return (
             <div className="space-y-6">
@@ -281,6 +305,22 @@ export default function FacturaDetallePage() {
                     </Seccion>
 
                     {/*
+                     * Va pegado a la lectura cruda porque es su continuación: arriba
+                     * está lo que sacó el motor y aquí lo que dice quien tiene la
+                     * factura delante. Separarlos obligaría a subir y bajar para
+                     * comparar los mismos siete campos.
+                     */}
+                    <Seccion id="seccion-completar" titulo="Completar a mano">
+                        <CompletarDatos
+                            edicion={edicion}
+                            anclajes={anclajes.datos}
+                            cargandoAnclajes={anclajes.cargando}
+                            campoActivo={campoActivo}
+                            onCampoActivo={setCampoActivo}
+                        />
+                    </Seccion>
+
+                    {/*
                      * Las órdenes salen de `campos.ordenes_resultado`, que es donde
                      * el motor deja lo que encontró escrito dentro del PDF. No se
                      * pasan desde `lectura.sospechosos`: son dos listas distintas y
@@ -317,7 +357,13 @@ export default function FacturaDetallePage() {
                         Documento original
                     </h2>
 
-                    <PanelDocumento fileId={fileId} sha256={factura.sha256} />
+                    <PanelDocumento
+                        fileId={fileId}
+                        sha256={factura.sha256}
+                        anclajes={anclajes}
+                        campoActivo={campoActivo}
+                        onCampo={setCampoActivo}
+                    />
                 </section>
             </div>
         </div>

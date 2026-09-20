@@ -34,10 +34,14 @@ from ..almacen import (
     lote_id_desde_numero,
     normalizar_file_id,
 )
+from ..anclajes import CacheGeo
+from ..anclajes import construir as construir_anclajes
+from ..anclajes import valores_del_motor
 from ..config import Settings
 from ..deps import (
     Paginacion,
     get_almacen,
+    get_geo,
     get_mongo,
     get_ocr,
     get_settings,
@@ -46,7 +50,14 @@ from ..deps import (
     texto_busqueda,
 )
 from ..errors import ApiError
-from ..mongo_repo import ESTADOS_REVISION, MongoNoDisponible, MongoRepo
+from ..mongo_repo import (
+    CAMPOS_CORREGIBLES,
+    ESTADOS_REVISION,
+    MAX_NOTA_CORRECCION,
+    MAX_VALOR_CORREGIDO,
+    MongoNoDisponible,
+    MongoRepo,
+)
 from ..ocr_client import OcrClient, leer_con_tope
 from ..traza import RESULTADOS, TrazaStore, detallar
 from .ocr import MOTORES as MOTORES_OCR
@@ -222,7 +233,33 @@ async def detalle(
         datos["revision"] = await mongo.obtener_revision(file_id)
     except MongoNoDisponible:
         datos["revision"] = None
+    try:
+        doc = await mongo.obtener_correcciones(file_id)
+    except MongoNoDisponible:
+        doc = None
+    datos["correcciones"] = _correcciones_publicas(file_id, doc, valores_del_motor(registro))
     return datos
+
+
+@router.get("/{file_id}/anclajes", summary="Donde esta dentro del PDF cada dato que leyo el motor")
+async def anclajes(
+    file_id: str = PathParam(..., pattern=PATRON_FILE_ID.pattern),
+    traza: TrazaStore = Depends(get_traza),
+    settings: Settings = Depends(get_settings),
+    geo: CacheGeo = Depends(get_geo),
+) -> dict:
+    """Resaltado de datos: `tokens` para las de capa de texto, `anclas` para las escaneadas.
+
+    Solo lectura y solo a partir de la traza y de la cache del motor: no decide
+    nada ni escribe nada. Para las 471 con capa de texto devuelve el valor
+    normalizado para que el navegador lo busque con el mismo `pdf.js` que pinta
+    la pagina; para las 29 escaneadas, la caja ya resuelta en puntos del PDF.
+    """
+    _traza_o_503(traza, settings)
+    registro = traza.obtener(file_id)
+    if registro is None:
+        raise ApiError(404, "factura_no_encontrada", f"No hay ninguna factura con file_id '{file_id}'.")
+    return construir_anclajes(registro, geo.leer(registro.get("sha256")))
 
 
 class RevisionEntrada(BaseModel):
@@ -259,6 +296,165 @@ async def marcar_revision(
             "No se pudo guardar la revision: Mongo no responde.",
             {"detalle": str(exc)},
         ) from None
+
+
+class CorreccionCampo(BaseModel):
+    valor: str = Field(..., description="Lo que dice el operador que pone el documento")
+    nota: str | None = Field(None, max_length=MAX_NOTA_CORRECCION, description="De donde lo ha sacado")
+
+
+class CorreccionesEntrada(BaseModel):
+    campos: dict[str, CorreccionCampo] = Field(
+        ..., description=f"Uno o varios de: {', '.join(CAMPOS_CORREGIBLES)}"
+    )
+    autor: str | None = Field(None, max_length=120, description="Quien completa los datos")
+
+
+def _correcciones_publicas(file_id: str, doc: dict | None, motor: dict[str, str | None]) -> dict:
+    """Documento de Mongo -> respuesta. Anade `valor_motor` para poder contrastar.
+
+    Sin esto el panel solo podria enseñar el valor nuevo y se perderia lo
+    importante de una correccion: compararla con lo que el motor habia leido.
+    """
+    guardados = (doc or {}).get("campos") or {}
+    campos = []
+    for campo in CAMPOS_CORREGIBLES:
+        dato = guardados.get(campo)
+        if dato is None:
+            continue
+        campos.append(
+            {
+                "campo": campo,
+                "valor": dato.get("valor"),
+                "valor_motor": motor.get(campo),
+                "nota": dato.get("nota"),
+                "autor": dato.get("autor"),
+                "actualizado_en": dato.get("actualizado_en"),
+            }
+        )
+    return {
+        "file_id": file_id,
+        "campos": campos,
+        "actualizado_en": (doc or {}).get("actualizado_en"),
+    }
+
+
+def _valida_correcciones(campos: dict[str, CorreccionCampo]) -> dict[str, dict]:
+    """Deja la entrada en la forma que espera `guardar_correcciones`, o falla con 400."""
+    if not campos:
+        raise ApiError(400, "sin_campos", "Hay que mandar al menos un campo corregido.")
+    limpios: dict[str, dict] = {}
+    for campo, dato in campos.items():
+        if campo not in CAMPOS_CORREGIBLES:
+            raise ApiError(
+                400,
+                "campo_no_corregible",
+                f"`{campo}` no es corregible a mano. Validos: {', '.join(CAMPOS_CORREGIBLES)}.",
+            )
+        valor = (dato.valor or "").strip()
+        if not valor:
+            raise ApiError(
+                400, "valor_vacio", f"`{campo}` viene vacio: para quitarlo, borra la correccion."
+            )
+        if len(valor) > MAX_VALOR_CORREGIDO:
+            raise ApiError(
+                400,
+                "valor_demasiado_largo",
+                f"`{campo}` supera los {MAX_VALOR_CORREGIDO} caracteres.",
+            )
+        nota = (dato.nota or "").strip() or None
+        limpios[campo] = {"valor": valor, "nota": nota}
+    return limpios
+
+
+@router.get(
+    "/{file_id}/correcciones",
+    summary="Datos que un operador ha completado a mano, junto a lo que leyo el motor",
+)
+async def listar_correcciones(
+    file_id: str = PathParam(..., pattern=PATRON_FILE_ID.pattern),
+    traza: TrazaStore = Depends(get_traza),
+    settings: Settings = Depends(get_settings),
+    mongo: MongoRepo = Depends(get_mongo),
+) -> dict:
+    """Solo lectura. `valor_motor` viene de la traza, no de Mongo: no se duplica."""
+    _traza_o_503(traza, settings)
+    registro = traza.obtener(file_id)
+    if registro is None:
+        raise ApiError(404, "factura_no_encontrada", f"No hay ninguna factura con file_id '{file_id}'.")
+    motor = valores_del_motor(registro)
+    try:
+        doc = await mongo.obtener_correcciones(file_id)
+    except MongoNoDisponible:
+        doc = None
+    return _correcciones_publicas(file_id, doc, motor)
+
+
+@router.put(
+    "/{file_id}/correcciones",
+    summary="Completa a mano los datos que el motor no supo leer",
+)
+async def guardar_correcciones(
+    entrada: CorreccionesEntrada,
+    file_id: str = PathParam(..., pattern=PATRON_FILE_ID),
+    traza: TrazaStore = Depends(get_traza),
+    settings: Settings = Depends(get_settings),
+    mongo: MongoRepo = Depends(get_mongo),
+) -> dict:
+    """Anota la correccion de un operador. **No cambia la decision del motor.**
+
+    Es a proposito: `resultado` sale de la traza, que es de solo lectura, y la
+    correccion vive en su propia coleccion. Si completar un NIF cambiara el
+    `PAGAR`/`ESCALAR`, la traza dejaria de contar lo que paso.
+    """
+    _traza_o_503(traza, settings)
+    registro = traza.obtener(file_id)
+    if registro is None:
+        raise ApiError(404, "factura_no_encontrada", f"No hay ninguna factura con file_id '{file_id}'.")
+    limpios = _valida_correcciones(entrada.campos)
+    try:
+        doc = await mongo.guardar_correcciones(file_id, limpios, autor=entrada.autor)
+    except MongoNoDisponible as exc:
+        raise ApiError(
+            503,
+            "mongo_no_disponible",
+            "No se pudo guardar la correccion: Mongo no responde.",
+            {"detalle": str(exc)},
+        ) from None
+    return _correcciones_publicas(file_id, doc, valores_del_motor(registro))
+
+
+@router.delete(
+    "/{file_id}/correcciones",
+    summary="Deshace las correcciones de una factura, o solo las de un campo",
+)
+async def borrar_correcciones(
+    file_id: str = PathParam(..., pattern=PATRON_FILE_ID),
+    campo: str | None = Query(None, description=f"Si se omite, borra todas. Validos: {', '.join(CAMPOS_CORREGIBLES)}"),
+    traza: TrazaStore = Depends(get_traza),
+    settings: Settings = Depends(get_settings),
+    mongo: MongoRepo = Depends(get_mongo),
+) -> dict:
+    _traza_o_503(traza, settings)
+    registro = traza.obtener(file_id)
+    if registro is None:
+        raise ApiError(404, "factura_no_encontrada", f"No hay ninguna factura con file_id '{file_id}'.")
+    if campo is not None and campo not in CAMPOS_CORREGIBLES:
+        raise ApiError(
+            400,
+            "campo_no_corregible",
+            f"`{campo}` no es corregible a mano. Validos: {', '.join(CAMPOS_CORREGIBLES)}.",
+        )
+    try:
+        doc = await mongo.borrar_correcciones(file_id, campo)
+    except MongoNoDisponible as exc:
+        raise ApiError(
+            503,
+            "mongo_no_disponible",
+            "No se pudo borrar la correccion: Mongo no responde.",
+            {"detalle": str(exc)},
+        ) from None
+    return _correcciones_publicas(file_id, doc, valores_del_motor(registro))
 
 
 @router.get("/{file_id}/pdf", summary="PDF original, en modo inline")
