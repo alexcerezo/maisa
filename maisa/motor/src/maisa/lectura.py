@@ -8,9 +8,11 @@ creible:
 2. **Cache versionada** por ``sha256`` del PDF, no por nombre: un fichero
    renombrado no vuelve a pagar OCR. Misma ruta de siempre
    (``CACHE_OCR/<sha256>.json``), pero con granularidad de **pagina** y con dos
-   llaves de invalidacion: ``version`` del formato y ``motor`` (los modelos del
-   servicio de vision). Un cambio de modelos invalida lo cacheado en vez de
-   servir texto de otro motor.
+   llaves de invalidacion: ``version`` del formato y ``motor`` (**el motor que
+   produjo el texto**, local o nube, con sus modelos). Un cambio de modelos
+   invalida lo cacheado en vez de servir texto de otro motor. Las entradas de
+   nube se validan contra la firma de la nube y las locales contra la local:
+   son motores independientes y no deben invalidarse entre si.
 3. **Vision local** (``POST {OCR_URL}/ocr?engine=local``): con timeout de
    conexion y de lectura separados y reintentos con backoff exponencial.
 4. **Vision en la nube** (``POST {OCR_URL}/ocr?engine=cloud``), **apagada por
@@ -56,6 +58,12 @@ CACHE_OCR = Path(__file__).resolve().parents[2] / ".cache" / "ocr"
 #: Version del formato del fichero de cache. Solo se aceptan esta y la legacy
 #: (sin campo ``version``).
 VERSION_CACHE = 2
+
+#: Prefijo del ``motor`` de una entrada leida por la nube. El campo ``motor``
+#: identifica **quien produjo el texto**, no quien lo leeria hoy: una entrada
+#: local lleva la firma de los modelos locales y una de nube, la del modelo de
+#: nube. Se distinguen por el prefijo porque invalidan por cosas distintas.
+PREFIJO_NUBE = "nube:"
 
 #: Reintentos del motor local antes de degradar (``MAISA_OCR_REINTENTOS``).
 REINTENTOS_POR_DEFECTO = 2
@@ -118,11 +126,24 @@ class Documento:
 
 @dataclass
 class _EntradaCache:
-    """Entrada de cache utilizable: texto ya unido y sus paginas."""
+    """Entrada de cache utilizable: texto ya unido y sus paginas.
+
+    ``proveedor`` y ``motor`` vienen del fichero, no de la ejecucion actual: es
+    lo unico que permite decir despues con que motor se leyo de verdad. En las
+    entradas legacy (sin ``proveedor``) se deduce del prefijo ``nube:`` de
+    ``motor``; si tampoco hay, se asume local, que es lo que eran todas las
+    anteriores a la nube.
+    """
 
     texto: str
     paginas: list[str]
     escalon: str = "vision_ocr"
+    proveedor: str = "local"
+    motor: str = ""
+
+    @property
+    def nube(self) -> bool:
+        return self.proveedor == "nube"
 
 
 @dataclass
@@ -243,6 +264,7 @@ def calidad_texto(texto: str, paginas: int) -> float:
 
 # ----------------------------------------------------------- firma del motor
 _FIRMA_MOTOR: str | None = None
+_FIRMA_NUBE: str | None = None
 _FIRMA_LOCK = threading.Lock()
 
 
@@ -257,29 +279,55 @@ def firma_motor(timeout: float = 2.0) -> str:
     tiene sentido pagar el timeout en cada factura) y devuelve ``""`` si el
     servicio no responde o no publica sus modelos.
     """
-    global _FIRMA_MOTOR
+    _asegura_firmas(timeout)
+    return _FIRMA_MOTOR or ""
+
+
+def firma_nube(timeout: float = 2.0) -> str:
+    """Firma del modelo de nube (``"nube:PaddleOCR-VL-1.6"``), o ``""``.
+
+    Una entrada de cache leida por la nube se invalida cuando cambia **este**
+    modelo, no cuando cambian los locales: son motores independientes.
+    """
+    _asegura_firmas(timeout)
+    return _FIRMA_NUBE or ""
+
+
+def _asegura_firmas(timeout: float) -> None:
+    """Rellena las dos firmas de una sola consulta a ``/health``."""
+    global _FIRMA_MOTOR, _FIRMA_NUBE
     with _FIRMA_LOCK:
         if _FIRMA_MOTOR is None:
-            _FIRMA_MOTOR = _consulta_firma(timeout)
-        return _FIRMA_MOTOR
+            _FIRMA_MOTOR, _FIRMA_NUBE = _consulta_firmas(timeout)
 
 
-def _consulta_firma(timeout: float) -> str:
+def _consulta_firmas(timeout: float) -> tuple[str, str]:
+    """Firma de los modelos local y de nube, tal como los publica ``/health``.
+
+    Devuelve ``("", "")`` si el servicio no responde: sin firmas la cache sigue
+    valiendo (es lo que permite reproducir la entrega sin contenedor de OCR).
+    """
     try:
         respuesta = requests.get(f"{_ocr_url()}/health", timeout=timeout)
         respuesta.raise_for_status()
         datos = respuesta.json()
         if not isinstance(datos, dict):
-            return ""
+            return "", ""
         motores = datos.get("engines") or {}
-        local = (motores.get("local") or {}) if isinstance(motores, dict) else {}
+        if not isinstance(motores, dict):
+            return "", ""
+        local = motores.get("local") or {}
+        nube = motores.get("cloud") or {}
         modelos = (local.get("models") or {}) if isinstance(local, dict) else {}
+        modelo_nube = nube.get("model") if isinstance(nube, dict) else None
     except Exception:
-        return ""
+        return "", ""
     piezas = [modelos.get(clave) for clave in ("det", "rec", "cls")]
-    if not any(piezas):
-        return ""
-    return "local:" + "/".join(str(p) if p else "sin_cls" for p in piezas)
+    firma_local = ""
+    if any(piezas):
+        firma_local = "local:" + "/".join(str(p) if p else "sin_cls" for p in piezas)
+    firma_nube = f"{PREFIJO_NUBE}{modelo_nube}" if modelo_nube else ""
+    return firma_local, firma_nube
 
 
 # ------------------------------------------------------------------ peldanos
@@ -401,7 +449,7 @@ def ocr_contenedor(
 
 
 # ---------------------------------------------------------------------- cache
-def _lee_cache(ruta_cache: Path, sha: str, firma: str) -> _EntradaCache | None:
+def _lee_cache(ruta_cache: Path, sha: str, firma: str, firma_nube: str = "") -> _EntradaCache | None:
     """Entrada de cache si sigue valiendo; ``None`` para releer.
 
     Reglas de validez, permisivas a proposito con lo ya commiteado:
@@ -411,6 +459,10 @@ def _lee_cache(ruta_cache: Path, sha: str, firma: str) -> _EntradaCache | None:
     - ``motor`` ausente o vacio (legacy), o firma actual no disponible: vale.
       Si los dos existen y no coinciden, la entrada es de otro motor y se
       descarta.
+    - una entrada de **nube** (``proveedor`` a ``"nube"``, o ``motor`` con
+      prefijo ``nube:``) se compara con la firma de la nube, no con la local:
+      que cambien los modelos locales no invalida un texto que no salio de
+      ellos, y al reves tampoco.
     - el ``sha256`` tiene que ser el del PDF.
     - el texto se reconstruye uniendo ``paginas`` con ``"\\n"``; si la entrada
       es legacy, el unico texto disponible es su unico campo ``texto``.
@@ -429,28 +481,47 @@ def _lee_cache(ruta_cache: Path, sha: str, firma: str) -> _EntradaCache | None:
         return None
 
     motor = datos.get("motor") or ""
-    if motor and firma and motor != firma:
+    # ``proveedor`` manda cuando esta: es el campo explicito que anaden el motor
+    # y el precalentado desde el arreglo. El prefijo ``nube:`` queda como
+    # respaldo para entradas escritas entre medias.
+    de_nube = datos.get("proveedor") == "nube" or motor.startswith(PREFIJO_NUBE)
+    firma_esperada = firma_nube if de_nube else firma
+    if motor and firma_esperada and motor != firma_esperada:
         return None
 
-    escalon = datos.get("escalon") or "vision_ocr"
+    escalon = datos.get("escalon") or ("vision_nube" if de_nube else "vision_ocr")
+    proveedor = "nube" if de_nube else "local"
     paginas = datos.get("paginas")
     if isinstance(paginas, list) and paginas:
         limpias = [p if isinstance(p, str) else "" for p in paginas]
-        return _EntradaCache("\n".join(limpias), limpias, escalon)
+        return _EntradaCache("\n".join(limpias), limpias, escalon, proveedor, motor)
     texto = datos.get("texto")
     if isinstance(texto, str) and texto:
-        return _EntradaCache(texto, [texto], escalon)
+        return _EntradaCache(texto, [texto], escalon, proveedor, motor)
     return None
 
 
 def _escribe_cache(
-    ruta_cache: Path, sha: str, paginas: list[str], escalon: str, firma: str
+    ruta_cache: Path,
+    sha: str,
+    paginas: list[str],
+    escalon: str,
+    firma: str,
+    firma_nube: str = "",
 ) -> None:
-    """Escribe la entrada versionada. Un fallo de disco no aborta la lectura."""
+    """Escribe la entrada versionada. Un fallo de disco no aborta la lectura.
+
+    ``motor`` es **el motor que produjo el texto**, no el local. Antes se
+    estampaba siempre la firma local, asi que una lectura de la nube quedaba
+    etiquetada como local: se invalidaba (o no) por el modelo equivocado y el
+    corpus parecia leido por un solo motor cuando lo habian leido dos.
+    """
+    de_nube = escalon == "vision_nube"
     datos = {
         "version": VERSION_CACHE,
         "sha256": sha,
-        "motor": firma,
+        "motor": firma_nube if de_nube else firma,
+        "proveedor": "nube" if de_nube else "local",
         "escalon": escalon,
         "paginas": paginas,
         "texto": "\n".join(paginas),
@@ -537,15 +608,16 @@ def lee(
     # La firma se consulta aqui (una vez por proceso): es la llave que decide
     # si lo cacheado vale. Si no se puede obtener, la cache legacy sigue valiendo.
     firma = firma_motor() if usar_cache else ""
+    firma_n = firma_nube() if usar_cache else ""
     if usar_cache:
-        entrada = _lee_cache(ruta_cache, sha, firma)
+        entrada = _lee_cache(ruta_cache, sha, firma, firma_n)
         if entrada is not None:
-            de_nube = entrada.escalon == "vision_nube"
             return _documento(
                 extrae(entrada.texto, ruta.name, paginas, "vision_ocr", meta),
-                sha, "cache_ocr", True, arranque, calidad, motor=firma,
-                proveedor="nube" if de_nube else "local",
-                paginas_ocr=len(entrada.paginas), nube=de_nube,
+                sha, "cache_ocr", True, arranque, calidad,
+                motor=entrada.motor or firma,
+                proveedor=entrada.proveedor,
+                paginas_ocr=len(entrada.paginas), nube=entrada.nube,
             )
 
     if nube is None:
@@ -594,10 +666,11 @@ def lee(
         )
 
     if usar_cache:
-        _escribe_cache(ruta_cache, sha, elegido.paginas, escalon, firma)
+        _escribe_cache(ruta_cache, sha, elegido.paginas, escalon, firma, firma_n)
     return _documento(
         lectura, sha, escalon, False, arranque, max(calidad, calidad_ocr),
-        motor=firma, proveedor=proveedor, paginas_ocr=paginas,
+        motor=firma_n if escalon == "vision_nube" else firma,
+        proveedor=proveedor, paginas_ocr=paginas,
         reintentos=elegido.reintentos, error=error, nube=escalon == "vision_nube",
     )
 

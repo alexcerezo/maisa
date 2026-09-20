@@ -8,12 +8,20 @@
  *
  *   npm run precalentar
  *   npm run precalentar -- --cache ../_scratch/jev-eval/ocr --concurrency 6
+ *   npm run precalentar -- --engine local --forzar   # linea base de un solo motor
  *
- * Escribe en el formato moderno del motor (`{version, sha256, motor, escalon,
- * paginas, texto}`), el mismo que lee `lineasDeCacheOcr`, asi que la cache vale
- * tanto para este paquete como para el motor. Por defecto NO toca
+ * Escribe en el formato moderno del motor (`{version, sha256, motor, proveedor,
+ * escalon, paginas, texto}`), el mismo que lee `lineasDeCacheOcr`, asi que la
+ * cache vale tanto para este paquete como para el motor. Por defecto NO toca
  * `motor/.cache/ocr`: ese directorio esta versionado en git y meter ahi 500
  * ficheros ensuciaria el repo. Se escribe en `_scratch/`, que si esta ignorado.
+ *
+ * **Procedencia.** El `motor` y el `escalon` se derivan del `engine` que
+ * devuelve la respuesta, no del que se pidio: en `auto` la nube puede fallar y
+ * la pagina acaba leida en local. Antes se estampaba la firma local a todo, asi
+ * que las lecturas de nube quedaban indistinguibles y la evaluacion medía sobre
+ * un corpus mixto creyendo que era de un motor. Para una linea base limpia,
+ * pasa `--engine local` o `--engine cloud` y `--forzar`.
  */
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
@@ -54,6 +62,18 @@ async function firmaMotor(): Promise<string> {
   }
 }
 
+/** Firma del modelo de nube (`nube:PaddleOCR-VL-1.6`), igual que `firma_nube()`. */
+async function firmaNube(): Promise<string> {
+  try {
+    const r = await fetch(`${ocrUrl}/health`, { signal: AbortSignal.timeout(2000) })
+    const d = (await r.json()) as { engines?: { cloud?: { model?: string } } }
+    const modelo = d.engines?.cloud?.model
+    return modelo ? `nube:${modelo}` : ''
+  } catch {
+    return ''
+  }
+}
+
 /** Una entrada ya vale si trae `paginas` y todas las paginas del PDF. */
 function yaCacheada(file: string, sha: string, paginas: number): boolean {
   const ruta = join(cacheDir, `${sha}.json`)
@@ -74,7 +94,11 @@ function cuentaPaginas(file: string): number {
   return coincidencias?.length ?? 0
 }
 
-async function ocr(file: string, firma: string): Promise<'ok' | 'vacio'> {
+async function ocr(
+  file: string,
+  firma: string,
+  firmaN: string,
+): Promise<'ok' | 'vacio' | 'nube'> {
   const sha = sha256DeFichero(file)
   const paginasPdf = cuentaPaginas(file)
   if (!forzar && yaCacheada(file, sha, paginasPdf)) return 'ok'
@@ -88,8 +112,15 @@ async function ocr(file: string, firma: string): Promise<'ok' | 'vacio'> {
   const res = await fetch(url, { method: 'POST', body: form, signal: AbortSignal.timeout(300_000) })
   if (!res.ok) throw new Error(`OCR HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
 
-  const paginas = paginasDePayloadOcr(await res.json())
+  const payload = (await res.json()) as { engine?: string }
+  const paginas = paginasDePayloadOcr(payload)
   if (!paginas.length) return 'vacio'
+
+  // `engine` de la respuesta es quien LEYÓ de verdad: con `auto` la nube puede
+  // fallar y la pagina acaba leida en local. Estampar la firma local a todo,
+  // como se hacia antes, etiquetaba texto de nube como local y dejaba el
+  // corpus sin procedencia.
+  const deNube = payload.engine === 'cloud'
 
   mkdirSync(cacheDir, { recursive: true })
   writeFileSync(
@@ -97,13 +128,14 @@ async function ocr(file: string, firma: string): Promise<'ok' | 'vacio'> {
     JSON.stringify({
       version: VERSION_CACHE,
       sha256: sha,
-      motor: firma,
-      escalon: 'vision_ocr',
+      motor: deNube ? firmaN : firma,
+      proveedor: deNube ? 'nube' : 'local',
+      escalon: deNube ? 'vision_nube' : 'vision_ocr',
       paginas,
       texto: paginas.join('\n'),
     }),
   )
-  return 'ok'
+  return deNube ? 'nube' : 'ok'
 }
 
 async function main(): Promise<void> {
@@ -113,6 +145,7 @@ async function main(): Promise<void> {
     process.exit(1)
   }
   const firma = await firmaMotor()
+  const firmaN = await firmaNube()
 
   const ficheros = readdirSync(dir)
     .filter((f) => f.toLowerCase().endsWith('.pdf'))
@@ -120,7 +153,9 @@ async function main(): Promise<void> {
 
   console.log(`corpus:   ${dir}`)
   console.log(`cache:    ${cacheDir}`)
-  console.log(`motor:    ${firma || '(sin firma)'}`)
+  console.log(`engine:   ${engine}${engine === 'auto' ? ' (nube con respaldo local: el corpus quedara mixto)' : ''}`)
+  console.log(`local:    ${firma || '(sin firma)'}`)
+  console.log(`nube:     ${firmaN || '(sin firma)'}`)
   console.log(`ficheros: ${ficheros.length}, concurrencia ${concurrencia}`)
   console.log('')
 
@@ -128,13 +163,16 @@ async function main(): Promise<void> {
   let hechos = 0
   let vacios = 0
   let fallos = 0
+  let deNube = 0
   let siguiente = 0
 
   async function trabajador(): Promise<void> {
     while (siguiente < ficheros.length) {
       const file = join(dir, ficheros[siguiente++])
       try {
-        if ((await ocr(file, firma)) === 'vacio') vacios++
+        const r = await ocr(file, firma, firmaN)
+        if (r === 'vacio') vacios++
+        if (r === 'nube') deNube++
       } catch (err) {
         fallos++
         console.error(`  fallo ${ficheros[siguiente - 1]}: ${err instanceof Error ? err.message : err}`)
@@ -154,6 +192,7 @@ async function main(): Promise<void> {
   console.log(`listo: ${hechos} ficheros en ${s.toFixed(0)} s`)
   if (vacios) console.log(`sin texto: ${vacios}`)
   if (fallos) console.log(`fallos:    ${fallos}`)
+  if (deNube) console.log(`leidos en nube: ${deNube} (quedan marcados como vision_nube en la cache)`)
   console.log('')
   console.log(`Ahora:  npm run eval -- --backend gateway --cache ${cacheDir}`)
 }
