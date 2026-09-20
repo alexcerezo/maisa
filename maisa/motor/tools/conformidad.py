@@ -36,17 +36,26 @@ Severidades de cada desacuerdo:
     ACEPTABLE_NO_PRIMARIO  estamos dentro de `acceptable` pero no coincidimos
                            con `primary` (informativo, no es un fallo).
 
+Un desacuerdo puede declararse **aceptado** con `--aceptar`, un TOML que exige
+`file_id` y un `motivo` no vacio por entrada. Lo aceptado no cuenta para el
+codigo de salida, pero se sigue listando aparte con su justificacion, y una
+entrada que ya no corresponda a ningun desacuerdo (o que declare una clase
+distinta a la real) **tambien falla**: una lista de excepciones que deja de
+aplicarse en silencio es una lista que miente en verde.
+
 Uso:
     python3 tools/conformidad.py --referencia <ruta.json|ruta.jsonl>
     python3 tools/conformidad.py --referencia <ruta> --outcomes outputs/outcomes.jsonl --verbose
     python3 tools/conformidad.py --referencia <ruta> --json
+    python3 tools/conformidad.py --referencia <ruta> --aceptar config/desacuerdos_aceptados.toml
 
 Codigo de salida:
     0  conformidad estricta: cero desacuerdos FUERA_* (y ningun fichero faltante
        en nuestro lado).
     2  solo desacuerdos de severidad baja o no-primarios: publicable, con matices.
-    1  algun FUERA_ALTO o FUERA_MEDIO (o falta una decision nuestra): la referencia
-       externa no admite lo que hacemos.
+    1  algun FUERA_ALTO o FUERA_MEDIO (o falta una decision nuestra, o la lista de
+       aceptados esta mal formada o desactualizada): la referencia externa no
+       admite lo que hacemos.
 
 Funciona sin red y es determinista: siempre ordena por `file_id`.
 """
@@ -55,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tomllib
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
@@ -129,6 +139,9 @@ class Fila:
     mensajes: tuple[str, ...] = ()
     rationale: str = ""
     confianza: str = ""
+    aceptado: bool = False
+    motivo_aceptado: str = ""
+    fecha_aceptado: str = ""
 
     @property
     def severidad(self) -> str:
@@ -144,6 +157,7 @@ class Fila:
 class Informe:
     filas: list[Fila] = field(default_factory=list)
     problemas: list[str] = field(default_factory=list)
+    bloqueos: list[str] = field(default_factory=list)
     datos: list[str] = field(default_factory=list)
     notas: list[str] = field(default_factory=list)
 
@@ -226,6 +240,7 @@ def _opiniones_de_jsonl(texto: str, problemas: list[str]) -> dict[str, Opinion]:
     clave_resultado: str | None = None
     malas = 0
     repetidas = 0
+    mixtas = 0
     for numero, linea in enumerate(texto.splitlines(), start=1):
         linea = linea.strip()
         if not linea:
@@ -243,14 +258,21 @@ def _opiniones_de_jsonl(texto: str, problemas: list[str]) -> dict[str, Opinion]:
         if not file_id:
             malas += 1
             continue
-        claves = [clave_resultado] if clave_resultado else list(CLAVES_RESULTADO)
+        # La clave ya vista va primero, pero el resto sigue siendo candidata: un
+        # JSONL puede mezclar `result` en unas lineas y `expected` en otras, y
+        # descartar esas lineas seria contar como ausencia lo que si esta.
+        candidatas = list(CLAVES_RESULTADO)
+        if clave_resultado:
+            candidatas.remove(clave_resultado)
+            candidatas.insert(0, clave_resultado)
         resultado = None
-        for clave in claves:
-            if clave is None:
-                continue
+        for clave in candidatas:
             resultado = normaliza_resultado(rec.get(clave))
             if resultado:
-                clave_resultado = clave
+                if clave_resultado is None:
+                    clave_resultado = clave
+                elif clave != clave_resultado:
+                    mixtas += 1
                 break
         if not resultado:
             malas += 1
@@ -267,6 +289,10 @@ def _opiniones_de_jsonl(texto: str, problemas: list[str]) -> dict[str, Opinion]:
         problemas.append(f"referencia JSONL: {malas} linea(s) sin file_id/resultado reconocible")
     if repetidas:
         problemas.append(f"referencia JSONL: {repetidas} file_id repetido(s); gana la ultima linea")
+    if mixtas:
+        problemas.append(
+            f"referencia JSONL: {mixtas} linea(s) declaran el resultado en una clave "
+            f"distinta a la de la primera linea ({clave_resultado}); se han leido igual")
     return opiniones
 
 
@@ -359,6 +385,78 @@ def _fila(file_id: str, nuestro: str | None, opinion: Opinion | None) -> Fila:
         confianza=opinion.confianza if opinion else "")
 
 
+def lee_aceptados(ruta: Path, inf: Informe) -> dict[str, dict]:
+    """Lee el TOML de desacuerdos aceptados. Devuelve ``{file_id: entrada}``.
+
+    Cada entrada necesita `file_id` y un `motivo` no vacio: aceptar un
+    desacuerdo sin escribir por que es apagar el instrumento, no calibrarlo.
+    `clase` es opcional y sirve de anclaje: si la factura cambia de clase, la
+    excepcion ha dejado de describir lo que pasa y se avisa.
+    """
+    aceptados: dict[str, dict] = {}
+    try:
+        crudo = tomllib.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        inf.bloqueos.append(f"aceptados: no se puede leer {ruta} ({exc})")
+        return aceptados
+    entradas = crudo.get("desacuerdo") or []
+    if not isinstance(entradas, list):
+        inf.bloqueos.append(f"aceptados: `desacuerdo` tiene que ser una lista en {ruta}")
+        return aceptados
+    for i, entrada in enumerate(entradas, start=1):
+        if not isinstance(entrada, dict):
+            inf.bloqueos.append(f"aceptados: la entrada {i} no es una tabla")
+            continue
+        file_id = entrada.get("file_id")
+        if not isinstance(file_id, str) or not file_id.strip():
+            inf.bloqueos.append(f"aceptados: la entrada {i} no declara `file_id`")
+            continue
+        file_id = file_id.strip()
+        # El motivo puede venir en varias lineas en el TOML (ahi se lee bien); en
+        # el informe va en una sola para no romper la tabla.
+        motivo = " ".join(str(entrada.get("motivo") or "").split())
+        if not motivo:
+            inf.bloqueos.append(f"aceptados: {file_id} no lleva `motivo`; una excepcion sin "
+                                 f"justificacion no se admite")
+            continue
+        clase = str(entrada.get("clase") or "").strip().upper()
+        if clase and clase not in ORDEN:
+            inf.bloqueos.append(f"aceptados: {file_id} declara clase desconocida `{clase}`")
+            continue
+        if file_id in aceptados:
+            inf.bloqueos.append(f"aceptados: {file_id} aparece dos veces; gana la ultima")
+        aceptados[file_id] = {"clase": clase, "motivo": motivo,
+                              "fecha": str(entrada.get("fecha") or "").strip()}
+    return aceptados
+
+
+def aplica_aceptados(filas: list[Fila], aceptados: dict[str, dict], inf: Informe) -> None:
+    """Marca las filas aceptadas y avisa de las excepciones que ya no aplican.
+
+    Una excepcion que dejo de corresponder a un desacuerdo real se reporta como
+    problema y, por tanto, hace fallar la puerta: si no, el dia que el motor
+    arregle `scan_021.pdf` la lista seguiria ahi tapando el siguiente.
+    """
+    por_id = {f.file_id: f for f in filas}
+    for file_id, entrada in aceptados.items():
+        fila = por_id.get(file_id)
+        if fila is None:
+            inf.bloqueos.append(f"aceptados: {file_id} no aparece ni en nuestras decisiones "
+                                 f"ni en la referencia")
+            continue
+        if fila.clase == OK:
+            inf.bloqueos.append(f"aceptados: {file_id} ya no es un desacuerdo ({fila.clase}); "
+                                 f"quita la excepcion")
+            continue
+        if entrada["clase"] and entrada["clase"] != fila.clase:
+            inf.bloqueos.append(f"aceptados: {file_id} declara {entrada['clase']} y ahora es "
+                                 f"{fila.clase}; la excepcion ha dejado de describirlo")
+            continue
+        fila.aceptado = True
+        fila.motivo_aceptado = entrada["motivo"]
+        fila.fecha_aceptado = entrada["fecha"]
+
+
 def _recorta(texto: str, ancho: int) -> str:
     return texto if len(texto) <= ancho else texto[:ancho - 1] + "\u2026"
 
@@ -421,8 +519,11 @@ def _imprime_texto(inf: Informe, meta: dict, tipo: str, ruta_out: Path, ruta_ora
                    decisiones: dict[str, str], opiniones: dict[str, Opinion],
                    verbose: bool) -> int:
     filas = inf.filas
-    conteo = _cuenta_por_clase(filas)
+    aceptadas = [f for f in filas if f.aceptado]
+    conteo = _cuenta_por_clase([f for f in filas if not f.aceptado])
     codigo = _salida_codigo(conteo)
+    if inf.bloqueos:
+        codigo = 1
     veredicto, motivo = _veredicto(conteo)
 
     print("=" * 78)
@@ -453,7 +554,7 @@ def _imprime_texto(inf: Informe, meta: dict, tipo: str, ruta_out: Path, ruta_ora
         print(f"   · {dato}")
 
     for clase in ORDEN:
-        grupo = [f for f in filas if f.clase == clase]
+        grupo = [f for f in filas if f.clase == clase and not f.aceptado]
         if not grupo or (clase == OK and not verbose):
             continue
         print(f"\n-- {TITULO[clase]} [{len(grupo)}]")
@@ -468,9 +569,17 @@ def _imprime_texto(inf: Informe, meta: dict, tipo: str, ruta_out: Path, ruta_ora
                 if f.rationale:
                     print(f"       = {f.rationale}")
 
+    if aceptadas:
+        print(f"\n-- DESACUERDOS ACEPTADOS [{len(aceptadas)}] (no cuentan para el veredicto)")
+        print("\n".join(_tabla(aceptadas)))
+        for f in aceptadas:
+            cuando = f" ({f.fecha_aceptado})" if f.fecha_aceptado else ""
+            print(f"   · {f.file_id} [{f.clase}]{cuando} {f.motivo_aceptado}")
+
     print("\n-- contador")
     for clase in ORDEN:
         print(f"   {clase.ljust(24)} {conteo[clase]:>4}   ({SEVERIDAD[clase]})")
+    print(f"   {'ACEPTADO (no cuenta)':<24} {len(aceptadas):>4}")
     print(f"   {'TOTAL':<24} {len(filas):>4}")
     print(f"   severidades: ALTO {conteo[FUERA_ALTO] + conteo[FALTA]} · "
           f"MEDIO {conteo[FUERA_MEDIO]} · BAJO {conteo[FUERA_BAJO] + conteo[EXTRA]} · "
@@ -490,12 +599,23 @@ def _imprime_texto(inf: Informe, meta: dict, tipo: str, ruta_out: Path, ruta_ora
         print("\n-- problemas")
         for problema in inf.problemas:
             print(f"   ! {problema}")
+    if inf.bloqueos:
+        print("\n-- fallos que bloquean")
+        for bloqueo in inf.bloqueos:
+            print(f"   ! {bloqueo}")
     if inf.notas:
         print("\n-- notas")
         for nota in inf.notas:
             print(f"   · {nota}")
 
+    if inf.bloqueos:
+        print(f"\nVEREDICTO: NO CONFORME -- la lista de aceptados o los datos de entrada no son "
+              f"validos ({len(inf.bloqueos)} bloqueo(s)); el contraste no vale como puerta")
+        print(f"   exit {codigo} (0 estricto · 2 solo bajo/no primario · 1 algun ALTO/MEDIO o bloqueo)")
+        return codigo
     print(f"\nVEREDICTO: {veredicto} -- {motivo}")
+    if aceptadas:
+        print(f"   ({len(aceptadas)} desacuerdo(s) aceptado(s) excluido(s) del veredicto)")
     print(f"   exit {codigo} (0 estricto · 2 solo bajo/no primario · 1 algun ALTO/MEDIO)")
     return codigo
 
@@ -509,9 +629,16 @@ def _formato_dist(contador: Counter) -> str:
 def _imprime_json(inf: Informe, meta: dict, tipo: str, ruta_out: Path, ruta_ora: Path,
                   decisiones: dict[str, str], opiniones: dict[str, Opinion]) -> int:
     filas = inf.filas
-    conteo = _cuenta_por_clase(filas)
+    aceptadas = [f for f in filas if f.aceptado]
+    conteo = _cuenta_por_clase([f for f in filas if not f.aceptado])
     codigo = _salida_codigo(conteo)
+    if inf.bloqueos:
+        codigo = 1
     veredicto, motivo = _veredicto(conteo)
+    if inf.bloqueos:
+        veredicto = "NO CONFORME"
+        motivo = (f"la lista de aceptados o los datos de entrada no son validos "
+                  f"({len(inf.bloqueos)} bloqueo(s)): el contraste no vale como puerta")
     comunes = sorted(set(decisiones) & set(opiniones))
     salida = {
         "origen": {
@@ -537,6 +664,7 @@ def _imprime_json(inf: Informe, meta: dict, tipo: str, ruta_out: Path, ruta_ora:
                 "BAJO": conteo[FUERA_BAJO] + conteo[EXTRA],
                 "INFO": conteo[NO_PRIMARIO],
             },
+            "aceptados": len(aceptadas),
             "reglas_falladas_desacuerdos": dict(sorted(Counter(
                 r for f in filas if f.clase != OK for r in f.fallos).items())),
         },
@@ -552,6 +680,9 @@ def _imprime_json(inf: Informe, meta: dict, tipo: str, ruta_out: Path, ruta_ora:
                 "reglas_soft": list(f.blandos),
                 "rationale": f.rationale,
                 "confianza": f.confianza,
+                "aceptado": f.aceptado,
+                "motivo_aceptado": f.motivo_aceptado,
+                "fecha_aceptado": f.fecha_aceptado,
             }
             for f in filas if f.clase != OK
         ],
@@ -563,6 +694,8 @@ def _imprime_json(inf: Informe, meta: dict, tipo: str, ruta_out: Path, ruta_ora:
         salida["origen"]["meta_referencia"] = meta
     if inf.problemas:
         salida["problemas"] = inf.problemas
+    if inf.bloqueos:
+        salida["bloqueos"] = inf.bloqueos
     print(json.dumps(salida, ensure_ascii=False, indent=2, sort_keys=False))
     return codigo
 
@@ -585,6 +718,19 @@ def construye(args) -> tuple[Informe, dict, str, dict[str, str], dict[str, Opini
         inf.notas.append("comparacion con un JSONL de referencia: su unica decision se toma como conjunto "
                          "admisible de un elemento, asi que FUERA_ALTO/MEDIO son mas probables que "
                          "con `oracle.json` (que declara el abanico de resultados admisibles)")
+    # Cuanta confianza se da a si misma la referencia. Es la senal que delata un
+    # desacuerdo que en realidad es una lectura suya a medias (el caso de
+    # scan_021.pdf: `confidence: low` y `policy_dependent: true`).
+    confianzas = Counter(o.confianza for o in opiniones.values() if o.confianza)
+    if confianzas:
+        inf.datos.append(f"confianza que la referencia se da a si misma: {_formato_dist(confianzas)}")
+    if getattr(args, "aceptar", None):
+        ruta_acc = Path(args.aceptar).expanduser()
+        if not ruta_acc.is_file():
+            inf.bloqueos.append(f"aceptados: no existe {ruta_acc}")
+        else:
+            aceptados = lee_aceptados(ruta_acc, inf)
+            aplica_aceptados(inf.filas, aceptados, inf)
     return inf, meta, tipo, decisiones, opiniones
 
 
@@ -603,6 +749,10 @@ def main(argv: list[str] | None = None) -> int:
                              "decisiones; es un dato de entrada y no se versiona")
     parser.add_argument("--json", action="store_true",
                         help="salida maquina (JSON) en lugar de la tabla legible")
+    parser.add_argument("--aceptar",
+                        help="TOML con desacuerdos aceptados (`file_id` + `motivo` obligatorio); "
+                             "no cuentan para el codigo de salida, pero una excepcion que ya no "
+                             "aplique lo hace fallar")
     parser.add_argument("--verbose", action="store_true",
                         help="incluye las facturas OK y el detalle de cada fallo")
     args = parser.parse_args(argv)
@@ -610,7 +760,7 @@ def main(argv: list[str] | None = None) -> int:
     inf, meta, tipo, decisiones, opiniones = construye(args)
     if not decisiones or not opiniones:
         print("REFERENCIA EXTERNA -- no se puede comparar")
-        for problema in inf.problemas:
+        for problema in inf.problemas + inf.bloqueos:
             print(f"   ! {problema}")
         return 1
     if args.json:

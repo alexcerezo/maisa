@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 _NO_ALFA = re.compile(r"[^0-9A-Za-z]")
 _RE_MILES_ES = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
@@ -243,11 +243,20 @@ def a_decimal(valor: object) -> Decimal | None:
     return -d if negativo else d
 
 
+_CENTIMOS = Decimal("0.01")
+
+
 def cuantiza(valor: Decimal | None) -> Decimal | None:
-    """Redondea a centimos con ROUND_HALF_UP (no el banquero de ``round``)."""
+    """Redondea a centimos con ROUND_HALF_UP (no el banquero de ``round``).
+
+    El modo hay que pedirlo explicito: ``Decimal.quantize`` sin argumento usa
+    ROUND_HALF_EVEN, que en un empate exacto (``2.385``) redondea al par y da
+    2.38 donde la convencion de facturacion espera 2.39. ROUND_HALF_UP aleja
+    del cero en el empate, asi que ``-12.505`` -> ``-12.51``.
+    """
     if valor is None:
         return None
-    return valor.quantize(Decimal("0.01"))
+    return valor.quantize(_CENTIMOS, rounding=ROUND_HALF_UP)
 
 
 _NIF_COMPLETO = re.compile(

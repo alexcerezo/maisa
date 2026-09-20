@@ -1,0 +1,53 @@
+# Desacuerdos con la referencia externa que damos por atribuidos.
+#
+# Esta lista NO es un boton de silencio: es la parte del contraste externo que
+# hemos mirado a mano y hemos decidido sostener. Se usa asi:
+#
+#   PYTHONPATH=motor/src ../.venv/bin/python3 motor/tools/conformidad.py \
+#     --outcomes outputs/outcomes.jsonl --referencia <oracle.json> \
+#     --aceptar motor/config/desacuerdos_aceptados.toml
+#
+# Reglas del juego:
+#   * `file_id` y `motivo` son obligatorios. Una excepcion sin justificacion
+#     escrita no se admite (el verificador la cuenta como bloqueo).
+#   * `clase` es opcional pero recomendable: ancla la excepcion al desacuerdo
+#     concreto que se acepto. Si la factura cambia de clase, el verificador
+#     avisa y falla, porque la excepcion ha dejado de describir lo que pasa.
+#   * Si la factura deja de ser un desacuerdo (la arreglamos o la referencia
+#     cambia), el verificador **falla** hasta que se quite la entrada. Una lista
+#     de excepciones que deja de aplicarse en silencio es una lista que miente
+#     en verde.
+#
+# `tools/oro.py` no puede ver nada de esto: compara nuestro criterio con el
+# nuestro. La referencia externa es el unico contraste que mira desde fuera, y
+# por eso cada excepcion lleva aqui su evidencia.
+
+[[desacuerdo]]
+file_id = "scan_021.pdf"
+clase = "FUERA_ALTO"
+fecha = "2026-09-20"
+motivo = """
+El oraculo externo pide ESCALAR y nosotros PAGAMOS. Es el UNICO FUERA_ALTO de
+las 500 facturas (489/500 coinciden con el primario, 499/500 dentro de
+`acceptable`). Atribuido al oraculo, no a nosotros:
+
+ 1. El oraculo declara `missing = ["date", "supplier_nif"]` y `N0_legible =
+    false`: no leyo ni la fecha ni el NIF del proveedor, y por eso marca en
+    cascada `N1a_nif_en_maestro` y `N1b_iban_coincide` como fallos. Su propio
+    `rationale` lo admite: "un sistema con vision puede haber decidido con
+    datos". Su `confidence` es `low` y su `policy_dependent` es `true`: la
+    propia referencia se esta marcando como no concluyente.
+ 2. El IBAN que SI leyo (ES9368884400123588900142) es el IBAN maestro de P011
+    (B90233808), que segun su propio hallazgo `N2b` es el proveedor del pedido
+    PO-2026-0723. La identidad era verificable con datos que el oraculo tenia
+    en la mano y no uso.
+ 3. Nuestro lado no adivino: `identidad_heredada = true` (el NIF y la fecha que
+    no se leen se heredan del pedido del ERP), `N2a` y `N2c` los da por buenos
+    el propio oraculo (el pedido existe y el total cuadra: 1560,90 contra
+    1560,9), y el asiento AS-72007 esta PENDIENTE por ese importe.
+
+Endurecer R6 para cuadrar con el oraculo (que es lo que hizo y luego revirtio
+`a133024`) contradice el texto de la Norma v3.1, que acota la anomalia al
+"escaneo del que no se lee el IBAN de abono": aqui el IBAN se lee. Ademas
+moveria el banco de oro de 500 decisiones, que esta congelado.
+"""

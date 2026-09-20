@@ -130,8 +130,31 @@ Sobre el lote de 500 y la referencia externa que usamos: 489/500 coinciden con s
 resultado preferido, 499/500 caen dentro de lo admisible (99.8%) y queda **un**
 `FUERA_ALTO` — el escaneo del que no se lee ni NIF ni fecha y del que la
 referencia solo admite `ESCALAR`/`NO_PAGAR`. Ese desacuerdo está atribuido en
-`docs/albertitos_plan.md`. Como es una medida y no una puerta, su exit 1 es
-esperado: no se puede colgar de CI sin lista blanca.
+`docs/albertitos_plan.md`.
+
+Una medida que nadie mira se pudre, así que esa atribución vive también en un
+fichero versionado y la medida se cuelga de CI:
+
+```bash
+PYTHONPATH=motor/src python motor/tools/conformidad.py \
+    --outcomes outputs/outcomes.jsonl --referencia <referencia> \
+    --aceptar motor/config/desacuerdos_aceptados.toml
+```
+
+`desacuerdos_aceptados.toml` exige `file_id` y un `motivo` no vacío por entrada
+(el `clase` es opcional). Lo aceptado se lista aparte, **no cuenta para el
+veredicto** y el motivo tiene que seguir siendo cierto: si el motor arregla esa
+factura, si el desacuerdo cambia de clase o si nombra un fichero que ya no
+existe, la herramienta **falla** en vez de seguir tapando el hueco. Los códigos
+de salida son 0 (estricto), 2 (solo matices de política: bajo o no preferido) y 1
+(algún alto/medio, o lista de aceptados inválida). El paso de CI acepta 0 y 2.
+
+La referencia **no se versiona** — es un artefacto ajeno y tratarla como dato de
+entrada es lo que la hace un contraste independiente —, así que en un runner
+limpio ese paso no tiene nada que comparar y **se salta con un aviso visible** en
+lugar de dar verde sin haber mirado. Exporta `MAISA_REFERENCIA=<ruta>` para que
+sea una puerta dura. Lo que sí corre siempre en CI es la comprobación de que la
+lista blanca está bien formada y no está vacía.
 
 ### Recortar la cola de revisión sin decidir ningún pago
 
