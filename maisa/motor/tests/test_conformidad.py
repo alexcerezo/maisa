@@ -299,23 +299,41 @@ def test_lee_el_formato_del_jsonl_de_trace_it(tmp_path):
     assert opiniones["2026-01-11_P007.pdf"].rationale == "el total no cuadra con el pedido"
 
 
-def test_en_un_jsonl_manda_una_sola_clave_de_resultado(tmp_path):
-    """El lector se queda con la primera clave de resultado que reconoce.
+def test_un_jsonl_puede_mezclar_claves_de_resultado(tmp_path):
+    """La primera clave vista manda, pero no descarta las lineas que usan otra.
 
-    Es una decision de diseno (leer todo el fichero con la misma clave, sin
-    mezclar `result` con `expected` segun la linea), pero tiene un coste: una
-    linea que declare el resultado en otra clave se cae, y el aviso culpa al
-    `file_id` cuando el `file_id` estaba bien. Se fija aqui para que el
-    comportamiento sea conocido y no una sorpresa.
+    Un JSONL de referencia puede venir con `result` en unas lineas y `expected`
+    en otras. Antes esto se leia con una sola clave memoizada y las lineas de la
+    otra clave se caian contando como "sin file_id/resultado reconocible": el
+    aviso culpaba al `file_id`, que estaba bien, y la factura desaparecia del
+    contraste. Ahora la memoizada va primero pero el resto sigue siendo candidata.
     """
     ruta = _escribe(tmp_path / "mixto.jsonl", _jsonl_texto([
         {"file_id": "a.pdf", "result": "PAGAR"},
         {"file_id": "b.pdf", "expected": "ESCALAR"},
+        {"file_id": "c.pdf", "result": "NO_PAGAR"},
+    ]))
+    informe = conf.Informe()
+    opiniones = conf.lee_referencia(ruta, informe)[0]
+    assert {f: o.primary for f, o in opiniones.items()} == {
+        "a.pdf": "PAGAR", "b.pdf": "ESCALAR", "c.pdf": "NO_PAGAR"}
+    assert not any("sin file_id" in p for p in informe.problemas)
+    # Se avisa de la mezcla, pero no se cuenta como linea perdida.
+    assert any("1 linea(s) declaran el resultado en una clave distinta" in p
+               for p in informe.problemas)
+
+
+def test_una_linea_sin_ninguna_clave_de_resultado_si_se_pierde(tmp_path):
+    """El fallback no convierte en lectura lo que de verdad no declara resultado."""
+    ruta = _escribe(tmp_path / "sin.jsonl", _jsonl_texto([
+        {"file_id": "a.pdf", "result": "PAGAR"},
+        {"file_id": "b.pdf", "comentario": "sin decision"},
     ]))
     informe = conf.Informe()
     opiniones = conf.lee_referencia(ruta, informe)[0]
     assert set(opiniones) == {"a.pdf"}
     assert any("1 linea(s) sin file_id/resultado reconocible" in p for p in informe.problemas)
+    assert not any("clave distinta" in p for p in informe.problemas)
 
 
 def test_la_deteccion_es_por_estructura_y_no_por_extension(tmp_path):
@@ -656,3 +674,261 @@ def test_sin_verbose_las_facturas_ok_no_se_listan(tmp_path, capsys):
 def test_formato_dist_marca_la_referencia_vacia():
     assert conf._formato_dist(Counter()) == "vacio"
     assert conf._formato_dist(Counter({"PAGAR": 2, "ESCALAR": 1})) == "ESCALAR 1 PAGAR 2"
+
+
+# ------------------------------------------------- desacuerdos aceptados (gate)
+#
+# `--aceptar` es lo que permite que este contraste sea una puerta de CI sin
+# taparlo todo: se acepta un desacuerdo concreto con su motivo escrito, y el
+# verificador **falla** si la excepcion deja de aplicar (la factura se arregla,
+# cambia de clase o desaparece). Sin esa simetria, una lista de excepciones se
+# convierte en un boton de silencio que manda callar el instrumento.
+def _aceptar(tmp_path: Path, *entradas, nombre: str = "aceptados.toml") -> Path:
+    trozos = []
+    for e in entradas:
+        trozos.append("[[desacuerdo]]\n" + "\n".join(
+            f"{k} = {json.dumps(v)}" for k, v in e.items()) + "\n")
+    return _escribe(tmp_path / nombre, "".join(trozos))
+
+
+def _tres(tmp_path: Path) -> Path:
+    """Referencia con un FUERA_ALTO, un NO_PRIMARIO y un OK."""
+    return _oracle(tmp_path, {
+        "malo.pdf": _entrada("ESCALAR", ["ESCALAR", "NO_PAGAR"]),
+        "matiz.pdf": _entrada("PAGAR", ["PAGAR", "ESCALAR"]),
+        "bien.pdf": _entrada("PAGAR"),
+    })
+
+
+def _decisiones_tres():
+    return [{"file_id": "malo.pdf", "result": "PAGAR"},
+            {"file_id": "matiz.pdf", "result": "ESCALAR"},
+            {"file_id": "bien.pdf", "result": "PAGAR"}]
+
+
+def test_sin_aceptar_el_fuera_alto_falla(tmp_path, capsys):
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path))
+    assert codigo == 1
+    assert "VEREDICTO: NO CONFORME" in texto
+
+
+def test_aceptar_el_fuera_alto_baja_el_veredicto(tmp_path, capsys):
+    ruta = _aceptar(tmp_path, {"file_id": "malo.pdf", "clase": "FUERA_ALTO",
+                               "motivo": "atribuido al oraculo, ver evidencia"})
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 2  # quedan matices (el NO_PRIMARIO), pero ningun ALTO
+    assert "CONFORME CON MATICES" in texto
+    assert "1 desacuerdo(s) aceptado(s) excluido(s) del veredicto" in texto
+
+
+def test_lo_aceptado_se_lista_aparte_y_no_en_su_grupo(tmp_path, capsys):
+    ruta = _aceptar(tmp_path, {"file_id": "malo.pdf", "clase": "FUERA_ALTO",
+                               "motivo": "evidencia escrita"})
+    _, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                      "--aceptar", str(ruta))
+    assert "-- DESACUERDOS ACEPTADOS [1]" in texto
+    assert "· malo.pdf [FUERA_ALTO] evidencia escrita" in texto
+    # El contador lo separa: 0 FUERA_ALTO, 1 aceptado, 3 totales.
+    linea_alto = next(linea for linea in texto.splitlines()
+                      if linea.strip().startswith(conf.FUERA_ALTO))
+    assert linea_alto.split()[1] == "0"
+    linea_aceptado = next(linea for linea in texto.splitlines()
+                          if "ACEPTADO (no cuenta)" in linea)
+    assert linea_aceptado.split() == ["ACEPTADO", "(no", "cuenta)", "1"]
+    linea_total = next(linea for linea in texto.splitlines()
+                       if linea.strip().startswith("TOTAL"))
+    assert linea_total.split()[1] == "3"
+    # El grupo FUERA_ALTO no se imprime porque se ha quedado vacio.
+    assert conf.TITULO[conf.FUERA_ALTO] not in texto
+
+
+def test_el_motivo_se_imprime_una_sola_vez(tmp_path, capsys):
+    """Regresion: el motivo salia tambien en `-- notas`, duplicado y sin fecha."""
+    ruta = _aceptar(tmp_path, {"file_id": "malo.pdf", "clase": "FUERA_ALTO",
+                               "motivo": "evidencia escrita", "fecha": "2026-09-20"})
+    _, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                      "--aceptar", str(ruta))
+    assert texto.count("evidencia escrita") == 1
+    assert "· malo.pdf [FUERA_ALTO] (2026-09-20) evidencia escrita" in texto
+
+
+def test_una_excepcion_que_ya_no_aplica_falla(tmp_path, capsys):
+    """Si el motor arregla la factura, la excepcion tiene que irse."""
+    referencia = _oracle(tmp_path, {"bien.pdf": _entrada("PAGAR")})
+    ruta = _aceptar(tmp_path, {"file_id": "bien.pdf", "motivo": "ya no procede"})
+    codigo, texto = _corre(tmp_path, capsys, [{"file_id": "bien.pdf", "result": "PAGAR"}],
+                           referencia, "--aceptar", str(ruta))
+    assert codigo == 1
+    assert "bien.pdf ya no es un desacuerdo (OK); quita la excepcion" in texto
+    assert "-- fallos que bloquean" in texto
+    assert "el contraste no vale como puerta" in texto
+
+
+def test_una_excepcion_que_cambia_de_clase_falla(tmp_path, capsys):
+    ruta = _aceptar(tmp_path, {"file_id": "malo.pdf", "clase": "FUERA_MEDIO",
+                               "motivo": "descrito cuando era otro desacuerdo"})
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 1
+    assert "declara FUERA_MEDIO y ahora es FUERA_ALTO" in texto
+
+
+def test_una_excepcion_de_una_factura_inexistente_falla(tmp_path, capsys):
+    ruta = _aceptar(tmp_path, {"file_id": "fantasma.pdf", "motivo": "no existe"})
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 1
+    assert "fantasma.pdf no aparece ni en nuestras decisiones ni en la referencia" in texto
+
+
+def test_un_motivo_vacio_no_se_admite(tmp_path, capsys):
+    """Aceptar sin escribir por que es apagar el instrumento, no calibrarlo."""
+    ruta = _aceptar(tmp_path, {"file_id": "malo.pdf", "motivo": "   "})
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 1
+    assert "no lleva `motivo`" in texto
+    # Y sin motivo no se acepta nada: sigue siendo NO CONFORME por el FUERA_ALTO.
+    assert "VEREDICTO: NO CONFORME" in texto
+
+
+@pytest.mark.parametrize("entrada, esperado", [
+    ({"motivo": "sin file_id"}, "no declara `file_id`"),
+    ({"file_id": "malo.pdf", "clase": "INVENTADA", "motivo": "m"}, "clase desconocida"),
+    ({"file_id": "  ", "motivo": "m"}, "no declara `file_id`"),
+])
+def test_entradas_mal_formadas_bloquean(tmp_path, capsys, entrada, esperado):
+    ruta = _aceptar(tmp_path, entrada)
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 1
+    assert esperado in texto
+
+
+def test_un_aceptado_repetido_avisa_y_gana_el_ultimo(tmp_path, capsys):
+    ruta = _aceptar(tmp_path,
+                    {"file_id": "malo.pdf", "clase": "FUERA_ALTO", "motivo": "primero"},
+                    {"file_id": "malo.pdf", "clase": "FUERA_ALTO", "motivo": "segundo"})
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 1
+    assert "malo.pdf aparece dos veces; gana la ultima" in texto
+    assert "· malo.pdf [FUERA_ALTO] segundo" in texto
+
+
+def test_un_toml_ilegible_bloquea(tmp_path, capsys):
+    ruta = _escribe(tmp_path / "roto.toml", "esto no es = = toml\n")
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 1
+    assert "aceptados: no se puede leer" in texto
+
+
+def test_un_aceptar_inexistente_bloquea(tmp_path, capsys):
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(tmp_path / "no_existe.toml"))
+    assert codigo == 1
+    assert "aceptados: no existe" in texto
+
+
+def test_el_motivo_multilinea_va_a_una_sola_linea_en_el_informe(tmp_path, capsys):
+    ruta = _aceptar(tmp_path, {"file_id": "malo.pdf", "clase": "FUERA_ALTO",
+                               "motivo": "primera linea\n   segunda linea"})
+    _, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                      "--aceptar", str(ruta))
+    assert "· malo.pdf [FUERA_ALTO] primera linea segunda linea" in texto
+
+
+def test_la_fecha_del_aceptado_sale_en_el_informe(tmp_path, capsys):
+    ruta = _aceptar(tmp_path, {"file_id": "malo.pdf", "clase": "FUERA_ALTO",
+                               "motivo": "m", "fecha": "2026-09-20"})
+    _, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                      "--aceptar", str(ruta))
+    assert "· malo.pdf [FUERA_ALTO] (2026-09-20) m" in texto
+
+
+def test_el_json_lleva_aceptados_bloqueos_y_motivo(tmp_path, capsys):
+    ruta = _aceptar(tmp_path, {"file_id": "malo.pdf", "clase": "FUERA_ALTO",
+                               "motivo": "evidencia", "fecha": "2026-09-20"})
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta), "--json")
+    datos = json.loads(texto)
+    assert codigo == 2
+    assert "bloqueos" not in datos
+    assert datos["resumen"]["aceptados"] == 1
+    assert datos["resumen"]["conteo_clase"][conf.FUERA_ALTO] == 0
+    fila = next(d for d in datos["desacuerdos"] if d["file_id"] == "malo.pdf")
+    assert fila["aceptado"] is True
+    assert fila["motivo_aceptado"] == "evidencia"
+    assert fila["fecha_aceptado"] == "2026-09-20"
+    assert datos["salida"] == 2
+
+
+def test_el_json_sin_aceptar_marca_el_fuera_alto_como_no_aceptado(tmp_path, capsys):
+    _, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path), "--json")
+    datos = json.loads(texto)
+    assert datos["resumen"]["aceptados"] == 0
+    fila = next(d for d in datos["desacuerdos"] if d["file_id"] == "malo.pdf")
+    assert fila["aceptado"] is False and fila["motivo_aceptado"] == ""
+
+
+def test_el_json_marca_los_bloqueos_y_fuerza_el_veredicto(tmp_path, capsys):
+    ruta = _aceptar(tmp_path, {"file_id": "bien.pdf", "motivo": "ya no procede"})
+    referencia = _oracle(tmp_path, {"bien.pdf": _entrada("PAGAR")})
+    _, texto = _corre(tmp_path, capsys, [{"file_id": "bien.pdf", "result": "PAGAR"}],
+                      referencia, "--aceptar", str(ruta), "--json")
+    datos = json.loads(texto)
+    assert datos["salida"] == 1
+    assert datos["veredicto"] == "NO CONFORME"
+    assert datos["bloqueos"] and "no vale como puerta" in datos["motivo"]
+    # Un bloqueo no convierte en desacuerdo lo que no lo era.
+    assert datos["resumen"]["aceptados"] == 0
+
+
+def test_el_toml_versionado_del_repo_es_valido():
+    """La lista de excepciones que de verdad usamos tiene que estar bien formada.
+
+    Esto si corre en CI, sin la referencia externa: es la parte del gate que no
+    necesita el oraculo. Comprueba que cada excepcion versionada lleve motivo
+    escrito y una clase del enum, que es lo que impide que la lista se convierta
+    en un boton de silencio sin justificar.
+    """
+    ruta = RAIZ / "config" / "desacuerdos_aceptados.toml"
+    assert ruta.is_file(), f"falta {ruta}"
+    informe = conf.Informe()
+    aceptados = conf.lee_aceptados(ruta, informe)
+    assert informe.bloqueos == []
+    assert aceptados, "la lista versionada esta vacia: si no hay excepciones, no la versiones"
+    for file_id, entrada in aceptados.items():
+        assert entrada["clase"] in conf.ORDEN, file_id
+        assert len(entrada["motivo"]) > 80, f"{file_id}: el motivo es demasiado corto para ser evidencia"
+        assert "\n" not in entrada["motivo"], file_id
+        assert file_id.endswith(".pdf"), file_id
+
+
+def test_desacuerdo_que_no_es_lista_bloquea(tmp_path, capsys):
+    ruta = _escribe(tmp_path / "no_lista.toml", 'desacuerdo = "no soy una lista"\n')
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 1
+    assert "`desacuerdo` tiene que ser una lista" in texto
+
+
+def test_entrada_que_no_es_tabla_bloquea(tmp_path, capsys):
+    ruta = _escribe(tmp_path / "no_tabla.toml", 'desacuerdo = ["texto suelto"]\n')
+    codigo, texto = _corre(tmp_path, capsys, _decisiones_tres(), _tres(tmp_path),
+                           "--aceptar", str(ruta))
+    assert codigo == 1
+    assert "la entrada 1 no es una tabla" in texto
+
+
+def test_el_informe_dice_la_confianza_que_se_da_la_referencia(tmp_path, capsys):
+    """Un desacuerdo con `confidence: low` de la referencia es un desacuerdo a medias."""
+    referencia = _oracle(tmp_path, {
+        "a.pdf": _entrada("PAGAR", confidence="high"),
+        "b.pdf": _entrada("ESCALAR", confidence="low"),
+        "c.pdf": _entrada("PAGAR", confidence="low"),
+    })
+    _, texto = _corre(tmp_path, capsys, [{"file_id": "a.pdf", "result": "PAGAR"}], referencia)
+    assert "confianza que la referencia se da a si misma: high 1 low 2" in texto

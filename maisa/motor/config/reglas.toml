@@ -87,6 +87,11 @@ si_instruccion = "ESCALAR"
 si_pendiente_revision = "ESCALAR"
 # Escaneo del que no se lee el IBAN: la cuenta de abono no es comprobable.
 si_documento_no_legible = "ESCALAR"
+# La factura declara el importe en una divisa que no es el euro. El importe
+# llega pelado y el maestro no guarda la moneda, asi que pagar "el mismo
+# numero" es pagar otra cosa; y no hay descuadre que lo delate. Nunca baja a
+# PAGAR ni se registra como evidencia: es una anomalia, no una curiosidad.
+divisa_extranjera = "ESCALAR"
 
 # Motivos que NO son ambiguedad: son hechos duros y por tanto NO_PAGAR.
 # Un humano no tiene nada que decidir aqui; pagar seria un error, no una duda.

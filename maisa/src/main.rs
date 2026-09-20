@@ -227,7 +227,7 @@ where
     T: DeserializeOwned,
 {
     let coleccion = db.collection::<Document>(nombre);
-    let mut cursor = match coleccion.find(filtro, None).await {
+    let mut cursor = match coleccion.find(filtro).await {
         Ok(cursor) => cursor,
         Err(e) => {
             tracing::warn!("no se pudo leer '{nombre}': {e} (el motor arrancará sin esos datos)");
@@ -273,7 +273,7 @@ where
 /// se usó para decidir.
 async fn snapshot_vigente(db: &Database) -> Option<String> {
     let coleccion = db.collection::<Document>("erp_snapshots");
-    match coleccion.find_one(doc! { "vigente": true }, None).await {
+    match coleccion.find_one(doc! { "vigente": true }).await {
         Ok(Some(snapshot)) => snapshot.get("_id").and_then(id_legible),
         Ok(None) => {
             tracing::warn!("no hay snapshot de ERP vigente; se usa un id local en las huellas");
@@ -1133,7 +1133,7 @@ async fn handle_upload(
     );
 
     // 3. Guardar en Mongo (la decisión la toma `/api/decidir`).
-    match state.db_collection.insert_one(&factura, None).await {
+    match state.db_collection.insert_one(&factura).await {
         Ok(insertado) => tracing::info!(
             "factura `{nombre}` guardada con id {:?}",
             insertado.inserted_id

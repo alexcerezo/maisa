@@ -158,3 +158,43 @@ jobs:
             --xlsx data/FINAL_v7_DEFINITIVO_ahorasi.xlsx \
             --snapshot data/erp_snapshot.json \
             --config motor/config/reglas.toml
+
+      # El unico contraste que mira desde fuera (motor/tools/conformidad.py).
+      # Las tres puertas de arriba comparan nuestro criterio con el nuestro; esta
+      # lo compara con una referencia de terceros.
+      #
+      # La referencia NO se versiona (es un artefacto ajeno y `conformidad.py`
+      # la trata como dato de entrada), asi que en un runner limpio no esta y el
+      # paso se salta **a proposito y con aviso**: que se vea que no se ejecuto
+      # es la diferencia entre un instrumento ausente y un instrumento que miente
+      # en verde. Con `MAISA_REFERENCIA=<oracle.json>` pasa a ser una puerta dura.
+      #
+      # Los desacuerdos ya atribuidos viven en `motor/config/desacuerdos_aceptados.toml`
+      # y ese fichero si se versiona: su buena formacion la comprueba la puerta 2
+      # (`tests/test_conformidad.py::test_el_toml_versionado_del_repo_es_valido`),
+      # que corre siempre. Una excepcion que deje de aplicar hace fallar esto.
+      - name: contraste externo (referencia de terceros)
+        run: |
+          for CANDIDATO in \
+            "${MAISA_REFERENCIA:-}" \
+            "../recon/oraculo/oracle.json" \
+            "$HOME/.cache/maisa-watch/repos/tbd_maisa/oraculo/resultados/oracle.json"
+          do
+            if [ -n "$CANDIDATO" ] && [ -f "$CANDIDATO" ]; then REF="$CANDIDATO"; break; fi
+          done
+          if [ -z "${REF:-}" ]; then
+            echo "::warning title=Contraste externo NO ejecutado::No hay referencia externa (mira MAISA_REFERENCIA). Las puertas 1-4 solo comparan nuestro criterio con el nuestro: la conformidad con el exterior NO ha quedado verificada en este run."
+            exit 0
+          fi
+          echo "referencia: $REF"
+          set +e
+          python motor/tools/conformidad.py \
+            --outcomes outputs/outcomes.jsonl \
+            --referencia "$REF" \
+            --aceptar motor/config/desacuerdos_aceptados.toml
+          CODIGO=$?
+          set -e
+          case "$CODIGO" in
+            0|2) echo "contraste externo OK (exit $CODIGO: 0 estricto, 2 solo matices de politica)";;
+            *) echo "::error::contraste externo NO CONFORME (exit $CODIGO). Un desacuerdo nuevo con la referencia no se acepta sin atribuirlo primero en motor/config/desacuerdos_aceptados.toml, y una excepcion que ya no aplique hay que quitarla."; exit 1;;
+          esac

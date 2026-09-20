@@ -7,4 +7,7 @@ fastapi==0.115.6
 uvicorn==0.34.0
 httpx==0.28.1
 pymongo==4.10.1
-python-multipart==0.0.20
+# 0.0.20 acumulaba 7 avisos de Dependabot (3 altos) en el parser de `multipart`,
+# que es justo el camino de `POST /api/facturas` (subida de PDF). 0.0.31 es la
+# primera version que cierra todos.
+python-multipart==0.0.31

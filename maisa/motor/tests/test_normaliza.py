@@ -112,19 +112,22 @@ def test_cuantiza_a_centimos():
     assert nz.cuantiza(Decimal("3012.894")) == Decimal("3012.89")
     assert nz.cuantiza(Decimal("3012.895")) == Decimal("3012.90")
     assert nz.cuantiza(Decimal("3012.891")) == Decimal("3012.89")
-    assert nz.cuantiza(Decimal("-12.505")) == Decimal("-12.50")
+    # ROUND_HALF_UP aleja del cero, asi que en un negativo el empate baja:
+    # -12.505 -> -12.51 (el banquero habria dejado -12.50).
+    assert nz.cuantiza(Decimal("-12.505")) == Decimal("-12.51")
     assert nz.cuantiza(None) is None
 
 
-@pytest.mark.xfail(
-    reason="BUG: normaliza.cuantiza dice en el docstring 'ROUND_HALF_UP (no el "
-    "banquero de round)' pero llama a quantize() sin modo, asi que usa el "
-    "redondeo por defecto (ROUND_HALF_EVEN): cuantiza(Decimal('2.385')) da "
-    "2.38 en vez de 2.39",
-    strict=True,
-)
 def test_cuantiza_no_usa_el_redondeo_bancario():
+    """Un empate exacto al centimo sube, no va al par.
+
+    ``quantize()`` sin modo usa ROUND_HALF_EVEN, que en 2.385 redondea al par y
+    da 2.38. En facturacion el empate sube: la base y el IVA de una factura
+    tienen que poder sumar el total.
+    """
     assert nz.cuantiza(Decimal("2.385")) == Decimal("2.39")
+    assert nz.cuantiza(Decimal("2.375")) == Decimal("2.38")
+    assert nz.cuantiza(Decimal("0.005")) == Decimal("0.01")
 
 
 # ------------------------------------------- 9. match_estricto vs match_seguro
