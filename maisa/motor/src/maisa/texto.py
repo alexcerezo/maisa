@@ -327,6 +327,11 @@ class Candidato:
     confianza: float
 
 
+#: Campos de `Lectura` que son listas de candidatos. El orden importa: es el
+#: que usa la serializacion (`como_dict`) y el que reconstruye `desde_dict`.
+CAMPOS_CANDIDATO = ("nif", "iban", "pedido", "fecha", "base", "iva", "total", "num_factura")
+
+
 @dataclass
 class Lectura:
     """Campos extraidos de un documento, con candidatos y senales."""
@@ -359,12 +364,46 @@ class Lectura:
             "sospechosos_meta": self.sospechosos_meta, "ordenes": self.ordenes,
             "nota": self.nota,
         }
-        for campo in ("nif", "iban", "pedido", "fecha", "base", "iva", "total", "num_factura"):
+        for campo in CAMPOS_CANDIDATO:
             salida[campo] = [
                 {"valor": c.valor, "fuente": c.fuente, "confianza": round(c.confianza, 3)}
                 for c in getattr(self, campo)
             ]
         return salida
+
+    @classmethod
+    def desde_dict(cls, datos: dict) -> "Lectura":
+        """Reconstruye una lectura serializada por `como_dict` (+ `texto`).
+
+        La usa el checkpoint del lote (`--continuar`), y por eso el checkpoint
+        guarda tambien `texto` aunque `como_dict` no lo lleve: reanudar tiene
+        que decidir **lo mismo** que una pasada entera, y la decision mira el
+        texto literal (`divisas_declaradas`, `extrae_iva_pct`). La traza no
+        necesita el texto entero; el checkpoint si.
+        """
+        def candidatos(campo: str) -> list[Candidato]:
+            return [
+                Candidato(
+                    valor=str(c.get("valor", "")),
+                    fuente=str(c.get("fuente", "")),
+                    confianza=float(c.get("confianza") or 0.0),
+                )
+                for c in datos.get(campo) or []
+                if isinstance(c, dict)
+            ]
+
+        return cls(
+            file_id=str(datos.get("file_id", "")),
+            paginas=int(datos.get("paginas") or 0),
+            metodo=str(datos.get("metodo", "")),
+            texto=str(datos.get("texto", "")),
+            texto_ilegible=bool(datos.get("texto_ilegible", False)),
+            sospechosos=[str(s) for s in datos.get("sospechosos") or []],
+            sospechosos_meta=[str(s) for s in datos.get("sospechosos_meta") or []],
+            ordenes=[str(o) for o in datos.get("ordenes") or []],
+            nota=str(datos.get("nota", "")),
+            **{campo: candidatos(campo) for campo in CAMPOS_CANDIDATO},
+        )
 
 
 def _normaliza_espacios(texto: str) -> str:

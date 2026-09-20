@@ -33,10 +33,16 @@ services:
     env_file:
       - .env
     environment:
-      # 2 nucleos fisicos: 1 hilo por nucleo evita sobre-suscripcion
-      - OMP_NUM_THREADS=2
-      - OPENBLAS_NUM_THREADS=2
-      - MKL_NUM_THREADS=2
+      # Un hilo por motor, no por inferencia: el paralelismo se pide con
+      # OCR_WORKERS (un motor por nucleo), no ensanchando cada inferencia.
+      # Medido en 2 nucleos: 3.0 s por inferencia con 1 hilo y 3.9 s con 2, asi
+      # que dos motores de un hilo rinden mas que uno de dos.
+      - OMP_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      # Motores locales en paralelo. 2 = los dos nucleos del contenedor; vacio
+      # o 0 = la cuota de CPU del cgroup.
+      - OCR_WORKERS=2
     # Margen: la inferencia con rec=server ronda 1-1.5 GB en picos
     mem_limit: 4g
     cpus: 2.0

@@ -50,7 +50,7 @@ import re
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -133,6 +133,43 @@ class Documento:
     degradado: bool = False
     error: str = ""
     nube: bool = False
+
+    def como_dict(self) -> dict:
+        """Serializa el documento entero para el checkpoint del lote.
+
+        Incluye `texto` (que `Lectura.como_dict` no lleva) porque reanudar
+        tiene que decidir lo mismo que una pasada entera y la decision mira el
+        texto literal. Ver `maisa.checkpoint`.
+        """
+        lectura = self.lectura.como_dict()
+        lectura["texto"] = self.lectura.texto
+        return {
+            "lectura": lectura, "sha256": self.sha256, "escalon": self.escalon,
+            "cache": self.cache, "segundos": round(self.segundos, 4),
+            "calidad": self.calidad, "motor": self.motor, "proveedor": self.proveedor,
+            "paginas_ocr": self.paginas_ocr, "reintentos": self.reintentos,
+            "degradado": self.degradado, "error": self.error, "nube": self.nube,
+        }
+
+    @classmethod
+    def desde_dict(cls, datos: dict) -> "Documento":
+        """Inverso de `como_dict`; tolera campos ausentes o de otro tipo."""
+        crudo = datos.get("lectura")
+        return cls(
+            lectura=Lectura.desde_dict(crudo if isinstance(crudo, dict) else {}),
+            sha256=str(datos.get("sha256", "")),
+            escalon=str(datos.get("escalon", "")),
+            cache=bool(datos.get("cache", False)),
+            segundos=float(datos.get("segundos") or 0.0),
+            calidad=float(datos.get("calidad") or 0.0),
+            motor=str(datos.get("motor", "")),
+            proveedor=str(datos.get("proveedor", "")),
+            paginas_ocr=int(datos.get("paginas_ocr") or 0),
+            reintentos=int(datos.get("reintentos") or 0),
+            degradado=bool(datos.get("degradado", False)),
+            error=str(datos.get("error", "")),
+            nube=bool(datos.get("nube", False)),
+        )
 
 
 @dataclass
@@ -998,6 +1035,7 @@ def lee_lote(
     trabajadores: int = 3,
     umbral_calidad: float = 0.6,
     modo: str | None = None,
+    aviso: Callable[[Documento], None] | None = None,
 ) -> list[Documento]:
     """Lee un lote en paralelo conservando el orden y sin abortar nunca.
 
@@ -1005,16 +1043,23 @@ def lee_lote(
     factura que reviente sale degradada en su sitio, porque la entrega son las
     500 decisiones y no 499 mas una excepcion.
 
+    ``aviso`` se llama con cada documento **en cuanto se lee** (no al final del
+    lote): es lo que permite escribir el checkpoint mientras avanza la lectura
+    en vez de esperar a tenerlo todo, que es justo el momento en el que un lote
+    de horas se puede caer. Ver `maisa.checkpoint`.
+
     ``modo`` es ``"procesos"`` | ``"hilos"`` | ``None`` (lo que diga
     ``MAISA_LECTURA_MODO``, por defecto procesos en POSIX). Se admiten los dos
     porque miden cosas distintas:
 
     - **hilos** reparten la espera de red (el OCR es una llamada HTTP y el hilo
       se suelta), pero no reparten el trabajo de CPU: extraer la capa de texto
-      de un PDF es puro Python y el GIL lo serializa. Medido: 4,76 s -> 3,69 s
-      al pasar de 1 a 4 hilos, es decir ×1,29 con 4 hilos en 2 nucleos.
+      de un PDF es puro Python y el GIL lo serializa. Medido en la misma sesion
+      con 2 nucleos: 4 hilos 10,88 s, 8 hilos 10,33 s, sin bajar de ahi.
     - **procesos** reparten tambien la CPU, a cambio de pagar el arranque del
-      interprete y de serializar cada `Documento` de vuelta al padre.
+      interprete y de serializar cada `Documento` de vuelta al padre. Medido en
+      la misma sesion: 4 procesos 6,47 s y 8 procesos 5,00 s sobre las mismas
+      500 facturas, es decir x1,68 y x2,07.
 
     El reparto es por `file_id` (el directorio troceado), que es lo que hace
     posible lanzar varios procesos sobre el mismo lote: el motor no tiene estado
@@ -1029,10 +1074,10 @@ def lee_lote(
     if modo is None:
         modo = os.environ.get("MAISA_LECTURA_MODO", "").strip().lower()
     if trabajadores <= 1:
-        return [_lee_o_degrada(r, umbral_calidad) for r in rutas]
+        return _avisa([_lee_o_degrada(r, umbral_calidad) for r in rutas], aviso)
     if modo == "procesos" or (not modo and _puede_usar_procesos()):
         try:
-            return _lee_lote_procesos(rutas, trabajadores, umbral_calidad)
+            return _lee_lote_procesos(rutas, trabajadores, umbral_calidad, aviso)
         except (OSError, RuntimeError, ValueError) as exc:
             # Un pool que no arranca no puede costar una entrega: se relee con
             # hilos. El aviso va a stderr porque el numero de trabajadores es
@@ -1040,7 +1085,22 @@ def lee_lote(
             print(f"aviso: sin procesos ({_corto(exc)}); se relee con hilos",
                   file=sys.stderr)
     with ThreadPoolExecutor(max_workers=trabajadores) as pool:
-        return list(pool.map(lambda r: _lee_o_degrada(r, umbral_calidad), rutas))
+        return _avisa(pool.map(lambda r: _lee_o_degrada(r, umbral_calidad), rutas), aviso)
+
+
+def _avisa(iterable: Iterable[Documento], aviso: Callable[[Documento], None] | None):
+    """Materializa el lote avisando documento a documento, en orden.
+
+    `Executor.map` ya devuelve en orden y segun van llegando los trozos, asi que
+    avisar aqui es avisar durante la lectura y no al final.
+    """
+    if aviso is None:
+        return list(iterable)
+    documentos: list[Documento] = []
+    for documento in iterable:
+        documentos.append(documento)
+        aviso(documento)
+    return documentos
 
 
 def _puede_usar_procesos() -> bool:
@@ -1054,7 +1114,10 @@ def _puede_usar_procesos() -> bool:
 
 
 def _lee_lote_procesos(
-    rutas: list[Path], trabajadores: int, umbral_calidad: float
+    rutas: list[Path],
+    trabajadores: int,
+    umbral_calidad: float,
+    aviso: Callable[[Documento], None] | None = None,
 ) -> list[Documento]:
     """Trocea el lote en procesos con el presupuesto de nube compartido."""
     global _NUBE_COMPARTIDO
@@ -1068,9 +1131,12 @@ def _lee_lote_procesos(
         with ProcessPoolExecutor(
             max_workers=trabajadores, mp_context=contexto
         ) as pool:
-            return list(pool.map(
-                _lee_o_degrada_par, [(r, umbral_calidad) for r in rutas], chunksize=trozo
-            ))
+            return _avisa(
+                pool.map(
+                    _lee_o_degrada_par, [(r, umbral_calidad) for r in rutas], chunksize=trozo
+                ),
+                aviso,
+            )
     finally:
         if creado:
             with _NUBE_COMPARTIDO_LOCK:

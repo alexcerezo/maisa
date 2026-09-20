@@ -64,7 +64,14 @@ import {
     SIN_DATO,
     texto,
 } from "@/lib/formato";
-import { claseDesvio, EXPLICACION_COLA, estadoCola, ICONO_ESCALON } from "@/theme";
+import {
+    claseDesvio,
+    ETIQUETA_ESCALON,
+    EXPLICACION_COLA,
+    estadoCola,
+    ICONO_ESCALON,
+    ICONO_ESCALON_DESCONOCIDO,
+} from "@/theme";
 import { cn } from "@/lib/utils";
 
 export function TablaFacturas({
@@ -163,7 +170,10 @@ function FilaFactura({
     activa: boolean;
     parametrosLista: string;
 }) {
-    const Escalon = ICONO_ESCALON[factura.escalon_lectura];
+    // El `??` no sobra aunque el tipo diga que la clave existe: el valor viene
+    // por HTTP del motor, y un escalon que aqui no este pintaria `<undefined />`
+    // y se llevaria por delante la tabla entera. Perder un icono es barato.
+    const Escalon = ICONO_ESCALON[factura.escalon_lectura] ?? ICONO_ESCALON_DESCONOCIDO;
     const destino = `/facturas/${encodeURIComponent(factura.file_id)}${parametrosLista}`;
     const cola = estadoCola(factura.segunda_lectura);
 
@@ -269,10 +279,10 @@ function FilaFactura({
                                 : "Leída del texto del PDF"}
                         </p>
                         <p className="text-muted-foreground">
-                            {factura.escalon_lectura === "cache_ocr"
-                                ? "El texto salió de la caché de OCR."
-                                : "El texto salió de la capa de texto del PDF."}{" "}
-                            Confianza de la lectura {porcentaje(factura.calidad_lectura)} en{" "}
+                            Procedencia del texto:{" "}
+                            {ETIQUETA_ESCALON[factura.escalon_lectura] ??
+                                factura.escalon_lectura}
+                            . Confianza de la lectura {porcentaje(factura.calidad_lectura)} en{" "}
                             {latencia(factura.segundos_lectura)}. Es la confianza en lo que se
                             leyó, no en la decisión.
                         </p>

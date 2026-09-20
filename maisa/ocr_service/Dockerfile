@@ -10,10 +10,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HOME=/home/ocr \
-    # 2 nucleos fisicos -> limitar pools de hilos evita sobre-suscripcion
-    OMP_NUM_THREADS=2 \
-    OPENBLAS_NUM_THREADS=2 \
-    MKL_NUM_THREADS=2
+    # Un hilo por motor: el paralelismo lo dan los motores de `OCR_WORKERS`,
+    # no los hilos de dentro de una inferencia (ver app/server.py).
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
 
 # libgl1/libglib2.0-0: requeridas por opencv-python (dependencia de rapidocr)
 # libgomp1: runtime OpenMP usado por onnxruntime
@@ -34,7 +35,10 @@ COPY app/ ./app/
 # Pre-descarga los modelos ONNX por defecto dentro de la imagen.
 # Ventajas: la imagen funciona sin red en el primer arranque y el health-check
 # no depende de que la descarga termine.
-RUN python -c "from app.server import warmup; warmup()"
+# OCR_WORKERS=1 solo para el build: aqui interesa que los ficheros de modelo
+# esten en la imagen, no arrancar el pool entero (que en runtime tiene su
+# tamano propio, ver docker-compose.yml).
+RUN OCR_WORKERS=1 python -c "from app.server import warmup; warmup()"
 
 # Usuario sin privilegios
 RUN groupadd -g 1000 ocr \

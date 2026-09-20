@@ -30,6 +30,10 @@ import {
     CircleAlert,
     CircleCheck,
     CircleHelp,
+    Cloud,
+    Eye,
+    FileWarning,
+    ImageOff,
     ScanLine,
     ShieldAlert,
     TriangleAlert,
@@ -37,7 +41,7 @@ import {
 } from "lucide-react";
 
 import type { Gravedad, Severidad } from "./api/severidad";
-import type { CampoAnclable, EstadoCola, Regla, Resultado } from "./api/types";
+import type { CampoAnclable, EscalonLectura, EstadoCola, Regla, Resultado } from "./api/types";
 
 /** El texto que se lee en el badge. En castellano, como el resto del panel. */
 export const ETIQUETA_RESULTADO: Record<Resultado, string> = {
@@ -105,9 +109,12 @@ export const ETIQUETA_METODO: Record<string, string> = {
 };
 
 /** De donde salio el texto. */
-export const ETIQUETA_ESCALON: Record<string, string> = {
+export const ETIQUETA_ESCALON: Record<EscalonLectura, string> = {
     capa_texto: "Capa de texto",
     cache_ocr: "Caché de OCR",
+    vision_ocr: "OCR de la página",
+    vision_nube: "OCR en la nube",
+    degradado: "Lectura degradada",
 };
 
 /** El texto del hecho, leido como severidad y no como regla. */
@@ -154,10 +161,23 @@ export function claseDesvio(desvio: number | null | undefined): string {
 }
 
 /** El icono de "como se leyo el documento", para la columna de trazabilidad. */
-export const ICONO_ESCALON: Record<string, LucideIcon> = {
+export const ICONO_ESCALON: Record<EscalonLectura, LucideIcon> = {
     capa_texto: ScanLine,
     cache_ocr: ShieldAlert,
+    vision_ocr: Eye,
+    vision_nube: Cloud,
+    degradado: ImageOff,
 };
+
+/**
+ * Icono de reserva para un escalon que el contrato no conoce.
+ *
+ * `escalon_lectura` cruza una frontera de proceso: lo escribe el motor y lo lee
+ * el panel por HTTP, asi que puede llegar cualquier cadena. Sin esta red, un
+ * valor nuevo se pinta como `<undefined />` y React tumba la pantalla entera
+ * (error #130, "Element type is invalid") en vez de perder un icono.
+ */
+export const ICONO_ESCALON_DESCONOCIDO: LucideIcon = FileWarning;
 
 /**
  * En que ha quedado la **segunda lectura** de una factura escalada.

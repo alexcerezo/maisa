@@ -19,7 +19,7 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
-from . import emit, excel, lectura, norma, trace
+from . import checkpoint, emit, excel, lectura, norma, trace
 from .erp import carga_snapshot
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -134,7 +134,16 @@ def procesa(
     trabajadores: int,
     lote: int,
     traza_hash: bool = False,
+    continuar: bool = False,
+    ruta_checkpoint: Path | None = None,
 ) -> list[dict]:
+    """Decide el lote. Con ``continuar`` reutiliza lo leido en una pasada previa.
+
+    ``continuar`` sirve para el lote grande, donde el unico escalon que no se
+    puede repetir barato es el OCR en frio: se relee solo lo que falta y se
+    decide con **todo** el lote delante, de modo que el resultado es el mismo
+    que el de una pasada entera. Ver `maisa.checkpoint`.
+    """
     metricas_erp: dict = {}
     decisor, maestro, asientos = construye_decisor(xlsx, config, snapshot, erp_url, metricas_erp)
     # Orden explicito por nombre y no `sorted(...)` sobre `Path`: `PurePath`
@@ -142,6 +151,12 @@ def procesa(
     # segun el sistema. Ver `emit.clave_orden`.
     pdfs = sorted(facturas.glob("*.pdf"), key=lambda p: emit.clave_orden(p.name))
     ruta_traza = salida.with_name(salida.stem + "_traza.jsonl")
+    ruta_check = ruta_checkpoint or salida.with_name(salida.stem + "_lecturas.jsonl")
+    marca = checkpoint.Checkpoint(ruta_check) if continuar else None
+    hechos, pendientes = marca.reparte(pdfs) if marca else ([], pdfs)
+    if marca is not None and marca.lineas_rotas:
+        print(f"aviso: {marca.lineas_rotas} linea(s) a medias en el checkpoint (se descartan)",
+              file=sys.stderr)
     # El registro encadena cada evento con el hash del anterior y hace flush
     # linea a linea: si el proceso muere a mitad, el log queda truncado y
     # `trace.verifica` lo dice en vez de darlo por bueno.
@@ -151,10 +166,18 @@ def procesa(
             trace.TIPO_LOTE, lote=lote, facturas=len(pdfs), xlsx=str(xlsx),
             config=str(config), snapshot=str(snapshot) if snapshot else None,
             erp_url=erp_url, version_norma=decisor.pol.version,
-            trabajadores=trabajadores,
+            trabajadores=trabajadores, reanudado=len(hechos),
         )
     t0 = time.monotonic()
-    docs = lectura.lee_lote(pdfs, trabajadores=trabajadores)
+    if marca is not None:
+        nuevos = lectura.lee_lote(pendientes, trabajadores=trabajadores, aviso=marca.anota)
+        marca.cierra()
+        # Se reordena al orden del lote mezclando lo reanudado con lo nuevo: la
+        # entrega no puede depender de por donde se corto la pasada anterior.
+        por_id = {emit.normaliza_file_id(d.lectura.file_id): d for d in (*hechos, *nuevos)}
+        docs = [por_id[emit.normaliza_file_id(p.name)] for p in pdfs]
+    else:
+        docs = lectura.lee_lote(pdfs, trabajadores=trabajadores)
 
     # Duplicidad de pedido dentro del lote (Norma, punto 5). El decisor solo ve
     # un documento: el lote se lo declara antes de decidir.
@@ -202,6 +225,10 @@ def procesa(
 
     ruta = emit.escribe_jsonl([salida], filas)
     problemas = emit.valida_jsonl(ruta, pdfs)
+    if marca is not None and not problemas:
+        # La entrega esta completa y valida: el checkpoint ya no sirve para
+        # reanudar y dejarlo ahi haria dudar de si el lote termino.
+        marca.borra()
     problemas_traza: list[trace.Problema] = []
     if registro is not None:
         registro.anota(
@@ -217,7 +244,7 @@ def procesa(
         ruta_traza.write_text(
             "\n".join(json.dumps(t, ensure_ascii=False) for t in traza) + "\n", encoding="utf-8"
         )
-    print(f"facturas   : {len(pdfs)}")
+    print(f"facturas   : {len(pdfs)}" + (f" ({len(hechos)} reanudadas)" if hechos else ""))
     print(f"resultado  : {dict(contador)}")
     print(f"lectura    : {dict(escalones)}")
     print(f"maestro    : {len(maestro.proveedores)} proveedores, {len(maestro.pedidos)} pedidos")
@@ -255,6 +282,14 @@ def main(argv: list[str] | None = None) -> int:
         "--traza-hash", action="store_true",
         help="escribe la traza encadenada por hash (auditoria del pitch; no cambia la entrega)",
     )
+    p.add_argument(
+        "--continuar", action="store_true",
+        help="reanuda un lote cortado: relee solo lo que falta (checkpoint junto a la salida)",
+    )
+    p.add_argument(
+        "--checkpoint", type=Path, default=None,
+        help="ruta del checkpoint de lecturas (por defecto, <salida>_lecturas.jsonl)",
+    )
     p.add_argument("--verifica", type=Path, default=None)
     args = p.parse_args(argv)
 
@@ -268,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
         procesa(
             args.facturas, args.xlsx, args.config, args.snapshot, args.erp_url,
             args.salida, args.trabajadores, args.lote, traza_hash=args.traza_hash,
+            continuar=args.continuar, ruta_checkpoint=args.checkpoint,
         )
     except norma.ConfigInvalida as exc:
         print(f"\nCONFIG RECHAZADA: no se decide nada con este fichero.\n{exc}",

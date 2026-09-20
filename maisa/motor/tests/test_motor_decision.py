@@ -197,8 +197,30 @@ def test_fecha_imposible_escala(sintetica, mundo):
     assert algun_motivo(decision, "fecha invalida")
 
 
-def test_fecha_ilegible_escala(sintetica, mundo):
+def test_fecha_ilegible_no_escala_si_la_factura_esta_probada(sintetica, mundo):
+    """El pedido literal y el importe cuadrado prueban la factura: la fecha no.
+
+    Que la fecha no se lea no impide pagar: la fecha no autoriza el importe ni
+    elige al proveedor, asi que no es un hecho de peso (Norma, v3.3). El hecho
+    se sigue registrando, pero como evidencia: no cierra la decision.
+    """
     decision = sintetica.decide(pedido=mundo.pedido_base, fecha="")
+    assert decision.resultado == PAGAR
+    assert not algun_motivo(decision, "fecha no legible")
+    ilegible = [h for h in decision.hechos if h.regla == "R4_fecha" and not h.ok]
+    assert ilegible and ilegible[0].informativo is True
+
+
+def test_fecha_ilegible_escala_si_la_factura_no_esta_probada(sintetica, mundo):
+    """Sin el anclaje, la fecha ilegible vuelve a escalar.
+
+    Aqui el pedido del documento no es literal (el OCR se come el anio), asi que
+    no hay dos pruebas independientes de que sepamos de que factura hablamos.
+    """
+    decision = sintetica.decide(
+        pedido="PO-2028-0096", total=mundo.importe(mundo.pedido_base), fecha="",
+        nif=mundo.nif(mundo.pedido_base), iban=mundo.iban(mundo.pedido_base),
+    )
     assert decision.resultado == ESCALAR
     assert algun_motivo(decision, "fecha no legible")
 
@@ -593,3 +615,58 @@ def test_la_divisa_aceptada_es_politica_y_no_codigo(sintetica, mundo, politica):
     assert decision.resultado == PAGAR
     assert decision.campos["divisa_documento"] == ["USD"]
     assert decision.campos["divisa_erp"] == "USD"
+
+
+# ------------------------- 13. campos ilegibles que no cierran la decision (v3.3)
+def test_un_total_ilegible_se_reconstruye_por_la_aritmetica(sintetica, mundo):
+    """Sin el TOTAL impreso, base + IVA lo calculan y el ERP lo confirma.
+
+    Dos vias independientes --la aritmetica del papel y el asiento-- dicen el
+    mismo importe, asi que no queda nada que un humano pueda aportar. La nota
+    deja constancia de que el total se reconstruyo en vez de leerse.
+    """
+    cuerpo = "\n".join(
+        linea for linea in sintetica.texto(pedido=mundo.pedido_base).splitlines()
+        if not linea.startswith("TOTAL:")
+    )
+    decision = mundo.decisor.decide(lee_texto(cuerpo))
+
+    assert decision.resultado == PAGAR
+    assert decision.campos["total"] == str(mundo.importe(mundo.pedido_base))
+    assert any("reconstruido" in n for n in decision.campos["notas_importe"])
+
+
+def test_un_total_ilegible_no_se_inventa_si_la_suma_no_cuadra(sintetica, mundo):
+    """Si base + IVA no da el importe del pedido, el total sigue ilegible.
+
+    La reconstruccion no es una licencia para inventar el importe: sin la
+    confirmacion del ERP no hay nada probado y la factura escala.
+    """
+    cuerpo = "\n".join(
+        linea for linea in sintetica.texto(pedido=mundo.pedido_base).splitlines()
+        if not linea.startswith("TOTAL:")
+    ).replace("Base: 2.489,99", "Base: 2.000,00")
+    decision = mundo.decisor.decide(lee_texto(cuerpo))
+
+    assert decision.resultado == ESCALAR
+    assert decision.campos["total"] is None
+    assert decision.campos["notas_importe"] == []
+    assert algun_motivo(decision, "total de factura no legible")
+
+
+def test_base_e_iva_ilegibles_no_escalan_si_el_total_cuadra(sintetica, mundo):
+    """El total impreso y cuadrado con el ERP prueba el importe a pagar.
+
+    Que falten la base y el IVA impresos deja un hecho registrado, pero no
+    cierra la decision: el dato que esos campos venian a probar --cuanto se
+    paga-- ya esta probado.
+    """
+    cuerpo = "\n".join(
+        linea for linea in sintetica.texto(pedido=mundo.pedido_base).splitlines()
+        if not linea.startswith(("Base:", "IVA ("))
+    )
+    decision = mundo.decisor.decide(lee_texto(cuerpo))
+
+    assert decision.resultado == PAGAR
+    assert decision.campos["base"] is None and decision.campos["iva"] is None
+    assert decision.campos["total"] == str(mundo.importe(mundo.pedido_base))

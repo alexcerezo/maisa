@@ -41,7 +41,7 @@ def escribe(tmp_path: Path, cuerpo: str, nombre: str = "reglas.toml") -> Path:
 
 def test_la_norma_viva_carga(politica: norma.Politica) -> None:
     """Control: la validacion no puede rechazar la norma buena."""
-    assert politica.version == "norma_v3.2"
+    assert politica.version == "norma_v3.3"
     assert set(politica.precedencia) == set(norma.RESULTADOS)
     # La divisa del ERP es una politica, no una constante del codigo: si el dia
     # que el ERP facture en dolares hay que tocar Python, no es una norma.

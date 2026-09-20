@@ -476,6 +476,35 @@ class Decisor:
             notas.append(f"base {euros(base)} recompuesta a {euros(base_r)}")
         return base_r, iva_r, esperado, notas
 
+    def _total_por_aritmetica(
+        self, base: Decimal | None, iva: Decimal | None, asiento: Asiento,
+        notas: list[str],
+    ) -> Decimal | None:
+        """Reconstruye un total ilegible con la aritmetica del propio documento.
+
+        La Norma (punto 3) exige que ``total = base + IVA``. Cuando el total no
+        se lee pero la base y el IVA si, esa misma igualdad **calcula** el
+        importe, y el resultado solo se acepta si ademas cuadra con el importe
+        del pedido en el ERP. Dos comprobaciones independientes --la aritmetica
+        del papel y el asiento-- dicen lo mismo: el importe a pagar esta probado
+        y no hay nada que un humano pueda aportar aqui.
+
+        Si no hay base o IVA, o la suma no cuadra con el ERP, se devuelve `None`
+        y la factura sigue escalando: un total ilegible que nadie puede
+        reconstruir es exactamente el caso que impide pagar.
+        """
+        if base is None or iva is None:
+            return None
+        suma = cuantiza(base) + cuantiza(iva)
+        if abs(suma - cuantiza(asiento.importe)) > self.pol.tolerancia:
+            return None
+        notas.append(
+            f"total no legible reconstruido por la aritmetica del documento "
+            f"(base {euros(base)} + IVA {euros(iva)} = {euros(suma)}) y confirmado "
+            f"por el importe del pedido"
+        )
+        return suma
+
     # ---------------------------------------------------------------- decide
     def decide(self, lectura: Lectura) -> Decision:
         hechos: list[Hecho] = []
@@ -621,6 +650,13 @@ class Decisor:
             base, iva, total, notas_importe = self._repara_importes_ocr(
                 lectura, base, iva, total, asiento
             )
+        elif total is None and not ajenas:
+            # Capa de texto con el total ilegible: la aritmetica del documento
+            # (base + IVA) lo reconstruye, y solo se acepta si cuadra con el
+            # importe del pedido. Va aqui, y no en el bloque de R2, porque
+            # `importe_confirmado` --que es el anclaje que evita escalar por un
+            # campo ilegible-- se calcula justo despues.
+            total = self._total_por_aritmetica(base, iva, asiento, notas_importe)
         importe_confirmado = (
             total is not None
             and abs(cuantiza(total) - cuantiza(asiento.importe)) <= self.pol.tolerancia
@@ -628,6 +664,14 @@ class Decisor:
         ocr_confirmada = bool(
             self._es_ocr(lectura) and pedido_exacto and importe_confirmado
         )
+        # "Sabemos de que factura hablamos": el pedido es literal en el
+        # documento y el importe cuadra con el ERP al centimo. Son las dos
+        # pruebas independientes que ya autorizan a heredar del ERP un NIF o un
+        # IBAN que el escaneo dejo ilegible (ADR 3), pero sin exigir que la
+        # lectura venga de vision. De aqui sale la regla que evita escalar por
+        # ruido: un campo que no se lee **no es una anomalia** si el dato que
+        # ese campo venia a probar ya esta probado por otras dos vias.
+        factura_probada = bool(pedido_exacto and importe_confirmado)
         campos["notas_importe"] = notas_importe
 
         # --- R1: identidad del emisor y cuenta de abono -----------------------
@@ -757,7 +801,8 @@ class Decisor:
 
         # --- R2 (parte 2) y R3: importes --------------------------------------
         # `base`, `iva` y `total` vienen ya resueltos del bloque de importes de
-        # arriba (que es donde el OCR se repara): aqui solo se publican.
+        # arriba (que es donde el OCR se repara y donde se reconstruye el total
+        # con la aritmetica del documento): aqui solo se publican.
         campos["base"] = str(base) if base is not None else None
         campos["iva"] = str(iva) if iva is not None else None
         campos["total"] = str(total) if total is not None else None
@@ -791,9 +836,9 @@ class Decisor:
             hechos.append(Hecho(
                 "R3_iva", False, "no se pudieron leer base, IVA y total a la vez",
                 {"base": campos["base"], "iva": campos["iva"], "total": campos["total"]},
-                informativo=importe_confirmado and self._es_ocr(lectura),
+                informativo=importe_confirmado,
             ))
-            if total is not None:
+            if not importe_confirmado and (base is None or iva is None):
                 motivos.append("base o IVA no legibles")
         else:
             suma = cuantiza(base) + cuantiza(iva)
@@ -818,9 +863,9 @@ class Decisor:
         if not fechas:
             hechos.append(Hecho(
                 "R4_fecha", False, "fecha no legible",
-                informativo=ocr_confirmada,
+                informativo=factura_probada,
             ))
-            if not ocr_confirmada:
+            if not factura_probada:
                 motivos.append("fecha no legible")
         else:
             # Se prefiere la primera fecha que exista en el calendario; si

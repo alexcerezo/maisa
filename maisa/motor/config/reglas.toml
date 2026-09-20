@@ -5,7 +5,7 @@
 # decision declaran con que version se tomaron, asi que un cambio invalida lo
 # que dependa de ella en cascada sin tocar una linea de Python.
 
-version = "norma_v3.2"
+version = "norma_v3.3"
 fuente = "FINAL_v7_DEFINITIVO_ahorasi.xlsx#Norma_Pagos_v3"
 descripcion = """Norma de pagos a proveedores v3 (vigente tras el incidente de marzo).
 v3.1: la regla 6 nombra sus anomalias (pedido repetido en el lote, orden de
@@ -13,7 +13,13 @@ resultado dentro del documento, pedido pendiente de revision, escaneo sin IBAN
 legible) en vez de escalarlas todas en bloque.
 v3.2: la regla 7 compara la divisa del importe impreso con la del importe del
 ERP. El ERP solo declara euros, asi que un documento marcado en otra divisa no
-se convierte ni se compara por digitos: se escala."""
+se convierte ni se compara por digitos: se escala.
+v3.3: un campo ILEGIBLE deja de ser una anomalia cuando el dato que ese campo
+venia a probar ya esta probado por otras dos vias. Escalar es para hechos de
+peso que impiden pagar, no para el ruido de un OCR que no leyo un campo. Las
+sub-claves de la regla 6 y los hechos duros no cambian: un IBAN que no se lee,
+un importe descuadrado, una fecha imposible o un pago ya hecho siguen escalando
+o bloqueando igual."""
 
 [umbrales]
 # Regla 2 y 3: tolerancia explicita de un centimo.

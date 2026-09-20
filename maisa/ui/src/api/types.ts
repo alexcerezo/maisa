@@ -51,11 +51,21 @@ export type Regla = (typeof REGLAS)[number];
 export type MetodoLectura = "texto_determinista" | "vision_ocr";
 
 /**
- * De que capa salio el texto. Solo hay dos valores en todo el corpus:
- * `capa_texto` (el PDF traia texto de verdad, 471) y `cache_ocr` (hubo que
- * mirarlo con OCR y quedo cacheado, 29).
+ * De que capa salio el texto.
+ *
+ * Los cinco valores son los que produce el motor (`lectura.py`), no los dos que
+ * se ven en el corpus congelado: 471 `capa_texto` y 29 `cache_ocr`. `vision_ocr`
+ * aparece en cuanto hay que mirar el PDF con OCR **sin** entrada en la cache,
+ * `vision_nube` cuando lo lee el proveedor de nube y `degradado` cuando no hay
+ * pagina que leer. El tipo tiene que listarlos todos porque el panel lee de la
+ * API en vivo, y un escalon sin etiqueta ni icono dejaba la tabla en blanco.
  */
-export type EscalonLectura = "capa_texto" | "cache_ocr";
+export type EscalonLectura =
+    | "capa_texto"
+    | "cache_ocr"
+    | "vision_ocr"
+    | "vision_nube"
+    | "degradado";
 
 /**
  * Una factura tal como la ve la tabla: `GET /api/facturas` y tambien el

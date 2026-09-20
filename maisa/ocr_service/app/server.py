@@ -70,6 +70,40 @@ _OCR_VERSIONS = {
     "PP-OCRv6": OCRVersion.PPOCRV6,
 }
 
+#: Cuota real de CPU del contenedor, que **no** es `os.cpu_count()`: en Docker
+#: sin `--cpuset-cpus` el proceso ve los nucleos del anfitrion aunque su cuota
+#: sea de dos. Dimensionar el pool por `cpu_count()` seria prometer paralelismo
+#: que la cuota no da: los motores se pelearian por el mismo tiempo de CPU y
+#: cada inferencia iria mas lenta, no mas rapido.
+def _cuota_cpu() -> float | None:
+    """Cuota de CPU en nucleos segun cgroup v2 (`cpu.max`) o v1, o `None`."""
+    for ruta, v1 in (("/sys/fs/cgroup/cpu.max", False), ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", True)):
+        try:
+            crudo = Path(ruta).read_text(encoding="utf-8").split()
+        except OSError:
+            continue
+        if v1:
+            if crudo and crudo[0] != "-1":
+                periodo = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text().split()
+                if periodo:
+                    return int(crudo[0]) / int(periodo[0])
+            continue
+        if len(crudo) >= 2 and crudo[0] != "max":
+            return int(crudo[0]) / int(crudo[1])
+    return None
+
+
+def nucleos_efectivos() -> int:
+    """Nucleos utilizables: la cuota del cgroup si la hay, si no los del sistema."""
+    cuota = _cuota_cpu()
+    if cuota:
+        return max(1, int(cuota))
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:  # pragma: no cover - solo en sistemas sin afinidad
+        return max(1, os.cpu_count() or 1)
+
+
 DEFAULTS = {
     # Deteccion: mobile = 58 ms en CPU vs 383 ms del server (por 4.8 pts de Hmean).
     # En 2 nucleos la balanza se inclina claramente hacia mobile.
@@ -132,43 +166,27 @@ if DEFAULTS["engine"] not in ("auto", "cloud", "local"):
     )
     DEFAULTS["engine"] = "auto"
 
+# Con mas de un motor, cada inferencia compite por los mismos nucleos. Si
+# ademas OpenCV abre su propio pool por llamada (por defecto, uno por nucleo),
+# dos motores piden cuatro hilos a dos nucleos: el sistema los alterna y cada
+# operacion va mas lenta. El paralelismo lo dan los motores, no los hilos de
+# dentro. Con un solo motor se deja como estaba: ahi si interesa que una
+# inferencia use todo lo que hay.
+if DEFAULTS["workers"] > 1:
+    try:
+        import cv2
+
+        cv2.setNumThreads(1)
+        logger.info(
+            "OpenCV limitado a 1 hilo: el paralelismo lo dan los %d motores.",
+            DEFAULTS["workers"],
+        )
+    except ImportError:  # pragma: no cover - rapidocr siempre trae cv2
+        pass
+
 # --------------------------------------------------------------------------- #
 # Motor OCR
 # --------------------------------------------------------------------------- #
-
-#: Cuota real de CPU del contenedor, que **no** es `os.cpu_count()`: en Docker
-#: sin `--cpuset-cpus` el proceso ve los nucleos del anfitrion aunque su cuota
-#: sea de dos. Dimensionar el pool por `cpu_count()` seria prometer paralelismo
-#: que la cuota no da: los motores se pelearian por el mismo tiempo de CPU y
-#: cada inferencia iria mas lenta, no mas rapido.
-def _cuota_cpu() -> float | None:
-    """Cuota de CPU en nucleos segun cgroup v2 (`cpu.max`) o v1, o `None`."""
-    for ruta, v1 in (("/sys/fs/cgroup/cpu.max", False), ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", True)):
-        try:
-            crudo = Path(ruta).read_text(encoding="utf-8").split()
-        except OSError:
-            continue
-        if v1:
-            if crudo and crudo[0] != "-1":
-                periodo = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text().split()
-                if periodo:
-                    return int(crudo[0]) / int(periodo[0])
-            continue
-        if len(crudo) >= 2 and crudo[0] != "max":
-            return int(crudo[0]) / int(crudo[1])
-    return None
-
-
-def nucleos_efectivos() -> int:
-    """Nucleos utilizables: la cuota del cgroup si la hay, si no los del sistema."""
-    cuota = _cuota_cpu()
-    if cuota:
-        return max(1, int(cuota))
-    try:
-        return max(1, len(os.sched_getaffinity(0)))
-    except AttributeError:  # pragma: no cover - solo en sistemas sin afinidad
-        return max(1, os.cpu_count() or 1)
-
 
 #: Motores locales vivos. Uno por worker y **cada uno usado por un solo hilo a
 #: la vez**: RapidOCR no es thread-safe (muta estado interno entre llamadas).
@@ -187,7 +205,17 @@ _engines_lock = threading.Lock()
 
 
 def _build_params() -> dict[str, Any]:
-    return {
+    """Parametros de RapidOCR, con los hilos de ONNX ajustados al pool.
+
+    Con mas de un motor, cada inferencia se queda con **un** hilo de ONNX
+    Runtime. `OMP_NUM_THREADS=1` ya deja OpenMP en un hilo, asi que el pool
+    interno de ONNX (por defecto, uno por nucleo) no reparte trabajo: se pelea
+    consigo mismo. Medido sobre una factura escaneada real (escala 4, tres
+    pasadas intercaladas de cada variante): reparto automatico 5.03 s de
+    mediana (minimo 4.26 s), un hilo 3.78 s (minimo 3.69 s). Con un solo motor
+    se deja el automatico, que ahi si interesa que una inferencia use todo.
+    """
+    params: dict[str, Any] = {
         "Det.engine_type": EngineType.ONNXRUNTIME,
         "Det.ocr_version": _OCR_VERSIONS[DEFAULTS["det_version"]],
         "Det.model_type": _MODEL_TYPES[DEFAULTS["det_model_type"]],
@@ -202,6 +230,10 @@ def _build_params() -> dict[str, Any]:
         "Global.use_cls": DEFAULTS["use_cls"],
         "Global.text_score": DEFAULTS["text_score"],
     }
+    if DEFAULTS["workers"] > 1:
+        params["EngineConfig.onnxruntime.intra_op_num_threads"] = 1
+        params["EngineConfig.onnxruntime.inter_op_num_threads"] = 1
+    return params
 
 
 def get_engine() -> RapidOCR:
@@ -247,6 +279,11 @@ def warmup() -> None:
 
     Con `OCR_ENGINE=cloud` se omite a proposito: cargar RapidOCR cuesta ~2 GB de
     RAM residente que en ese modo no se usarian jamas.
+
+    Se calientan **todos** los motores del pool, cada uno con su inferencia: un
+    motor recien construido paga en su primera llamada la inicializacion de las
+    sesiones de ONNX Runtime (~1 s), y sin calentarlo esa penalizacion se la
+    llevaria la primera peticion de verdad que le tocara.
     """
     if not wants_local_engine():
         logger.info(
@@ -255,16 +292,19 @@ def warmup() -> None:
         )
         return
 
-    engine = get_engine()
+    cola = motor_pool()
     # Imagen sintetica con texto -> ejercita det + cls + rec.
     img = np.full((160, 640, 3), 255, dtype=np.uint8)
     img[60:100, 40:600] = 0
-    try:
-        with _infer_lock:
-            engine(img)
-    except Exception as exc:  # pragma: no cover - solo informativo
-        logger.warning("Warmup devolvio un aviso (no bloqueante): %s", exc)
-    logger.info("Modelos locales listos.")
+    for _ in range(cola.qsize()):
+        motor = cola.get()
+        try:
+            motor(img)
+        except Exception as exc:  # pragma: no cover - solo informativo
+            logger.warning("Warmup devolvio un aviso (no bloqueante): %s", exc)
+        finally:
+            cola.put(motor)
+    logger.info("Modelos locales listos (%d motor/es).", cola.qsize())
 
 
 # --------------------------------------------------------------------------- #
@@ -418,10 +458,14 @@ class _Source:
 
 
 def _run_page(img: np.ndarray) -> tuple[list[dict[str, Any]], float]:
-    engine = get_engine()
+    """Infiere una pagina con el motor que este libre (y lo devuelve al acabar)."""
+    cola = motor_pool()
+    motor = cola.get()
     started = time.perf_counter()
-    with _infer_lock:
-        result = engine(img)
+    try:
+        result = motor(img)
+    finally:
+        cola.put(motor)
     elapsed = time.perf_counter() - started
 
     boxes = getattr(result, "boxes", None)
@@ -503,7 +547,7 @@ app = FastAPI(
 @app.get("/health")
 def health() -> dict[str, Any]:
     engine_mode = DEFAULTS["engine"]
-    local_ready = _engine is not None
+    local_ready = _engines is not None
     cloud = cloud_config_snapshot()
 
     # Un unico campo `status` para que el healthcheck del contenedor siga
@@ -530,6 +574,10 @@ def health() -> dict[str, Any]:
                 },
                 "det_limit_side_len": DEFAULTS["det_limit_side_len"],
                 "text_score_threshold": DEFAULTS["text_score"],
+                # Motores locales en paralelo: cada uno atiende una inferencia a
+                # la vez, y `libres` dice cuantos hay sin usar en este momento.
+                "workers": DEFAULTS["workers"],
+                "idle": _engines.qsize() if _engines is not None else 0,
             },
             "cloud": {
                 **cloud,

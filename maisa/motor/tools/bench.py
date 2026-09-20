@@ -514,9 +514,11 @@ def escribe_md(med: dict, ext: dict, maquina: dict, ruta: Path) -> None:
     L.append("")
     L.append(f"{med['lote_500_caliente']['repeticiones']} repeticiones por configuracion, "
              "end-to-end (`python -m maisa.procesa`), escribiendo `outcomes.jsonl` y "
-             "contando las lineas emitidas. Se miden los **dos repartos** de la lectura "
-             "en la misma sesion, uno detras de otro: `hilos` es el reparto historico y "
-             "`procesos` trocea el directorio por `file_id`.")
+             "contando las lineas emitidas. Se miden los **dos repartos** de la lectura en "
+             "la misma sesion y alternandose dentro de cada numero de trabajadores "
+             "(`hilos` es el reparto historico; `procesos` reparte el directorio entre "
+             "procesos), para que la deriva de carga de una maquina compartida no se "
+             "confunda con la mejora.")
     L.append("")
     por_modo = med["lote_500_caliente"].get("por_modo") or {
         med["lote_500_caliente"].get("modo_mejor", "?"): med["lote_500_caliente"]["por_trabajadores"]
@@ -544,7 +546,7 @@ def escribe_md(med: dict, ext: dict, maquina: dict, ruta: Path) -> None:
         L.append("**La comparacion es la medida.** A igualdad de trabajadores, el reparto "
                  "por procesos hace el trabajo de CPU en paralelo de verdad; los hilos "
                  "de Python no reparten `pypdf` entre nucleos porque comparten GIL. "
-                 "El contraste de las dos tablas de arriba, medidas seguidas, es la "
+                 "El contraste de las dos tablas de arriba, medidas alternandose, es la "
                  "evidencia de que el GIL era el cuello y de cuanto se ha recuperado.")
     L.append("")
     modo_mejor = med["lote_500_caliente"].get("modo_mejor", "?")
@@ -876,25 +878,26 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[bench] reparto: capa_texto={n_texto} ocr={n_ocr} ({dict(escalones)})")
 
     # 2) lote completo, varias pasadas por configuracion de trabajadores y de
-    #    reparto. Los dos modos se miden en la misma sesion, back-to-back: la
-    #    diferencia entre ellos es la medida del GIL, y comparar numeros de
-    #    sesiones distintas (o de cargas distintas) no seria una medida.
-    por_modo: dict[str, dict[str, dict]] = {}
-    for modo in args.modos:
-        por_trabajadores: dict[str, dict] = {}
-        for w in args.trabajadores:
+    #    reparto. Los modos se miden **alternandose** dentro de cada numero de
+    #    trabajadores, no en bloques: la diferencia entre ellos es la medida del
+    #    GIL, y esta maquina es compartida (carga 7-11 sobre 2 nucleos), asi que
+    #    medir todos los hilos primero y todos los procesos despues mezclaria la
+    #    mejora con la deriva de carga. Medido: la misma lectura serial repetida
+    #    alternandose consigo misma varia un 30%, que es el ruido de la maquina.
+    por_modo: dict[str, dict[str, dict]] = {modo: {} for modo in args.modos}
+    for w in args.trabajadores:
+        for modo in args.modos:
             muestras = []
             r = None
             for i in range(args.repeticiones):
                 r = mide_lote(args.facturas, args, w, traza=False, modo=modo)
                 muestras.append(r["segundos"])
-                print(f"[bench]   {modo} trabajadores={w} pasada {i + 1}/{args.repeticiones}: "
+                print(f"[bench]   trabajadores={w} {modo} pasada {i + 1}/{args.repeticiones}: "
                       f"{r['segundos']:.2f} s ({r['facturas_por_s']:.1f} facturas/s)")
             est = _estadistica(muestras)
             est["facturas_por_s"] = round(len(pdfs) / est["mediana"], 3)
             est["carga_final"] = r["carga_despues"]
-            por_trabajadores[str(w)] = est
-        por_modo[modo] = por_trabajadores
+            por_modo[modo][str(w)] = est
     modo_mejor = min(
         por_modo,
         key=lambda m: min(est["mediana"] for est in por_modo[m].values()),
