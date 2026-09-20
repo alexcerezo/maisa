@@ -12,7 +12,7 @@ pierde; y ante `1.240.84` puede quedarse con los digitos pegados y contabilizar
 no siempre detecta.
 
 Se reescribe aqui, en la frontera del OCR, para que todo lo que consuma el texto
-(el motor y Jev) vea un unico formato y nadie tenga que adivinar la convencion.
+(el motor) vea un unico formato y nadie tenga que adivinar la convencion.
 """
 
 from __future__ import annotations

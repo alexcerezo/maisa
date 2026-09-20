@@ -53,13 +53,6 @@ el plazo, pero su análisis de dominio es el que fijó la semántica de los esta
   cero).
 - `motor/` — **el motor de decisión que se ejecuta** (Python): reglas, tests,
   banco de oro, herramientas y documentación. Ver `motor/README.md`.
-- `jev/` — clasificador de **páginas** de documento con Jev (TypeSafe System One)
-  vía el AI SDK de Vercel, en TypeScript: registro de tipos documentales como
-  datos, cascada por familias, puerta de confianza y evaluación con coste. Es un
-  port del clasificador `kyotofin/tax-doc-classifier` adaptado al dominio de
-  Maisa; **no está integrado en el motor** (el motor sigue decidiendo
-  PAGAR/ESCALAR/NO_PAGAR con sus reglas). Jev es gratis por el AI Gateway hasta
-  el 25 de septiembre de 2026. Ver `jev/README.md`.
 - `src/` — binario Rust (legado): `main.rs` (orquestación) + módulos `domain`,
   `erp`, `ocr`, `excel`, `parser`, `validators`, `reconciler`, `rules`, `obs`.
 - `config/reglas.toml` — reglas del motor Rust (legado). Las del motor vivo
