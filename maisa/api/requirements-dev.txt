@@ -3,5 +3,7 @@
 #
 # httpx ya viene en requirements.txt (el proxy del OCR lo usa), pero se repite
 # aqui porque el TestClient de FastAPI tambien lo necesita.
-pytest==8.3.4
+# 9.0.3 cierra GHSA-6w46-j5rx-g56g (el reporter de fallos podia leer ficheros
+# fuera del directorio de trabajo con `--junitxml` sobre un path controlado).
+pytest==9.0.3
 httpx==0.28.1
