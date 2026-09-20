@@ -1,15 +1,15 @@
 {
  "medido": {
-  "fecha": "2026-09-20T08:02:12+0000",
+  "fecha": "2026-09-20T08:21:14+0000",
   "maquina": {
    "cpu_logicos": 2,
    "memoria_total_gb": 11.65,
    "plataforma": "Linux-6.17.0-1020-oracle-aarch64-with-glibc2.39",
    "python": "3.12.3",
    "carga_media_1_5_15_al_inicio": [
-    12.1,
-    10.08,
-    9.45
+    11.06,
+    10.14,
+    9.6
    ],
    "nota": "maquina compartida: la carga media se registra por medicion (ver 'carga' en cada bloque)"
   },
@@ -25,156 +25,156 @@
     "hilos": {
      "1": {
       "muestras_s": [
-       11.6039,
-       11.0348,
-       14.8219
+       13.3596,
+       11.9828,
+       12.762
       ],
       "n": 3,
-      "min": 11.0348,
-      "mediana": 11.6039,
-      "max": 14.8219,
-      "desv_tipica": 2.0421,
-      "rango_relativo_pct": 32.64,
-      "facturas_por_s": 43.089,
+      "min": 11.9828,
+      "mediana": 12.762,
+      "max": 13.3596,
+      "desv_tipica": 0.6904,
+      "rango_relativo_pct": 10.79,
+      "facturas_por_s": 39.179,
       "carga_final": [
-       10.17,
-       9.2,
-       9.12
+       10.93,
+       9.67,
+       9.28
       ]
      },
      "2": {
       "muestras_s": [
-       9.2232,
-       9.9404,
-       10.3603
+       7.7788,
+       8.4392,
+       9.1928
       ],
       "n": 3,
-      "min": 9.2232,
-      "mediana": 9.9404,
-      "max": 10.3603,
-      "desv_tipica": 0.575,
-      "rango_relativo_pct": 11.44,
-      "facturas_por_s": 50.3,
+      "min": 7.7788,
+      "mediana": 8.4392,
+      "max": 9.1928,
+      "desv_tipica": 0.7075,
+      "rango_relativo_pct": 16.75,
+      "facturas_por_s": 59.247,
       "carga_final": [
-       8.6,
-       8.93,
-       9.04
+       11.25,
+       9.96,
+       9.4
       ]
      },
      "4": {
       "muestras_s": [
-       7.8219,
-       12.1214,
-       8.1424
+       10.4506,
+       11.0311,
+       10.2025
       ],
       "n": 3,
-      "min": 7.8219,
-      "mediana": 8.1424,
-      "max": 12.1214,
-      "desv_tipica": 2.3952,
-      "rango_relativo_pct": 52.8,
-      "facturas_por_s": 61.407,
+      "min": 10.2025,
+      "mediana": 10.4506,
+      "max": 11.0311,
+      "desv_tipica": 0.4253,
+      "rango_relativo_pct": 7.93,
+      "facturas_por_s": 47.844,
       "carga_final": [
-       10.07,
-       9.38,
-       9.19
+       11.51,
+       10.19,
+       9.5
       ]
      },
      "8": {
       "muestras_s": [
-       8.5506,
-       7.5437,
-       7.7736
+       8.5832,
+       8.3277,
+       8.3246
       ],
       "n": 3,
-      "min": 7.5437,
-      "mediana": 7.7736,
-      "max": 8.5506,
-      "desv_tipica": 0.5276,
-      "rango_relativo_pct": 12.95,
-      "facturas_por_s": 64.32,
+      "min": 8.3246,
+      "mediana": 8.3277,
+      "max": 8.5832,
+      "desv_tipica": 0.1484,
+      "rango_relativo_pct": 3.11,
+      "facturas_por_s": 60.041,
       "carga_final": [
-       9.08,
-       9.23,
-       9.15
+       9.95,
+       10.01,
+       9.48
       ]
      }
     },
     "procesos": {
      "1": {
       "muestras_s": [
-       10.9327,
-       8.5874,
-       12.0042
+       8.8306,
+       9.6009,
+       9.9066
       ],
       "n": 3,
-      "min": 8.5874,
-      "mediana": 10.9327,
-      "max": 12.0042,
-      "desv_tipica": 1.7475,
-      "rango_relativo_pct": 31.25,
-      "facturas_por_s": 45.734,
+      "min": 8.8306,
+      "mediana": 9.6009,
+      "max": 9.9066,
+      "desv_tipica": 0.5545,
+      "rango_relativo_pct": 11.21,
+      "facturas_por_s": 52.078,
       "carga_final": [
-       9.48,
-       9.12,
-       9.1
+       10.81,
+       9.76,
+       9.31
       ]
      },
      "2": {
       "muestras_s": [
-       6.9762,
-       9.4403,
-       10.0136
+       6.6836,
+       6.7147,
+       7.5615
       ],
       "n": 3,
-      "min": 6.9762,
-      "mediana": 9.4403,
-      "max": 10.0136,
-      "desv_tipica": 1.6138,
-      "rango_relativo_pct": 32.18,
-      "facturas_por_s": 52.964,
+      "min": 6.6836,
+      "mediana": 6.7147,
+      "max": 7.5615,
+      "desv_tipica": 0.4981,
+      "rango_relativo_pct": 13.07,
+      "facturas_por_s": 74.463,
       "carga_final": [
-       10.55,
-       9.37,
-       9.18
+       10.64,
+       9.9,
+       9.39
       ]
      },
      "4": {
       "muestras_s": [
-       4.7023,
-       5.3512,
-       5.8513
+       6.0412,
+       5.5094,
+       6.6751
       ],
       "n": 3,
-      "min": 4.7023,
-      "mediana": 5.3512,
-      "max": 5.8513,
-      "desv_tipica": 0.5761,
-      "rango_relativo_pct": 21.47,
-      "facturas_por_s": 93.437,
+      "min": 5.5094,
+      "mediana": 6.0412,
+      "max": 6.6751,
+      "desv_tipica": 0.5836,
+      "rango_relativo_pct": 19.3,
+      "facturas_por_s": 82.765,
       "carga_final": [
-       9.86,
-       9.36,
-       9.19
+       11.85,
+       10.33,
+       9.56
       ]
      },
      "8": {
       "muestras_s": [
-       4.8876,
-       3.4539,
-       4.3074
+       5.3093,
+       3.2391,
+       2.5673
       ],
       "n": 3,
-      "min": 3.4539,
-      "mediana": 4.3074,
-      "max": 4.8876,
-      "desv_tipica": 0.7212,
-      "rango_relativo_pct": 33.29,
-      "facturas_por_s": 116.079,
+      "min": 2.5673,
+      "mediana": 3.2391,
+      "max": 5.3093,
+      "desv_tipica": 1.4292,
+      "rango_relativo_pct": 84.65,
+      "facturas_por_s": 154.364,
       "carga_final": [
-       9.77,
-       9.38,
-       9.2
+       10.19,
+       10.06,
+       9.5
       ]
      }
     }
@@ -183,120 +183,120 @@
    "por_trabajadores": {
     "1": {
      "muestras_s": [
-      10.9327,
-      8.5874,
-      12.0042
+      8.8306,
+      9.6009,
+      9.9066
      ],
      "n": 3,
-     "min": 8.5874,
-     "mediana": 10.9327,
-     "max": 12.0042,
-     "desv_tipica": 1.7475,
-     "rango_relativo_pct": 31.25,
-     "facturas_por_s": 45.734,
+     "min": 8.8306,
+     "mediana": 9.6009,
+     "max": 9.9066,
+     "desv_tipica": 0.5545,
+     "rango_relativo_pct": 11.21,
+     "facturas_por_s": 52.078,
      "carga_final": [
-      9.48,
-      9.12,
-      9.1
+      10.81,
+      9.76,
+      9.31
      ]
     },
     "2": {
      "muestras_s": [
-      6.9762,
-      9.4403,
-      10.0136
+      6.6836,
+      6.7147,
+      7.5615
      ],
      "n": 3,
-     "min": 6.9762,
-     "mediana": 9.4403,
-     "max": 10.0136,
-     "desv_tipica": 1.6138,
-     "rango_relativo_pct": 32.18,
-     "facturas_por_s": 52.964,
+     "min": 6.6836,
+     "mediana": 6.7147,
+     "max": 7.5615,
+     "desv_tipica": 0.4981,
+     "rango_relativo_pct": 13.07,
+     "facturas_por_s": 74.463,
      "carga_final": [
-      10.55,
-      9.37,
-      9.18
+      10.64,
+      9.9,
+      9.39
      ]
     },
     "4": {
      "muestras_s": [
-      4.7023,
-      5.3512,
-      5.8513
+      6.0412,
+      5.5094,
+      6.6751
      ],
      "n": 3,
-     "min": 4.7023,
-     "mediana": 5.3512,
-     "max": 5.8513,
-     "desv_tipica": 0.5761,
-     "rango_relativo_pct": 21.47,
-     "facturas_por_s": 93.437,
+     "min": 5.5094,
+     "mediana": 6.0412,
+     "max": 6.6751,
+     "desv_tipica": 0.5836,
+     "rango_relativo_pct": 19.3,
+     "facturas_por_s": 82.765,
      "carga_final": [
-      9.86,
-      9.36,
-      9.19
+      11.85,
+      10.33,
+      9.56
      ]
     },
     "8": {
      "muestras_s": [
-      4.8876,
-      3.4539,
-      4.3074
+      5.3093,
+      3.2391,
+      2.5673
      ],
      "n": 3,
-     "min": 3.4539,
-     "mediana": 4.3074,
-     "max": 4.8876,
-     "desv_tipica": 0.7212,
-     "rango_relativo_pct": 33.29,
-     "facturas_por_s": 116.079,
+     "min": 2.5673,
+     "mediana": 3.2391,
+     "max": 5.3093,
+     "desv_tipica": 1.4292,
+     "rango_relativo_pct": 84.65,
+     "facturas_por_s": 154.364,
      "carga_final": [
-      9.77,
-      9.38,
-      9.2
+      10.19,
+      10.06,
+      9.5
      ]
     }
    },
    "mejor_trabajadores": "8",
-   "mediana": 4.3074,
+   "mediana": 3.2391,
    "escalones": {
     "capa_texto": 471,
     "cache_ocr": 29
    },
    "carga_media_final": [
-    9.95,
-    9.03,
-    9.07
+    10.92,
+    9.54,
+    9.22
    ]
   },
   "lote_500_con_traza": {
    "trabajadores": 4,
-   "segundos": 6.6551,
+   "segundos": 3.8951,
    "eventos": 1002
   },
   "desglose_4": {
    "trabajadores": 4,
-   "carga_entradas_s": 0.3315,
-   "lectura_s": 4.0904,
-   "decision_s": 0.5172,
-   "emision_s": 0.0024,
-   "total_fases_s": 4.9415,
-   "por_factura_decision_ms": 1.034,
+   "carga_entradas_s": 0.0825,
+   "lectura_s": 2.6018,
+   "decision_s": 0.2415,
+   "emision_s": 0.0033,
+   "total_fases_s": 2.9291,
+   "por_factura_decision_ms": 0.483,
    "escalones": {
     "capa_texto": 471,
     "cache_ocr": 29
    },
    "escalones_por_factura": {
-    "capa_texto_ms": 8.181
+    "capa_texto_ms": 5.204
    }
   },
   "lectura_texto": {
    "facturas": 471,
    "trabajadores": 4,
-   "segundos": 4.1241,
-   "por_factura_s": 0.008756,
-   "facturas_por_s": 114.206,
+   "segundos": 2.4775,
+   "por_factura_s": 0.00526,
+   "facturas_por_s": 190.112,
    "escalones": {
     "capa_texto": 471
    }
@@ -304,9 +304,9 @@
   "lectura_ocr_cache": {
    "facturas": 29,
    "trabajadores": 4,
-   "segundos": 0.2257,
-   "por_factura_s": 0.007783,
-   "facturas_por_s": 128.486,
+   "segundos": 0.1287,
+   "por_factura_s": 0.004439,
+   "facturas_por_s": 225.299,
    "escalones": {
     "cache_ocr": 29
    },
@@ -315,24 +315,24 @@
   "ocr_frio_serial": {
    "facturas": 10,
    "trabajadores": 1,
-   "segundos": 38.6522,
-   "por_factura_mediana_s": 3.8768,
-   "por_factura_media_s": 3.8652,
-   "por_factura_min_s": 3.3219,
-   "por_factura_max_s": 4.4481,
+   "segundos": 38.6919,
+   "por_factura_mediana_s": 3.7715,
+   "por_factura_media_s": 3.8692,
+   "por_factura_min_s": 3.3077,
+   "por_factura_max_s": 4.5917,
    "por_factura_muestras_s": [
-    4.4481,
-    4.0983,
-    4.4076,
-    3.9101,
-    3.4424,
-    3.8436,
-    4.0105,
-    3.3566,
-    3.3219,
-    3.813
+    3.8458,
+    4.5917,
+    4.3423,
+    3.6971,
+    4.0302,
+    3.3939,
+    3.3077,
+    4.5813,
+    3.4614,
+    3.4403
    ],
-   "facturas_por_s": 0.2587,
+   "facturas_por_s": 0.2585,
    "escalones": {
     "vision_ocr": 10
    },
@@ -341,24 +341,24 @@
   "ocr_frio_4": {
    "facturas": 10,
    "trabajadores": 4,
-   "segundos": 38.8835,
-   "por_factura_mediana_s": 14.8707,
-   "por_factura_media_s": 13.9937,
-   "por_factura_min_s": 8.057,
-   "por_factura_max_s": 18.3893,
+   "segundos": 44.8737,
+   "por_factura_mediana_s": 17.8877,
+   "por_factura_media_s": 16.4233,
+   "por_factura_min_s": 10.0486,
+   "por_factura_max_s": 21.2411,
    "por_factura_muestras_s": [
-    8.057,
-    8.9199,
-    18.3893,
-    15.5105,
-    15.1664,
-    17.2554,
-    15.0062,
-    14.7353,
-    14.3566,
-    12.5404
+    10.0486,
+    10.8141,
+    20.3068,
+    17.454,
+    18.3215,
+    21.2411,
+    19.2778,
+    19.7416,
+    14.3014,
+    12.7257
    ],
-   "facturas_por_s": 0.2572,
+   "facturas_por_s": 0.2228,
    "escalones": {
     "vision_ocr": 10
    },
@@ -367,18 +367,54 @@
   "endpoint": {
    "url": "http://127.0.0.1:8866",
    "facturas": 5,
-   "por_factura_mediana_s": 4.3528,
-   "por_factura_media_s": 4.2501,
-   "por_factura_min_s": 3.4918,
-   "por_factura_max_s": 4.6841,
+   "por_factura_mediana_s": 4.0863,
+   "por_factura_media_s": 4.2178,
+   "por_factura_min_s": 3.2988,
+   "por_factura_max_s": 5.9198,
    "muestras_s": [
-    4.6082,
-    4.6841,
-    4.3528,
-    4.1134,
-    3.4918
+    4.4715,
+    4.0863,
+    5.9198,
+    3.2988,
+    3.3127
    ],
-   "facturas_por_s_por_peticion": 0.2297
+   "facturas_por_s_por_peticion": 0.2447
+  },
+  "endpoint_concurrencia": {
+   "url": "http://127.0.0.1:8866",
+   "repeticiones": 3,
+   "motores": 2,
+   "por_nivel": {
+    "1": {
+     "pared_mediana_s": 3.9259,
+     "pared_muestras_s": [
+      5.0161,
+      3.9259,
+      3.8584
+     ],
+     "latencia_mediana_s": 3.9181,
+     "latencia_max_s": 5.0141,
+     "facturas_por_s": 0.2547,
+     "idle_minimo": 1,
+     "muestras_idle": 17
+    },
+    "2": {
+     "pared_mediana_s": 9.8115,
+     "pared_muestras_s": [
+      9.8115,
+      11.695,
+      8.8784
+     ],
+     "latencia_mediana_s": 9.6024,
+     "latencia_max_s": 11.6923,
+     "facturas_por_s": 0.2038,
+     "idle_minimo": 0,
+     "muestras_idle": 35
+    }
+   },
+   "speedup_caudal_1_a_2": 0.8,
+   "solapa_peticiones": true,
+   "nota": "`solapa_peticiones` lo dice `idle`: con 2 peticiones en vuelo el pool de motores se queda sin ninguno libre, asi que las inferencias se solapan de verdad. `speedup_caudal_1_a_2` mide si eso se traduce en mas caudal, y solo lo hara si sobran nucleos."
   },
   "no_medido": [
    "Coste en EUR: no tenemos la tarifa de esta maquina, asi que damos vCPU·s y la formula.",
@@ -402,83 +438,119 @@
    "C_peor_caso": "f_texto = 0, f_ocr = 1 y c_ocr_del_regimen = c_ocr_frio"
   },
   "constantes_medidas": {
-   "t_fijo_s": 0.3315,
-   "c_texto_s_por_factura": 0.008756,
-   "c_cache_ocr_s_por_factura": 0.007783,
-   "c_ocr_s_por_factura_serial": 3.8768,
-   "S_ocr_paralelismo_medido": 0.99,
-   "c_decision_s_por_factura": 0.001034,
+   "t_fijo_s": 0.0825,
+   "c_texto_s_por_factura": 0.00526,
+   "c_cache_ocr_s_por_factura": 0.004439,
+   "c_ocr_s_por_factura_serial": 3.7715,
+   "S_ocr_paralelismo_medido": 0.86,
+   "c_decision_s_por_factura": 0.000483,
    "f_texto": 0.942,
    "f_ocr": 0.058
   },
   "contraste_modelo_500": {
    "regimen": "A_estacionario_cache_caliente",
-   "medido_s": 4.3074,
-   "modelo_s": 5.2,
-   "error_relativo_pct": 20.7
+   "medido_s": 3.2391,
+   "modelo_s": 2.9,
+   "error_relativo_pct": -9.5
   },
   "escenarios": {
    "A_estacionario_cache_caliente": {
     "descripcion": "lo de cada dia: mismo reparto que La Caja y las escaneadas ya vistas (la cache es por sha256 del PDF, asi que no se vuelven a pagar)",
     "f_texto": 0.942,
     "f_ocr": 0.058,
-    "coste_ocr_aplicado_s": 0.0078,
+    "coste_ocr_aplicado_s": 0.0044,
     "tiempos_s": {
-     "5000": 49.0,
-     "50000": 487.0,
-     "1000000": 9734.3
+     "5000": 28.6,
+     "50000": 284.9,
+     "1000000": 5695.5
     },
     "facturas_por_s": {
-     "5000": 102.04,
-     "50000": 102.66,
-     "1000000": 102.73
+     "5000": 175.07,
+     "50000": 175.53,
+     "1000000": 175.58
     }
    },
    "B_lote_nuevo_mix_de_la_caja": {
     "descripcion": "un lote nuevo con el mismo mix: el 5,8 % de escaneadas paga OCR en frio",
     "f_texto": 0.942,
     "f_ocr": 0.058,
-    "coste_ocr_aplicado_s": 3.8768,
+    "coste_ocr_aplicado_s": 3.7715,
     "tiempos_s": {
-     "5000": 1177.7,
-     "50000": 11774.5,
-     "1000000": 235482.8
+     "5000": 1295.8,
+     "50000": 12956.8,
+     "1000000": 259134.2
     },
     "facturas_por_s": {
-     "5000": 4.25,
-     "50000": 4.25,
-     "1000000": 4.25
+     "5000": 3.86,
+     "50000": 3.86,
+     "1000000": 3.86
     }
    },
    "C_peor_caso_todo_escaneado_nuevo": {
     "descripcion": "peor caso: el 100 % de los PDFs son escaneos que nadie ha visto antes",
     "f_texto": 0.0,
     "f_ocr": 1.0,
-    "coste_ocr_aplicado_s": 3.8768,
+    "coste_ocr_aplicado_s": 3.7715,
     "tiempos_s": {
-     "5000": 19505.5,
-     "50000": 195052.0,
-     "1000000": 3901034.0
+     "5000": 21872.9,
+     "50000": 218727.8,
+     "1000000": 4374555.2
     },
     "facturas_por_s": {
-     "5000": 0.26,
-     "50000": 0.26,
-     "1000000": 0.26
+     "5000": 0.23,
+     "50000": 0.23,
+     "1000000": 0.23
     }
    }
   },
   "cuello_de_botella": {
-   "ocr_servicio_s_por_factura": 4.3528,
-   "ocr_facturas_por_s_por_ranura": 0.2297,
-   "ocr_facturas_por_hora_por_ranura": 827.1,
+   "ocr_servicio_s_por_factura": 4.0863,
+   "ocr_facturas_por_s_por_ranura": 0.2447,
+   "ocr_facturas_por_hora_por_ranura": 881.0,
    "paraleliza_el_contenedor": false,
+   "concurrencia": {
+    "url": "http://127.0.0.1:8866",
+    "repeticiones": 3,
+    "motores": 2,
+    "por_nivel": {
+     "1": {
+      "pared_mediana_s": 3.9259,
+      "pared_muestras_s": [
+       5.0161,
+       3.9259,
+       3.8584
+      ],
+      "latencia_mediana_s": 3.9181,
+      "latencia_max_s": 5.0141,
+      "facturas_por_s": 0.2547,
+      "idle_minimo": 1,
+      "muestras_idle": 17
+     },
+     "2": {
+      "pared_mediana_s": 9.8115,
+      "pared_muestras_s": [
+       9.8115,
+       11.695,
+       8.8784
+      ],
+      "latencia_mediana_s": 9.6024,
+      "latencia_max_s": 11.6923,
+      "facturas_por_s": 0.2038,
+      "idle_minimo": 0,
+      "muestras_idle": 35
+     }
+    },
+    "speedup_caudal_1_a_2": 0.8,
+    "solapa_peticiones": true,
+    "nota": "`solapa_peticiones` lo dice `idle`: con 2 peticiones en vuelo el pool de motores se queda sin ninguno libre, asi que las inferencias se solapan de verdad. `speedup_caudal_1_a_2` mide si eso se traduce en mas caudal, y solo lo hara si sobran nucleos."
+   },
    "nota": "el coste por factura escaneada se expresa en segundos de CPU del servicio OCR (= tiempo de pared de una peticion si el contenedor atiende de una en una; verificado con el test serial vs 4 hilos)"
   },
   "coste": {
    "unidad": "vCPU-s del servicio OCR",
-   "por_factura_escaneada": 4.3528,
-   "para_10000_escaneadas": 43528.0,
-   "para_1000000_escaneadas": 4352800.0,
+   "por_factura_escaneada": 4.0863,
+   "para_10000_escaneadas": 40863.0,
+   "para_1000000_escaneadas": 4086300.0,
    "formula_euros": "coste_EUR = N_escaneadas * s_OCR_por_factura * precio_EUR_por_vCPU_s  (el precio NO se mide aqui: no tenemos tarifa de esta maquina)",
    "coste_marginal_por_factura_de_texto": "0 s de OCR (la capa de texto es exacta y gratis)"
   },

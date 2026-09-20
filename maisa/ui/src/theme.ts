@@ -32,6 +32,7 @@ import {
     CircleHelp,
     Cloud,
     Eye,
+    FileQuestion,
     FileWarning,
     ImageOff,
     ScanLine,
@@ -65,6 +66,29 @@ export const ICONO_RESULTADO: Record<Resultado, LucideIcon> = {
     ESCALAR: CircleHelp,
     NO_PAGAR: Ban,
 };
+
+/**
+ * Como se pinta un resultado que el contrato no conoce.
+ *
+ * `resultado` cruza la misma frontera de proceso que `escalon_lectura` —lo
+ * escribe el motor y lo lee el panel por HTTP— y ademas el motor **si** puede no
+ * traer decision: una linea de traza sin `result` llega al panel como `null`, y
+ * la propia API lo cuenta aparte en `resultados_desconocidos` en vez de sumarlo
+ * a los contadores. O sea que "sin decision" no es un caso raro: es un estado
+ * que el contrato ya reconoce.
+ *
+ * Sin esta red, `ICONO_RESULTADO[null]` es `undefined`, se pinta como
+ * `<undefined />` y React se lleva por delante la pantalla entera (error #130,
+ * "Element type is invalid") en vez de perder un badge. Es el mismo seguro que
+ * `ICONO_ESCALON_DESCONOCIDO`, y por el mismo motivo.
+ *
+ * Se pinta en gris y no en rojo a proposito: "no hay decision" no es "no se
+ * paga". El rojo de este panel significa que hay una persona obligada, y una
+ * traza incompleta no obliga a nadie: avisa.
+ */
+export const ETIQUETA_RESULTADO_DESCONOCIDO = "Desconocido";
+export const CLASE_RESULTADO_DESCONOCIDO = "border-border bg-muted text-muted-foreground";
+export const ICONO_RESULTADO_DESCONOCIDO: LucideIcon = FileQuestion;
 
 /**
  * El nombre de cada regla, para la lista de hechos.

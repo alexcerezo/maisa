@@ -139,6 +139,7 @@ import {
     CLASE_CIRCUITO,
     CLASE_DEPENDENCIA_CAIDA,
     CLASE_RESULTADO,
+    CLASE_RESULTADO_DESCONOCIDO,
     ETIQUETA_CIRCUITO,
     ETIQUETA_DEPENDENCIA,
     ETIQUETA_ESCALON,
@@ -525,7 +526,7 @@ function SelectorExpediente({
                                     aria-hidden
                                     className={cn(
                                         "size-1.5 rounded-full",
-                                        CLASE_RESULTADO[f.resultado],
+                                        CLASE_RESULTADO[f.resultado] ?? CLASE_RESULTADO_DESCONOCIDO,
                                     )}
                                 />
                                 <span className="font-mono">{f.file_id}</span>

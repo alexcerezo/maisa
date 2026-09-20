@@ -25,6 +25,12 @@ logger = logging.getLogger("albertitos-api")
 
 RESULTADOS = ("PAGAR", "NO_PAGAR", "ESCALAR")
 
+# El unico evento de la traza encadenada que trae una decision. El resto
+# (`lote`, `lectura`, `fin`) describe la pasada, no la factura. Se repite aqui en
+# vez de importarlo de `maisa.trace` porque la API es un paquete aparte que lee
+# ficheros del motor, no codigo del motor.
+TIPO_DECISION = "decision"
+
 # Firma que se publica cuando no hay traza legible: es estable a proposito, para
 # que un cliente que cachea no vea cambiar el ETag sin motivo.
 FIRMA_SIN_TRAZA = "sin-traza"
@@ -148,6 +154,41 @@ def segunda_lectura_resumen(anotacion: dict | None) -> dict | None:
         "confirmable": bool(anotacion.get("confirmable")),
         "desvio": bool(anotacion.get("desvio")),
     }
+
+
+def aplanar(registro: dict) -> dict | None:
+    """Traduce una linea de la traza a la forma plana que espera el contrato.
+
+    La traza del motor tiene **dos formas** y esta es la unica puerta por la que
+    entran las dos:
+
+    - sin `--traza-hash`, una linea por factura, con `result`, `campos`, `lote`
+      y lo demas en la raiz;
+    - con `--traza-hash`, que es como se genera la traza de produccion, un
+      diario encadenado de `{seq, ts, tipo, file_id, datos, hash, hash_prev}`
+      con un evento por etapa (`lote`, `lectura`, `decision`, `fin`), y los
+      datos de la decision **bajo `datos`**.
+
+    Leer el diario como si fuera la forma plana no falla ruidosamente, y ese es
+    el problema: la primera linea de cada factura es su `lectura` —que no trae
+    `result`—, `setdefault` se queda con ella, y el listado sale entero a `null`
+    (una fila por evento en vez de una por factura). Filtrar aqui deja el resto
+    del modulo con un solo formato en la mano.
+
+    Devuelve `None` para los eventos que no son una decision: eso es "no hay
+    fila", que no es lo mismo que "fila vacia".
+    """
+    if "tipo" not in registro:
+        return registro
+    if registro.get("tipo") != TIPO_DECISION:
+        return None
+    datos = registro.get("datos")
+    if not isinstance(datos, dict):
+        return None
+    # `file_id` va en el evento, fuera de `datos`; y `datos` lo repite dentro de
+    # `campos`, que es donde lo busca el visor. Se copia al frente para que el
+    # evento se lea igual que una linea plana.
+    return {**datos, "file_id": _texto(registro.get("file_id")) or _texto(datos.get("file_id"))}
 
 
 def resumir(registro: dict) -> dict:
@@ -320,6 +361,13 @@ class TrazaStore:
                             logger.warning(
                                 "Traza %s: linea %s ilegible, se ignora.", ruta.name, numero
                             )
+                            continue
+                        registro = aplanar(registro)
+                        if registro is None:
+                            # Evento del diario que no decide nada (`lote`,
+                            # `lectura`, `fin`): describe la pasada, no la
+                            # factura. No es una linea invalida y no se avisa
+                            # por ella.
                             continue
                         file_id = _texto(registro.get("file_id"))
                         if not file_id:

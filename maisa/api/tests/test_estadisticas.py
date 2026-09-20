@@ -83,6 +83,65 @@ def test_traza_ausente_da_503(settings):
     app.dependency_overrides.clear()
 
 
+def test_traza_encadenada_da_una_fila_por_factura(tmp_path):
+    """La traza de produccion es un diario (`lote`/`lectura`/`decision`/`fin`).
+
+    Leerla como si fuera la forma plana daba una fila por **evento** y, como
+    `setdefault` se queda con la primera, la `lectura` —que no trae `result`—
+    ganaba: 1084 filas con `resultado` a `null` en vez de 540 con decision.
+    """
+    ruta = tmp_path / "traza.jsonl"
+    eventos = [
+        {"seq": 0, "tipo": "lote", "file_id": "*", "datos": {"facturas": 1}},
+        {
+            "seq": 1,
+            "tipo": "lectura",
+            "file_id": "a.pdf",
+            "datos": {"escalon": "capa_texto", "calidad": 1.0, "segundos": 0.25},
+        },
+        {
+            "seq": 2,
+            "tipo": "decision",
+            "file_id": "a.pdf",
+            "datos": {
+                "result": "PAGAR",
+                "campos": {"proveedor": "Suministros Levante S.L.", "total": "3012.89"},
+                "escalon_lectura": "capa_texto",
+                "calidad_lectura": 1.0,
+                "lote": 1,
+            },
+        },
+        {"seq": 3, "tipo": "fin", "file_id": "*", "datos": {"resultados": {"PAGAR": 1}}},
+    ]
+    ruta.write_text(
+        "".join(json.dumps(evento, ensure_ascii=False) + "\n" for evento in eventos),
+        encoding="utf-8",
+    )
+    traza = TrazaStore(ruta)
+    assert traza.total() == 1
+    # Los eventos que no deciden nada no son lineas invalidas: son la pasada.
+    assert traza.lineas_invalidas() == 0
+    fila = traza.obtener("a.pdf")
+    assert fila is not None
+    assert fila["result"] == "PAGAR"
+    assert fila["campos"]["proveedor"] == "Suministros Levante S.L."
+    assert fila["escalon_lectura"] == "capa_texto"
+    assert fila["lote"] == 1
+    assert traza.estadisticas()["por_resultado"]["PAGAR"] == 1
+
+
+def test_traza_plana_sigue_leyendose_igual(tmp_path):
+    """Sin `--traza-hash` la traza no lleva `tipo`, y tiene que seguir valiendo."""
+    ruta = tmp_path / "traza.jsonl"
+    ruta.write_text(
+        json.dumps({"file_id": "a.pdf", "result": "NO_PAGAR", "campos": {}}) + "\n",
+        encoding="utf-8",
+    )
+    traza = TrazaStore(ruta)
+    assert traza.total() == 1
+    assert traza.obtener("a.pdf")["result"] == "NO_PAGAR"
+
+
 def test_lineas_invalidas_se_ignoran(tmp_path):
     ruta = tmp_path / "traza.jsonl"
     ruta.write_text(

@@ -24,7 +24,10 @@ creible:
 4. **Vision en la nube** (``POST {OCR_URL}/ocr?engine=cloud``), **apagada por
    defecto**: solo se intenta si el peldano local es poco concluyente, solo se
    adopta si mejora la calidad y esta limitada por un presupuesto por ejecucion
-   (``MAISA_OCR_NUBE_MAX``).
+   (``MAISA_OCR_NUBE_MAX``). Un **cortacircuitos del motor** (ver
+   ``_CortacircuitosNube``) corta el peldano a los ``MAISA_OCR_NUBE_MAX_FALLOS``
+   fallos seguidos durante ``MAISA_OCR_NUBE_COOLDOWN`` segundos: es lo que evita
+   que un proveedor caido cobre el timeout entero una vez por factura.
 
 **El lote nunca aborta.** Si no hay ningun motor de vision disponible, la
 factura sale degradada (``escalon="degradado"``, ``degradado=True``) con el
@@ -84,6 +87,13 @@ TIMEOUT_POR_DEFECTO = 300.0
 CONEXION_TIMEOUT_POR_DEFECTO = 10.0
 #: Llamadas maximas a la nube por ejecucion (``MAISA_OCR_NUBE_MAX``).
 NUBE_MAX_POR_DEFECTO = 50
+#: Fallos seguidos del peldano de nube antes de dejar de llamarlo
+#: (``MAISA_OCR_NUBE_MAX_FALLOS``). ``0`` desactiva el cortacircuitos del motor
+#: y deja el comportamiento anterior: cada factura paga su intento entero.
+NUBE_MAX_FALLOS_POR_DEFECTO = 3
+#: Segundos que el cortacircuitos del motor permanece abierto
+#: (``MAISA_OCR_NUBE_COOLDOWN``). Pasados, se cuela un unico intento de prueba.
+NUBE_COOLDOWN_POR_DEFECTO = 60.0
 
 #: Backoff exponencial entre reintentos: 0.5, 1, 2, ... con tope de 8 s.
 _BACKOFF_BASE = 0.5
@@ -256,6 +266,108 @@ def _corto(error: object, limite: int = 200) -> str:
 def _nube_activa() -> bool:
     """Peldano de nube: apagado salvo ``MAISA_OCR_NUBE=1``."""
     return _bandera_env("MAISA_OCR_NUBE", False)
+
+
+# ----------------------------------------------------- cortacircuitos de nube
+class _CortacircuitosNube:
+    """Deja de llamar a la nube cuando falla varias veces seguidas.
+
+    El servicio de vision ya trae su propio cortacircuitos contra la API de
+    PaddleOCR (``ocr_service/app/cloud.py``), pero vive **dentro** del
+    contenedor: cuando salta, el motor sigue mandando cada factura a un peldano
+    que ya sabe que va a fallar y paga por cada una los reintentos con backoff
+    (0,5 s + 1 s por defecto) mas el viaje de ida y vuelta. Este cortacircuitos
+    es el del motor: a la tercera factura seguida que se queda sin nube, deja
+    de intentarlo durante ``NUBE_COOLDOWN`` segundos y lo **declara** en el
+    ``error`` del documento, que es lo que acaba en la traza.
+
+    Es deliberadamente conservador:
+
+    * cuenta fallos **seguidos**: un exito lo cierra;
+    * solo afecta al peldano de nube; el local, la cache y la capa de texto no
+      se tocan (de ahi que no pueda degradar una factura que no lo estuviera ya);
+    * nunca lanza: con el circuito abierto la factura sale por donde iba a salir
+      de todas formas, solo que antes y sin gastar red ni esperas;
+    * es **por proceso**. El lote en procesos (``_lee_lote_procesos``) lleva una
+      cuenta por trabajador, asi que con 3 trabajadores hacen falta 3x3 fallos
+      para que todos callen. Se declara en el limite, no se esconde.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._fallos = 0
+        self._abierto_en = 0.0
+        self._ultimo_error = ""
+        self._bloqueos = 0
+
+    def disponible(self) -> tuple[bool, str]:
+        """``(True, "")`` si se puede llamar a la nube; si no, el motivo."""
+        tope = _entero_env("MAISA_OCR_NUBE_MAX_FALLOS", NUBE_MAX_FALLOS_POR_DEFECTO)
+        cooldown = _flotante_env("MAISA_OCR_NUBE_COOLDOWN", NUBE_COOLDOWN_POR_DEFECTO)
+        if tope <= 0:
+            return True, ""
+        with self._lock:
+            if self._fallos < tope:
+                return True, ""
+            transcurrido = time.monotonic() - self._abierto_en
+            if transcurrido < cooldown:
+                self._bloqueos += 1
+                return False, (
+                    f"cortacircuitos de nube abierto tras {self._fallos} fallos "
+                    f"({cooldown - transcurrido:.0f}s restantes)"
+                )
+        # Semiabierto: se cuela un unico intento de prueba. Si vuelve a fallar,
+        # `fallo()` vuelve a sellar la marca y el contador de bloqueos crece.
+        return True, ""
+
+    def exito(self) -> None:
+        with self._lock:
+            self._fallos = 0
+            self._ultimo_error = ""
+
+    def fallo(self, error: object) -> None:
+        with self._lock:
+            # Se satura el contador: solo importa si esta por debajo o por encima
+            # del umbral, y asi `estado()` no publica numeros absurdos.
+            if self._fallos < _entero_env(
+                "MAISA_OCR_NUBE_MAX_FALLOS", NUBE_MAX_FALLOS_POR_DEFECTO
+            ):
+                self._fallos += 1
+            self._abierto_en = time.monotonic()
+            self._ultimo_error = _corto(error)
+
+    def estado(self) -> dict:
+        """Lo que se publica en la traza: estado, fallos y por que se cayo."""
+        tope = _entero_env("MAISA_OCR_NUBE_MAX_FALLOS", NUBE_MAX_FALLOS_POR_DEFECTO)
+        cooldown = _flotante_env("MAISA_OCR_NUBE_COOLDOWN", NUBE_COOLDOWN_POR_DEFECTO)
+        with self._lock:
+            abierto = tope > 0 and self._fallos >= tope
+            restante = 0.0
+            if abierto:
+                restante = max(0.0, cooldown - (time.monotonic() - self._abierto_en))
+            return {
+                "estado": "abierto" if abierto and restante > 0 else (
+                    "semiabierto" if abierto else "cerrado"
+                ),
+                "fallos_seguidos": self._fallos,
+                "llamadas_evitadas": self._bloqueos,
+                "cooldown_restante_s": round(restante, 1),
+                "ultimo_error": self._ultimo_error or None,
+            }
+
+
+_CORTACIRCUITOS_NUBE = _CortacircuitosNube()
+
+
+def reinicia_cortacircuitos_nube() -> None:
+    """Cierra el cortacircuitos del motor. Para tests y para medir en frio."""
+    global _CORTACIRCUITOS_NUBE
+    _CORTACIRCUITOS_NUBE = _CortacircuitosNube()
+
+
+def estado_cortacircuitos_nube() -> dict:
+    """Estado del cortacircuitos del motor (lo publica el evento ``fin``)."""
+    return _CORTACIRCUITOS_NUBE.estado()
 
 
 # -------------------------------------------------------------------- lectura
@@ -983,14 +1095,24 @@ def lee(
     # se pierde lo local: la nube tiene que MEJORAR la calidad para sustituirlo.
     poco_concluyente = calidad_ocr < umbral_calidad or lectura.texto_ilegible
     if nube and poco_concluyente:
-        if not _toma_presupuesto_nube():
+        # El cortacircuitos se consulta ANTES del presupuesto: si la nube ya
+        # sabemos que no responde, no tiene sentido gastar una llamada del cupo.
+        hay_nube, motivo = _CORTACIRCUITOS_NUBE.disponible()
+        if not hay_nube:
+            error = f"la nube no respondio: {motivo}"
+        elif not _toma_presupuesto_nube():
             error = "presupuesto de nube agotado (MAISA_OCR_NUBE_MAX)"
         else:
             try:
                 intento_nube = _intenta(ruta, "cloud")
             except OcrNoDisponible as exc:
+                _CORTACIRCUITOS_NUBE.fallo(exc)
                 error = _corto(f"la nube no respondio: {exc}")
             else:
+                # Que responda no es que sirva: el cortacircuitos mide
+                # disponibilidad, no utilidad. Un texto peor que el local cierra
+                # el circuito igual, porque la nube esta viva.
+                _CORTACIRCUITOS_NUBE.exito()
                 calidad_nube = calidad_texto(intento_nube.texto, paginas)
                 if calidad_nube > calidad_ocr:
                     elegido = intento_nube

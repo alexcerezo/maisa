@@ -137,10 +137,13 @@ def cache(carpeta: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("MAISA_OCR_NUBE", raising=False)
     monkeypatch.delenv("MAISA_OCR_REINTENTOS", raising=False)
     monkeypatch.delenv("MAISA_OCR_NUBE_MAX", raising=False)
+    monkeypatch.delenv("MAISA_OCR_NUBE_MAX_FALLOS", raising=False)
+    monkeypatch.delenv("MAISA_OCR_NUBE_COOLDOWN", raising=False)
     monkeypatch.delenv(lectura.CLAVE_CACHE_ENV, raising=False)
     lectura.reinicia_clave_cache()
     lectura.CACHE_CONTADORES.clear()
     lectura.reinicia_presupuesto_nube()
+    lectura.reinicia_cortacircuitos_nube()
     return destino
 
 
@@ -640,6 +643,133 @@ def test_una_nube_caida_no_pierde_lo_local(carpeta: Path, cache: Path,
     assert doc.nube is False
     assert doc.lectura.texto == "TOTAL 10,00 EUR"
     assert "nube" in doc.error
+
+
+# ------------------------------------------------- cortacircuitos del motor
+def test_el_cortacircuitos_corta_la_nube_tras_los_fallos_seguidos(
+    carpeta: Path, cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A la tercera factura sin nube el motor deja de pagar el intento.
+
+    Es el punto entero del cortacircuitos: sin el, cada factura del lote paga
+    los reintentos con backoff de un peldano que ya se sabe caido.
+    """
+    monkeypatch.setenv("MAISA_OCR_NUBE", "1")
+    monkeypatch.setenv("MAISA_OCR_NUBE_MAX", "50")
+    monkeypatch.setenv("MAISA_OCR_REINTENTOS", "0")
+    llamadas: list[str] = []
+
+    def peticion(ruta: Path, motor: str, timeout: float, conexion: float) -> dict:
+        llamadas.append(motor)
+        if motor == "cloud":
+            raise lectura.OcrNoDisponible("la nube no responde")
+        return respuesta_vision("nada legible")
+
+    monkeypatch.setattr(lectura, "_peticion_ocr", peticion)
+    rutas = [pdf_escaneado(carpeta, f"factura_{i}.pdf", marca=f"FAX {i}") for i in range(5)]
+
+    docs = [lectura.lee(ruta) for ruta in rutas]
+
+    # Un solo intento por factura (reintentos a 0): 3 fallos y el motor calla.
+    assert llamadas.count("cloud") == 3, llamadas
+    assert "cortacircuitos de nube abierto" in docs[3].error
+    assert "cortacircuitos de nube abierto" in docs[4].error
+    # El circuito abierto no cambia el resultado: la factura sale por el local.
+    assert [d.escalon for d in docs] == ["vision_ocr"] * 5
+    assert all(d.nube is False for d in docs)
+    estado = lectura.estado_cortacircuitos_nube()
+    assert estado["estado"] == "abierto"
+    assert estado["fallos_seguidos"] == 3
+    assert estado["llamadas_evitadas"] == 2
+    assert "la nube no responde" in estado["ultimo_error"]
+
+
+def test_un_exito_vuelve_a_cerrar_el_cortacircuitos(
+    carpeta: Path, cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El contador es de fallos **seguidos**: una respuesta buena lo pone a cero."""
+    monkeypatch.setenv("MAISA_OCR_NUBE", "1")
+    monkeypatch.setenv("MAISA_OCR_NUBE_MAX_FALLOS", "1")
+    monkeypatch.setenv("MAISA_OCR_REINTENTOS", "0")
+    caido = {"si": True}
+
+    def peticion(ruta: Path, motor: str, timeout: float, conexion: float) -> dict:
+        if motor == "cloud":
+            if caido["si"]:
+                raise lectura.OcrNoDisponible("la nube no responde")
+            return respuesta_vision("\n".join(LINEAS_FACTURA))
+        return respuesta_vision("nada legible")
+
+    monkeypatch.setattr(lectura, "_peticion_ocr", peticion)
+
+    primera = lectura.lee(pdf_escaneado(carpeta, "uno.pdf", marca="FAX 1"))
+    assert primera.nube is False
+    assert "nube no respondio" in primera.error
+    assert lectura.estado_cortacircuitos_nube()["estado"] == "abierto"
+
+    caido["si"] = False
+    # Con cooldown 0 el circuito esta siempre semiabierto: se cuela la prueba.
+    monkeypatch.setenv("MAISA_OCR_NUBE_COOLDOWN", "0")
+    segunda = lectura.lee(pdf_escaneado(carpeta, "dos.pdf", marca="FAX 2"))
+    assert segunda.escalon == "vision_nube"
+    assert segunda.nube is True
+    assert lectura.estado_cortacircuitos_nube() == {
+        "estado": "cerrado",
+        "fallos_seguidos": 0,
+        "llamadas_evitadas": 0,
+        "cooldown_restante_s": 0.0,
+        "ultimo_error": None,
+    }
+
+
+def test_el_cortacircuitos_se_puede_apagar(
+    carpeta: Path, cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``MAISA_OCR_NUBE_MAX_FALLOS=0`` devuelve el comportamiento de antes."""
+    monkeypatch.setenv("MAISA_OCR_NUBE", "1")
+    monkeypatch.setenv("MAISA_OCR_NUBE_MAX_FALLOS", "0")
+    monkeypatch.setenv("MAISA_OCR_NUBE_MAX", "50")
+    monkeypatch.setenv("MAISA_OCR_REINTENTOS", "0")
+    llamadas: list[str] = []
+
+    def peticion(ruta: Path, motor: str, timeout: float, conexion: float) -> dict:
+        llamadas.append(motor)
+        if motor == "cloud":
+            raise lectura.OcrNoDisponible("la nube no responde")
+        return respuesta_vision("nada legible")
+
+    monkeypatch.setattr(lectura, "_peticion_ocr", peticion)
+
+    for i in range(4):
+        lectura.lee(pdf_escaneado(carpeta, f"factura_{i}.pdf", marca=f"FAX {i}"))
+
+    assert llamadas.count("cloud") == 4, llamadas
+    assert lectura.estado_cortacircuitos_nube()["llamadas_evitadas"] == 0
+
+
+def test_el_cortacircuitos_no_gasta_presupuesto_estando_abierto(
+    carpeta: Path, cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Con el circuito abierto la llamada ni se reserva: el cupo queda intacto."""
+    monkeypatch.setenv("MAISA_OCR_NUBE", "1")
+    monkeypatch.setenv("MAISA_OCR_NUBE_MAX", "1")
+    monkeypatch.setenv("MAISA_OCR_NUBE_MAX_FALLOS", "1")
+    monkeypatch.setenv("MAISA_OCR_REINTENTOS", "0")
+
+    def peticion(ruta: Path, motor: str, timeout: float, conexion: float) -> dict:
+        if motor == "cloud":
+            raise lectura.OcrNoDisponible("la nube no responde")
+        return respuesta_vision("nada legible")
+
+    monkeypatch.setattr(lectura, "_peticion_ocr", peticion)
+
+    primera = lectura.lee(pdf_escaneado(carpeta, "uno.pdf", marca="FAX 1"))
+    assert "nube no respondio" in primera.error
+
+    # El presupuesto (1) se gasto en la primera, pero el circuito ya esta
+    # abierto: la segunda no dice "presupuesto agotado" sino el motivo real.
+    segunda = lectura.lee(pdf_escaneado(carpeta, "dos.pdf", marca="FAX 2"))
+    assert "cortacircuitos" in segunda.error, segunda.error
 
 
 # ------------------------------------------------------------ capa de texto

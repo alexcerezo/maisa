@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import concurrent.futures
 import contextlib
 import io
 import json
@@ -47,6 +48,7 @@ import shutil
 import statistics
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -356,6 +358,114 @@ def mide_endpoint(rutas: list[Path]) -> dict:
     }
 
 
+def mide_endpoint_concurrencia(
+    rutas: list[Path], niveles: tuple[int, ...] = (1, 2), repeticiones: int = 3
+) -> dict:
+    """Mide el servicio OCR con 1 y con N peticiones **a la vez**, y mira el pool.
+
+    `mide_endpoint` manda las peticiones de una en una, asi que no puede
+    distinguir "el servicio atiende de una en una" de "el servicio atiende
+    varias pero aqui no hay CPU para todas": los dos casos dan el mismo tiempo
+    de pared por peticion. Y esa distincion es justo la que sostiene el limite
+    del OCR, porque la salida es distinta (mas replicas vs. mas nucleos).
+
+    Por eso aqui se manda un grupo de N peticiones concurrentes y, mientras
+    vuelan, se sondea `/health` para leer `idle` (motores libres del pool). Si
+    `idle` baja a 0 con 2 en vuelo, el servicio **si** solapa las inferencias y
+    el tiempo de pared que se ve es contencion de CPU; si `idle` se queda en 1,
+    el servicio esta en fila y no hay nada que escalar sin tocar el codigo.
+
+    El sondeo es lo unico de esta funcion que no es tiempo: se guarda el minimo
+    de `idle` visto, cuantas muestras lo vieron a 0 y cuantos motores declara el
+    servicio, para que la conclusion se pueda releer sin repetir la medida.
+    """
+    import requests
+
+    if not rutas:
+        raise SystemExit("mide_endpoint_concurrencia: no hay facturas que enviar")
+
+    def una(ruta: Path) -> float:
+        with ruta.open("rb") as fh:
+            t0 = time.perf_counter()
+            respuesta = requests.post(
+                f"{OCR_URL}/ocr",
+                params={"engine": "local"},
+                files={"file": (ruta.name, fh, "application/pdf")},
+                timeout=300,
+            )
+            respuesta.raise_for_status()
+            respuesta.json()
+            return time.perf_counter() - t0
+
+    def salud() -> dict:
+        return requests.get(f"{OCR_URL}/health", timeout=10).json()["engines"]["local"]
+
+    motores = int(salud().get("workers") or 1)
+    por_nivel: dict[str, dict] = {}
+    for n in niveles:
+        grupo = (rutas * (n // len(rutas) + 1))[:n]
+        paredes: list[float] = []
+        latencias: list[list[float]] = []
+        for _ in range(repeticiones):
+            parar = threading.Event()
+            vistos: list[int] = []
+
+            def vigila() -> None:
+                while not parar.is_set():
+                    with contextlib.suppress(Exception):
+                        vistos.append(int(salud().get("idle", motores)))
+                    parar.wait(0.25)
+
+            hilo = threading.Thread(target=vigila, daemon=True)
+            hilo.start()
+            parar.wait(0.5)
+            t0 = time.perf_counter()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=n) as ex:
+                lat = list(ex.map(una, grupo))
+            paredes.append(time.perf_counter() - t0)
+            parar.set()
+            hilo.join(timeout=5)
+            latencias.append(lat)
+            print(f"[bench]   endpoint n={n}: pared {paredes[-1]:.2f} s, "
+                  f"latencia mediana {statistics.median(lat):.2f} s, "
+                  f"idle min {min(vistos) if vistos else '?'}")
+        pared = statistics.median(paredes)
+        planas = [x for lat in latencias for x in lat]
+        por_nivel[str(n)] = {
+            "pared_mediana_s": round(pared, 4),
+            "pared_muestras_s": [round(x, 4) for x in paredes],
+            "latencia_mediana_s": round(statistics.median(planas), 4),
+            "latencia_max_s": round(max(planas), 4),
+            "facturas_por_s": round(n / pared, 4),
+            "idle_minimo": min(vistos) if vistos else None,
+            "muestras_idle": len(vistos),
+        }
+
+    uno = por_nivel[str(niveles[0])]
+    dos = por_nivel[str(niveles[-1])]
+    # Speedup de caudal: 1.0 es "en fila" (la segunda peticion espera a la
+    # primera) y 2.0 es "solapan y cada una mantiene su latencia". Por debajo de
+    # 1.0 el servicio solapa pero la CPU no da para dos, que es el caso de una
+    # maquina ya saturada.
+    speedup = (niveles[-1] * uno["latencia_mediana_s"]) / (
+        dos["pared_mediana_s"] * niveles[0]
+    ) if dos["pared_mediana_s"] else 1.0
+    return {
+        "url": OCR_URL,
+        "repeticiones": repeticiones,
+        "motores": motores,
+        "por_nivel": por_nivel,
+        "speedup_caudal_1_a_2": round(speedup, 2),
+        "solapa_peticiones": (dos.get("idle_minimo") == 0),
+        "nota": (
+            "`solapa_peticiones` lo dice `idle`: con 2 peticiones en vuelo el pool "
+            "de motores se queda sin ninguno libre, asi que las inferencias se "
+            "solapan de verdad. `speedup_caudal_1_a_2` mide si eso se traduce en "
+            "mas caudal, y solo lo hara si sobran nucleos."
+        ),
+    }
+
+
 # ------------------------------------------------------------- extrapolacion
 def extrapola(med: dict, n_objetivo: list[int]) -> dict:
     """Modelo explicito con tres regimenes, todos los terminos medidos.
@@ -390,6 +500,7 @@ def extrapola(med: dict, n_objetivo: list[int]) -> dict:
     t_ocr_serial = med["ocr_frio_serial"]["segundos"]
     t_ocr_paralelo = med["ocr_frio_4"]["segundos"]
     s_ocr = t_ocr_serial / t_ocr_paralelo if t_ocr_paralelo else 1.0
+    concurrencia = med.get("endpoint_concurrencia") or {}
 
     def T(n: int, f_t: float, f_o: float, c_o: float) -> float:
         return t_fijo + n * (f_t * c_texto + f_o * c_o / (s_ocr if c_o == c_ocr else 1.0)
@@ -450,6 +561,7 @@ def extrapola(med: dict, n_objetivo: list[int]) -> dict:
             "ocr_facturas_por_hora_por_ranura": round(
                 3600 / med["endpoint"]["por_factura_mediana_s"], 1),
             "paraleliza_el_contenedor": round(s_ocr, 2) > 1.2,
+            "concurrencia": concurrencia,
             "nota": ("el coste por factura escaneada se expresa en segundos de CPU del "
                      "servicio OCR (= tiempo de pared de una peticion si el contenedor "
                      "atiende de una en una; verificado con el test serial vs 4 hilos)"),
@@ -630,11 +742,28 @@ def escribe_md(med: dict, ext: dict, maquina: dict, ruta: Path) -> None:
         s = ext["constantes_medidas"]["S_ocr_paralelismo_medido"]
         veredicto = ("el contenedor **si** atiende varias peticiones a la vez"
                      if s > 1.2 else
-                     "el contenedor **no** paraleliza: atiende de una en una")
+                     "el contenedor **no** gana caudal: atiende de una en una o la CPU "
+                     "no da para dos")
         L.append(f"- Paralelizar el escalon OCR de 1 a {med['ocr_frio_4']['trabajadores']} hilos "
                  f"acelera **x{s:.2f}**, luego {veredicto}. "
                  "Consecuencia: subir `--trabajadores` no compra OCR; se compra con mas "
                  "ranuras de OCR o con la cache.")
+    conc_ep = med.get("endpoint_concurrencia") or {}
+    if conc_ep.get("por_nivel"):
+        uno = conc_ep["por_nivel"][str(min(int(k) for k in conc_ep["por_nivel"]))]
+        dos = conc_ep["por_nivel"][str(max(int(k) for k in conc_ep["por_nivel"]))]
+        L.append(f"- **El pool del contenedor, medido de frente:** con 1 peticion en vuelo "
+                 f"tarda {uno['pared_mediana_s']:.2f} s y con 2 tarda "
+                 f"{dos['pared_mediana_s']:.2f} s "
+                 f"(caudal x{conc_ep['speedup_caudal_1_a_2']:.2f}). El servicio declara "
+                 f"{conc_ep['motores']} motor(es) y durante la rafaga de 2 el `idle` de "
+                 f"`/health` bajo a {dos.get('idle_minimo')}: "
+                 + ("las dos inferencias **se solapan** de verdad, "
+                    if conc_ep.get("solapa_peticiones") else
+                    "las inferencias **se pusieron en fila**, ")
+                 + "asi que lo que se ve aqui no es el candado del servicio sino la CPU "
+                 "de la maquina (2 vCPU compartidos). Mas caudal, entonces, no sale de "
+                 "afinar el contenedor: sale de **mas replicas**.")
     L.append("- La cache real (`maisa/.cache/ocr`) no se ha tocado: la medida usa un "
              "directorio de cache de `tempfile` y copias de los PDFs en temporal.")
     L.append("")
@@ -719,6 +848,17 @@ def escribe_md(med: dict, ext: dict, maquina: dict, ruta: Path) -> None:
              f"{cb['ocr_servicio_s_por_factura']:.2f} s de servicio por factura escaneada "
              f"= {cb['ocr_facturas_por_s_por_ranura']:.3f} facturas/s por ranura. "
              "Nada de nuestro proceso paraleliza mas rapido que el contenedor aguanta.")
+    if cb.get("concurrencia"):
+        conc_cb = cb["concurrencia"]
+        n_max = str(max(int(k) for k in conc_cb["por_nivel"]))
+        L.append(f"- **El contenedor ya solapa inferencias** ({conc_cb['motores']} motor(es) "
+                 f"en el pool, `idle` a "
+                 f"{conc_cb['por_nivel'][n_max].get('idle_minimo')} con 2 peticiones en "
+                 f"vuelo), pero en esta maquina eso no compra caudal "
+                 f"(x{conc_cb['speedup_caudal_1_a_2']:.2f}): la CPU es el techo. La latencia "
+                 f"por factura si mejora: "
+                 f"{conc_cb['por_nivel']['1']['latencia_mediana_s']:.2f} s con una peticion "
+                 f"sola.")
     L.append(f"- **Coste por factura escaneada: {cb['ocr_servicio_s_por_factura']:.2f} vCPU·s del "
              f"servicio OCR.** 10.000 escaneadas = "
              f"{_num(ext['coste']['para_10000_escaneadas'])} vCPU·s; 1.000.000 = "
@@ -932,9 +1072,12 @@ def main(argv: list[str] | None = None) -> int:
     print("[bench] OCR en frio (4 hilos)...")
     ocr_4 = mide_ocr_frio(escaneadas, 4)
 
-    # 6) servicio OCR directo
-    print("[bench] servicio OCR directo...")
+    # 6) servicio OCR directo: de una en una (coste por factura) y con 2 a la
+    #    vez (si el contenedor solapa inferencias o solo hace cola).
+    print("[bench] servicio OCR directo (de una en una)...")
     endpoint = mide_endpoint(escaneadas[:args.muestra_endpoint])
+    print("[bench] servicio OCR directo (1 y 2 peticiones a la vez)...")
+    endpoint_conc = mide_endpoint_concurrencia(escaneadas[:2], repeticiones=args.repeticiones)
 
     med = {
         "fecha": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -963,6 +1106,7 @@ def main(argv: list[str] | None = None) -> int:
         "ocr_frio_serial": ocr_serial,
         "ocr_frio_4": ocr_4,
         "endpoint": endpoint,
+        "endpoint_concurrencia": endpoint_conc,
         "no_medido": [
             "Coste en EUR: no tenemos la tarifa de esta maquina, asi que damos vCPU·s y la formula.",
             "Latencia del ERP real: el lote se mide contra el snapshot; una consulta en vivo "

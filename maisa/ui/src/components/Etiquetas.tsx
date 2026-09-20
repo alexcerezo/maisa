@@ -17,12 +17,15 @@ import type { Resultado, SegundaLecturaResumen } from "@/api/types";
 import {
     CLASE_COLA,
     CLASE_RESULTADO,
+    CLASE_RESULTADO_DESCONOCIDO,
     CLASE_SEVERIDAD,
     ETIQUETA_COLA,
     ETIQUETA_RESULTADO,
+    ETIQUETA_RESULTADO_DESCONOCIDO,
     ETIQUETA_SEVERIDAD,
     ICONO_COLA,
     ICONO_RESULTADO,
+    ICONO_RESULTADO_DESCONOCIDO,
     ICONO_SEVERIDAD,
     estadoCola,
 } from "@/theme";
@@ -35,6 +38,12 @@ import { cn } from "@/lib/utils";
  * del dominio (verde paga, ambar duda, rojo no paga) y no los semanticos del
  * sistema de diseño (`destructive` es "algo se ha roto", que es justo lo que
  * `NO_PAGAR` **no** significa).
+ *
+ * Los tres `??` no sobran aunque el tipo diga que la clave existe: `resultado`
+ * viene por HTTP del motor y puede llegar a `null` cuando la traza no trae
+ * `result`. Sin ellos, `ICONO_RESULTADO[null]` es `undefined` y `<Icono />`
+ * tumba la pantalla entera (error #130). El mismo seguro que ya lleva el icono
+ * de escalon en la tabla.
  */
 export function EtiquetaResultado({
     resultado,
@@ -43,11 +52,14 @@ export function EtiquetaResultado({
     resultado: Resultado;
     className?: string;
 }) {
-    const Icono = ICONO_RESULTADO[resultado];
+    const Icono = ICONO_RESULTADO[resultado] ?? ICONO_RESULTADO_DESCONOCIDO;
     return (
-        <Badge variant="outline" className={cn(CLASE_RESULTADO[resultado], className)}>
+        <Badge
+            variant="outline"
+            className={cn(CLASE_RESULTADO[resultado] ?? CLASE_RESULTADO_DESCONOCIDO, className)}
+        >
             <Icono />
-            {ETIQUETA_RESULTADO[resultado]}
+            {ETIQUETA_RESULTADO[resultado] ?? ETIQUETA_RESULTADO_DESCONOCIDO}
         </Badge>
     );
 }
