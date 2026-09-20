@@ -51,11 +51,12 @@
  *    como decisión (en rojo, sí, porque bloquea un pago) y las dependencias caídas
  *    en ámbar, que es el tono que este panel usa para "hay algo que mirar".
  *
- * 5. **Lo que no cuadra se dice, no se esconde.** `entrega.coincide_con_traza` es
- *    `false`: la traza tiene 540 facturas y la entrega al ERP 500 líneas. Se
- *    explica de dónde sale la diferencia (el lote 2 no está en la entrega) en vez
- *    de omitir el campo, porque un panel que solo enseña lo que cuadra no vale
- *    para auditar nada.
+ * 5. **Lo que no cuadra se dice, no se esconde.** La traza tiene 540 facturas y la
+ *    entrega al ERP 500 líneas, y la diferencia se explica en vez de omitirse: la
+ *    API la mide **lote a lote** (`entrega.lotes`) porque comparar los dos
+ *    ficheros enteros daría `false` siempre, y un `false` permanente no mide un
+ *    descuadre: mide que existen dos lotes. Un panel que solo enseña lo que cuadra
+ *    no vale para auditar nada.
  *
  * Lo que esta pantalla **no** hace: no recalcula la decisión ni mide nada por su
  * cuenta. Los hechos vienen del motor y los tiempos de `/health` y del snapshot
@@ -102,6 +103,7 @@ import type { FiltrosVista } from "@/api/filtros";
 import { RESULTADOS } from "@/api/types";
 import type {
     Dependencia,
+    Entrega,
     Estadisticas,
     FacturaDetalle,
     Meta,
@@ -648,11 +650,11 @@ function Procedencia() {
  *    una promesa; uno que se comprueba contra cuatro respuestas independientes es
  *    una medida.
  *
- * 2. **Enseña la resta de la entrega.** `entrega.coincide_con_traza` es `false` y
- *    tiene que seguir siéndolo: 540 en la traza, 500 en la entrega. La sección
- *    explica de dónde salen los 40 (el lote 2 no se entrega) en vez de taparlo,
- *    porque ese hueco es justo lo que un panel de trazabilidad tiene que saber
- *    enseñar.
+ * 2. **Enseña la resta de la entrega.** La traza son 540 y la entrega 500, y la
+ *    API publica el desglose (`entrega.lotes`: lote 1 500/500 entregado, lote 2
+ *    0/40). La sección explica de dónde salen los 40 (el lote 2 no se entrega) en
+ *    vez de taparlo, porque ese hueco es justo lo que un panel de trazabilidad
+ *    tiene que saber enseñar.
  *
  * 3. **No espera al expediente.** Se pinta aunque la factura que se está siguiendo
  *    todavía esté cargando, o aunque no se pueda abrir. La vista de conjunto no
@@ -936,7 +938,7 @@ function Cadena({
                     <CardContent className="space-y-3">
                         <p className="text-sm text-muted-foreground">
                             {contadores
-                                ? `La traza tiene ${entero(total)} facturas y la entrega al ERP ${entero(entregadas)} líneas, y la API lo dice ella misma: `
+                                ? `La traza tiene ${entero(total)} facturas y la entrega al ERP ${entero(entregadas)} líneas. La API publica si una cubre a la otra, y lo comprueba lote a lote, no sumando los dos ficheros: `
                                 : "La API publica si la entrega cuadra con la traza, y aquí no se puede comprobar: "}
                             {contadores ? (
                                 <span className="font-mono text-xs text-foreground">
@@ -945,17 +947,32 @@ function Cadena({
                             ) : (
                                 SIN_DATO
                             )}
-                            . No es un fallo, es una diferencia con explicación:
+                            {contadores
+                                ? `. Comparar los ficheros enteros daría false siempre, y eso no mediría un descuadre: mediría que la traza lleva un lote más que la entrega. El desglose que sí informa:`
+                                : "."}
                         </p>
                         <ul className="space-y-2">
                             <Comprobacion
-                                bien={false}
-                                etiqueta="Faltan 40 facturas en la entrega"
+                                bien={contadores ? contadores.entrega.coincide_con_traza : null}
+                                etiqueta="La entrega cubre los lotes que le tocan"
                                 detalle={
                                     contadores
-                                        ? `por lote, la traza son ${Object.entries(contadores.por_lote)
-                                              .map(([lote, cuantas]) => `lote ${lote}: ${entero(cuantas)}`)
-                                              .join(" y ")}. El lote 2 no entra en la entrega, así que ${entero(total)} − ${entero(contadores.por_lote["2"] ?? null)} = ${entero(entregadas)}.`
+                                        ? `${resumenLotes(contadores.entrega.lotes)}. El lote 2 no entra en la entrega, así que ${entero(total)} − ${entero(contadores.por_lote["2"] ?? null)} = ${entero(entregadas)}.`
+                                        : `no comprobable: ${SIN_DATO}`
+                                }
+                            />
+                            <Comprobacion
+                                bien={
+                                    contadores
+                                        ? contadores.entrega.faltan_en_traza.length === 0
+                                        : null
+                                }
+                                etiqueta="Ninguna línea de la entrega es inventada"
+                                detalle={
+                                    contadores
+                                        ? contadores.entrega.faltan_en_traza.length === 0
+                                            ? `las ${entero(contadores.entrega.total)} líneas entregadas están todas en la traza.`
+                                            : `${entero(contadores.entrega.faltan_en_traza.length)} líneas entregadas no están en la traza: ${contadores.entrega.faltan_en_traza.slice(0, 5).join(", ")}.`
                                         : `no comprobable: ${SIN_DATO}`
                                 }
                             />
@@ -2019,9 +2036,6 @@ function Errores({
     const nube = salud?.dependencias.ocr?.motores?.cloud ?? null;
     const circuito = nube?.circuit ?? null;
 
-    const loteUno = contadores?.por_lote?.["1"] ?? null;
-    const falta = contadores && entrega ? contadores.total - entrega.total : null;
-
     return (
         <Seccion
             id="errores"
@@ -2104,8 +2118,8 @@ function Errores({
                                         entrega === null
                                             ? "sin dato: no se pudieron leer los contadores."
                                             : entrega.coincide_con_traza
-                                              ? `coinciden: ${entero(entrega.total)} líneas entregadas y las mismas en la traza.`
-                                              : `la entrega tiene ${entero(entrega.total)} líneas y la traza ${entero(contadores?.total ?? 0)} facturas${falta !== null ? `: faltan ${entero(falta)}` : ""}. No es un fallo del motor: la entrega es del lote 1${loteUno !== null ? ` (${entero(loteUno)} líneas)` : ""} y el lote 2 no está entregado. Está aquí porque son dos números distintos y fundirlos en uno sería mentir.`
+                                              ? `coinciden lote a lote: ${resumenLotes(entrega.lotes)}. El lote 2 no entra en la entrega, y por eso la traza tiene ${entero(contadores?.total ?? 0)} facturas y la entrega ${entero(entrega.total)} líneas: son dos números distintos y fundirlos en uno sería mentir.`
+                                              : `la entrega tiene ${entero(entrega.total)} líneas y la traza ${entero(contadores?.total ?? 0)} facturas, y no cuadran: ${resumenLotes(entrega.lotes)}${entrega.faltan_en_traza.length ? `, y ${entero(entrega.faltan_en_traza.length)} líneas entregadas no están en la traza` : ""}.`
                                     }
                                 />
                             </ul>
@@ -2472,6 +2486,20 @@ function Comprobacion({
             </span>
         </li>
     );
+}
+
+/**
+ * El desglose de `entrega.lotes` en una línea: "lote 1: 500/500 · lote 2: 0/40 (sin entregar)".
+ *
+ * Se enseña el par y no solo el total porque el dato útil no es cuántas líneas
+ * hay, es cuántas de las que la traza tiene han llegado a la entrega.
+ */
+function resumenLotes(lotes: Entrega["lotes"]): string {
+    const partes = Object.entries(lotes).map(
+        ([lote, dato]) =>
+            `lote ${lote}: ${entero(dato.entrega)}/${entero(dato.traza)}${dato.entregado ? "" : " (sin entregar)"}`,
+    );
+    return partes.length ? partes.join(" · ") : "la traza no trae lotes";
 }
 
 /**

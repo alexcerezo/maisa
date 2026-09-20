@@ -557,7 +557,26 @@ export interface Estadisticas {
      */
     mongo: { ok: boolean; error: string | null };
     /** La entrega comparada con la traza. `coincide_con_traza` es la garantia. */
-    entrega: { total: number; lineas_invalidas: number; coincide_con_traza: boolean };
+    entrega: Entrega;
+}
+
+/**
+ * La entrega al ERP (`outcomes.jsonl`) contrastada con la traza.
+ *
+ * `coincide_con_traza` no compara los dos ficheros enteros, porque la traza
+ * cubre mas lotes que la entrega (el lote 2 del sabado se puntua aparte) y esa
+ * resta daria `false` siempre: no mediria un descuadre, mediria que existen dos
+ * lotes. Se compara contra los lotes que la entrega si toca, y `lotes` publica
+ * el desglose para poder decir cual esta entregado y cual no.
+ */
+export interface Entrega {
+    total: number;
+    lineas_invalidas: number;
+    coincide_con_traza: boolean;
+    /** Por lote: cuantas filas tiene la traza, cuantas lleva la entrega. */
+    lotes: Record<string, { traza: number; entrega: number; entregado: boolean }>;
+    /** `file_id` entregados que no estan en la traza. Vacio es lo normal. */
+    faltan_en_traza: string[];
 }
 
 /**

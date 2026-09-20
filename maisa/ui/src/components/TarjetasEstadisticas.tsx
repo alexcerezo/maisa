@@ -349,10 +349,17 @@ function SaludDelSistema({ estadisticas }: { estadisticas: Estadisticas }) {
                 tono={estadisticas.entrega.coincide_con_traza ? "neutro" : "aviso"}
                 texto={
                     estadisticas.entrega.coincide_con_traza
-                        ? "La entrega coincide con la traza"
-                        : "La entrega NO coincide con la traza"
+                        ? "La entrega cubre los lotes que le tocan"
+                        : "La entrega NO cuadra con la traza"
                 }
-                explicacion={`Entrega de ${entero(estadisticas.entrega.total)} líneas con ${entero(estadisticas.entrega.lineas_invalidas)} inválidas. Si no coincide, hay facturas en el panel que el motor no respalda.`}
+                explicacion={`Entrega de ${entero(estadisticas.entrega.total)} líneas con ${entero(estadisticas.entrega.lineas_invalidas)} inválidas. Se comprueba lote a lote, no sumando los dos ficheros: ${Object.entries(
+                    estadisticas.entrega.lotes,
+                )
+                    .map(
+                        ([lote, dato]) =>
+                            `lote ${lote} ${entero(dato.entrega)}/${entero(dato.traza)}${dato.entregado ? "" : " sin entregar"}`,
+                    )
+                    .join(", ")}. Si no cuadra, hay facturas en el panel que el motor no respalda.`}
             />
 
             <Dato

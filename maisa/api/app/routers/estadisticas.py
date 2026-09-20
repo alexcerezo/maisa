@@ -40,6 +40,7 @@ async def estadisticas(
         mongo_error = str(exc)
 
     resultados_entrega = entrega.resultados()
+    cobertura = traza.cobertura_entrega(set(resultados_entrega))
 
     pendientes_revision: int | None = None
     if mongo_error is None:
@@ -60,6 +61,8 @@ async def estadisticas(
         "entrega": {
             "total": entrega.total(),
             "lineas_invalidas": entrega.lineas_invalidas(),
-            "coincide_con_traza": set(traza.file_ids()) == set(resultados_entrega.keys()),
+            "coincide_con_traza": cobertura["coincide"],
+            "lotes": cobertura["lotes"],
+            "faltan_en_traza": cobertura["faltan_en_traza"],
         },
     }

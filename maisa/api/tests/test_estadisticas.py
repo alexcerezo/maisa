@@ -21,7 +21,16 @@ def test_estadisticas_con_mongo_disponible(cliente_con_fakes):
     assert datos["por_metodo_lectura"] == {"texto_determinista": 3, "vision_ocr": 1}
     assert datos["asientos_vigentes"] == 2
     assert datos["mongo"] == {"ok": True, "error": None}
-    assert datos["entrega"] == {"total": 4, "lineas_invalidas": 0, "coincide_con_traza": True}
+    assert datos["entrega"] == {
+        "total": 4,
+        "lineas_invalidas": 0,
+        "coincide_con_traza": True,
+        "lotes": {
+            "1": {"traza": 2, "entrega": 2, "entregado": True},
+            "2": {"traza": 2, "entrega": 2, "entregado": True},
+        },
+        "faltan_en_traza": [],
+    }
     # Una sola factura ESCALAR ("2026-02-01_P002.pdf") y ninguna revisada todavia.
     assert datos["pendientes_revision"] == 1
 
@@ -150,3 +159,46 @@ def test_divisa_principal_normaliza_lo_que_viene_de_la_traza():
     assert divisa_principal({"divisa_documento": [" usd "], "divisa_erp": "eur"}) == "USD"
     # Una entrada vacia no es una divisa declarada.
     assert divisa_principal({"divisa_documento": ["", "  "], "divisa_erp": "EUR"}) == "EUR"
+
+
+def test_coincide_con_traza_con_dos_lotes(tmp_path):
+    """La traza lleva mas lotes que la entrega, y eso no es un descuadre.
+
+    Es el caso real: la entrega (`outcomes.jsonl`) es del lote 1 y la traza cubre
+    el lote 1 y el lote 2. Comparando los dos conjuntos enteros el resultado es
+    `false` por construccion, asi que la bandera mentia todos los dias.
+    """
+    lote1 = tmp_path / "outcomes_traza.jsonl"
+    lote2 = tmp_path / "outcomes_lote2_traza.jsonl"
+    escribir = lambda ruta, ids, lote: ruta.write_text(
+        "".join(json.dumps({"file_id": i, "lote": lote, "result": "PAGAR"}) + "\n" for i in ids),
+        encoding="utf-8",
+    )
+    escribir(lote1, ["a.pdf", "b.pdf"], 1)
+    escribir(lote2, ["c.pdf"], 2)
+    traza = TrazaStore((lote1, lote2))
+
+    # La entrega solo lleva el lote 1: coincide con su lote, y el panel puede
+    # decir que el lote 2 esta por entregar en vez de dar un `false` opaco.
+    cobertura = traza.cobertura_entrega({"a.pdf", "b.pdf"})
+    assert cobertura["coincide"] is True
+    assert cobertura["lotes"] == {
+        "1": {"traza": 2, "entrega": 2, "entregado": True},
+        "2": {"traza": 1, "entrega": 0, "entregado": False},
+    }
+    assert cobertura["faltan_en_traza"] == []
+
+    # Con los dos lotes entregados tambien coincide, y ambos quedan entregados.
+    cobertura = traza.cobertura_entrega({"a.pdf", "b.pdf", "c.pdf"})
+    assert cobertura["coincide"] is True
+    assert all(dato["entregado"] for dato in cobertura["lotes"].values())
+
+    # Y un descuadre de verdad si se ve: falta una fila del lote 1.
+    cobertura = traza.cobertura_entrega({"a.pdf"})
+    assert cobertura["coincide"] is False
+    assert cobertura["lotes"]["1"] == {"traza": 2, "entrega": 1, "entregado": False}
+
+    # Un file_id entregado que no esta en la traza se nombra, no se cuenta.
+    cobertura = traza.cobertura_entrega({"a.pdf", "b.pdf", "fantasma.pdf"})
+    assert cobertura["coincide"] is False
+    assert cobertura["faltan_en_traza"] == ["fantasma.pdf"]

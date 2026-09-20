@@ -474,6 +474,46 @@ class TrazaStore:
         self._asegurar()
         return [fila["file_id"] for fila in self._resumenes if fila.get("file_id")]
 
+    def cobertura_entrega(self, ids_entrega: set[str]) -> dict[str, Any]:
+        """Contrasta la entrega con la traza **lote a lote**.
+
+        La traza cubre mas lotes que la entrega (el lote 2 del sabado se puntua
+        aparte), asi que comparar los dos conjuntos enteros da `false` siempre:
+        no mide un descuadre, mide que existen dos lotes. Se compara contra los
+        lotes que la entrega si toca, y se publica el desglose para que el panel
+        pueda decir cual esta entregado y cual no, en vez de lamentarse.
+        """
+        self._asegurar()
+        por_lote: dict[str, set[str]] = {}
+        en_traza: set[str] = set()
+        for fila in self._resumenes:
+            file_id = fila.get("file_id")
+            if not file_id:
+                continue
+            en_traza.add(file_id)
+            por_lote.setdefault(str(fila.get("lote") or "?"), set()).add(file_id)
+        faltan = sorted(ids_entrega - en_traza)
+        if ids_entrega:
+            cubiertos = [ids for ids in por_lote.values() if ids & ids_entrega]
+            esperado = set().union(*cubiertos) if cubiertos else set()
+            coincide = not faltan and esperado == ids_entrega
+        else:
+            # Sin entrega no hay nada que contrastar: solo cuadra si tampoco hay
+            # traza, porque una entrega vacia sobre una traza llena si es un fallo.
+            coincide = not en_traza
+        return {
+            "coincide": coincide,
+            "lotes": {
+                lote: {
+                    "traza": len(ids),
+                    "entrega": len(ids & ids_entrega),
+                    "entregado": ids <= ids_entrega,
+                }
+                for lote, ids in sorted(por_lote.items())
+            },
+            "faltan_en_traza": faltan,
+        }
+
     def file_ids_por_resultado(self, resultado: str) -> list[str]:
         self._asegurar()
         return [fila["file_id"] for fila in self._resumenes if fila.get("resultado") == resultado]

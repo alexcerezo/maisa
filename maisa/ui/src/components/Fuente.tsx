@@ -119,7 +119,7 @@ export function AvisoFuente() {
                         {entero(manifiesto.facturas_en_el_listado)} facturas en el listado y{" "}
                         {entero(manifiesto.detalles_guardados)} expedientes completos.
                         {manifiesto.entrega?.coincide_con_traza
-                            ? " La entrega coincide con la traza."
+                            ? " La entrega cubre los lotes que le tocan."
                             : ""}
                     </p>
                 ) : (

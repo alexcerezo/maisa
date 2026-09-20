@@ -1,10 +1,23 @@
 {
   "asientos_vigentes": 516,
-  "congelado_en": "2026-09-20T06:15:42+00:00",
+  "congelado_en": "2026-09-20T07:53:26+00:00",
   "detalles_guardados": 540,
   "entrega": {
-    "coincide_con_traza": false,
+    "coincide_con_traza": true,
+    "faltan_en_traza": [],
     "lineas_invalidas": 0,
+    "lotes": {
+      "1": {
+        "entrega": 500,
+        "entregado": true,
+        "traza": 500
+      },
+      "2": {
+        "entrega": 0,
+        "entregado": false,
+        "traza": 40
+      }
+    },
     "total": 500
   },
   "facturas_en_el_listado": 540,

@@ -8,6 +8,8 @@
  * todo, **dice que esta congelada** en vez de fingir que es en vivo.
  */
 
+import type { Entrega } from "@/api/types";
+
 /**
  * `file_id` -> nombre de fichero seguro en ASCII.
  *
@@ -106,7 +108,7 @@ export interface Manifiesto {
     pdfs: string[];
     por_resultado: Record<string, number> | null;
     asientos_vigentes: number | null;
-    entrega: { total: number; lineas_invalidas: number; coincide_con_traza: boolean } | null;
+    entrega: Entrega | null;
     /** Cuantas descargas del ERP trae `snapshots.json`. `null` si no se pudo bajar. */
     snapshots: number | null;
     generado_por: string;
