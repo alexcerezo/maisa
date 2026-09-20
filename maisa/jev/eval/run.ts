@@ -58,6 +58,42 @@ const backendPedido =
   arg('backend') ??
   (process.env.AI_GATEWAY_API_KEY ? 'gateway' : process.env.TYPESAFE_AI_API_KEY ? 'jev' : 'fake')
 
+// El tier gratuito del Gateway solo admite 30 peticiones por ventana y contesta
+// 429 con un `retry-after` de casi un minuto. Los 2 reintentos por defecto del
+// AI SDK se agotan antes de que la ventana se vuelva a abrir, asi que una
+// evaluacion de 500 paginas se caia a mitad. Se suben, y `--rpm` ademas espacia
+// las peticiones para no llegar al 429.
+const reintentos = num('retries', backendPedido === 'gateway' ? 6 : 2)
+const rpm = num('rpm', 0)
+
+/**
+ * Freno de ritmo: no deja pasar mas de `rpm` peticiones por minuto.
+ *
+ * Ir despacio sale mas barato que reintentar. Un 429 del Gateway no se resuelve
+ * en milisegundos: se resuelve cuando se abre la ventana, y mientras tanto la
+ * peticion esta gastada.
+ */
+class Ritmo {
+  private marcas: number[] = []
+
+  constructor(private readonly porMinuto: number) {}
+
+  async esperar(): Promise<void> {
+    if (!this.porMinuto) return
+    for (;;) {
+      const ahora = Date.now()
+      while (this.marcas.length && ahora - this.marcas[0] >= 60_000) this.marcas.shift()
+      if (this.marcas.length < this.porMinuto) {
+        this.marcas.push(ahora)
+        return
+      }
+      await new Promise((r) => setTimeout(r, 60_000 - (ahora - this.marcas[0]) + 50))
+    }
+  }
+}
+
+const ritmo = new Ritmo(rpm)
+
 // --------------------------------------------------------------------------- //
 // Doble heuristico
 // --------------------------------------------------------------------------- //
@@ -102,9 +138,9 @@ function heuristica(): Backend {
 
 const backend: Backend =
   backendPedido === 'gateway'
-    ? gatewayBackend({ model: arg('modelo') })
+    ? gatewayBackend({ model: arg('modelo'), retries: reintentos })
     : backendPedido === 'jev'
-      ? jevBackend({ model: arg('modelo') })
+      ? jevBackend({ model: arg('modelo'), retries: reintentos })
       : backendPedido === 'fake'
         ? heuristica()
         : (() => {
@@ -180,6 +216,7 @@ async function clasificarFichero(file: string, criterios: ReturnType<typeof carg
       if (page === 1) filas.push({ file, page, fuente: 'vacio', resultado: null, ms: Date.now() - t0 })
       break
     }
+    await ritmo.esperar()
     const resultado = await clasificarPagina(lines, { backend, criteria: criterios, gate })
     filas.push({ file, page, fuente: source, resultado, ms: Date.now() - t0 })
   }
@@ -283,6 +320,7 @@ if (comoJson) {
   console.log(`corpus:         ${dir}`)
   console.log(`cache OCR:      ${cacheDir}${existsSync(cacheDir) ? '' : ' (no existe)'}`)
   console.log(`puerta:         ${gate}`)
+  if (rpm) console.log(`ritmo:          ${rpm} peticiones/minuto (${reintentos} reintentos)`)
   console.log('')
   console.log(`documentos:     ${ficheros.length}`)
   console.log(`paginas:        ${filas.length} (${conResultado.length} clasificadas, ${filas.length - conResultado.length} sin texto)`)
