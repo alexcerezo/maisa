@@ -37,6 +37,17 @@ por el sha256 del PDF: la caché es portable y por eso la CI puede reproducir el
 lote entero sin levantar el contenedor de visión. Si aparece un PDF escaneado
 nuevo, se cae al servicio de OCR (`http://127.0.0.1:8866`) y se rellena la caché.
 
+Para pagar esa dependencia de una vez, con el contenedor de visión levantado:
+
+```bash
+cd maisa/motor && PYTHONPATH=src ../../.venv/bin/python tools/precalienta_ocr.py
+```
+
+Hace **solo los 29 escaneados** (un documento que resuelve la capa de texto nunca
+llega a la caché, así que precalentarlo es pagar visión por algo que nadie lee) y
+salta lo que el motor ya aceptaría. Tarda ~2 min y no toca la caché versionada si
+no hace falta. `--todas` levanta la restricción para medir sobre los 500.
+
 ## Reparto actual
 
 ```
@@ -236,7 +247,8 @@ motor/
 ├── tests/               suite + banco de oro (tests/oro/)
 ├── tools/               oro.py, valida_entrega.py, conformidad.py, censo_extraccion.py,
 │                        cola_revision.py, bench_motores.py, md_a_pdf.py, bench.py,
-│                        evidencia_resiliencia.py
+│                        evidencia_resiliencia.py, precalienta_ocr.py,
+│                        audita_capa_texto.py
 ├── docs/                arquitectura, capacidad, resiliencia, lote 2, simulador
 ├── .cache/ocr/          texto de los 29 escaneados, indexado por sha256
 ├── .cache/motores/      lecturas de local y nube de esos 29, para medir sin repetir
