@@ -568,6 +568,12 @@ class Decisor:
         campos["nif_maestro"] = proveedor.nif
         campos["iban_maestro"] = proveedor.iban
         campos["nif_asiento"] = asiento.nif
+        # Las notas de R1 se suman a las del pedido. Se calculaban y se tiraban,
+        # asi que corregir un NIF o un IBAN mal leidos era invisible: ni el
+        # informe de la traza ni el censo de error de extraccion podian contar
+        # esas reparaciones. `campos` es diagnostico: no entra en la decision ni
+        # en la entrega, solo en la traza.
+        campos["notas"] += notas_nif + notas_iban
 
         # --- R6: el escaneo no da para comprobar la cuenta de abono -----------
         # Punto 1 de la Norma: el IBAN de la factura debe coincidir con el del

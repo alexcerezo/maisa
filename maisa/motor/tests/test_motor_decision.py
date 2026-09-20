@@ -195,16 +195,37 @@ def test_una_letra_mal_en_el_iban_se_corrige(sintetica, mundo):
     assert decision.campos["iban_candidatos"] == [iban]
 
 
-@pytest.mark.xfail(
-    reason="BUG: norma._resuelve_nif/_resuelve_iban devuelven notas de correccion "
-    "(lineas 443-444 de norma.py) que nunca se vuelcan en campos['notas']; la "
-    "correccion difusa es invisible en la traza",
-    strict=True,
-)
 def test_la_correccion_difusa_de_iban_deja_nota(sintetica, mundo):
     iban = mundo.iban(mundo.pedido_base)
     decision = sintetica.decide(pedido=mundo.pedido_base, iban=iban[:14] + "9" + iban[15:])
     assert any("corregido a" in n for n in decision.campos["notas"])
+
+
+def test_la_correccion_de_un_nif_tambien_deja_nota(sintetica, mundo):
+    """El censo de error de extraccion cuenta las reparaciones por `campos['notas']`.
+
+    Si R1 vuelve a calcular sus notas y tirarlas, el censo diria que no hubo
+    ninguna correccion de NIF: una metrica que miente por lo bajo.
+    """
+    nif = mundo.nif(mundo.pedido_base)
+    decision = sintetica.decide(pedido=mundo.pedido_base, nif=nif[:-1] + "I")
+    assert decision.resultado == PAGAR
+    assert any("NIF" in n and "corregido a" in n for n in decision.campos["notas"])
+
+
+def test_las_notas_de_r1_no_pisan_las_del_pedido(sintetica, mundo):
+    """`campos['notas']` acumula: la nota del NIF no puede borrar la del pedido."""
+    nif = mundo.nif(mundo.pedido_base)
+    decision = sintetica.decide(
+        metodo="vision_local",
+        pedido="PO-2028-0096",  # anio que no existe; el cuerpo (0096) lo identifica
+        total=mundo.importe(mundo.pedido_base),
+        nif=nif[:-1] + "I",
+        iban=mundo.iban(mundo.pedido_base),
+    )
+    notas = decision.campos["notas"]
+    assert any(n.startswith("pedido") and "reparado" in n for n in notas)
+    assert any("NIF" in n and "corregido a" in n for n in notas)
 
 
 # ------------------------------------------------------- 7. NIF ajeno
