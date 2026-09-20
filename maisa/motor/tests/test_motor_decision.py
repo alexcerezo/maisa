@@ -465,3 +465,131 @@ def test_la_politica_de_la_regla_6_esta_declarada(politica):
     for clave in ("si_pedido_repetido", "si_instruccion", "si_pendiente_revision",
                   "si_documento_no_legible"):
         assert politica.politica_de("R6_anomalia", clave, PAGAR) == ESCALAR
+
+
+# ------------------------------------------------------- 8. divisa (regla 7)
+def _marca_divisa(cuerpo: str, marca: str) -> str:
+    """Pega `marca` a los tres importes que se cotejan con el ERP."""
+    return re.sub(r"^(Base|IVA \(21%\)|TOTAL): (.+)$", rf"\1: \2 {marca}", cuerpo,
+                  flags=re.M)
+
+
+def test_la_politica_de_la_regla_7_esta_declarada(politica):
+    """La regla 7 es politica, no codigo. Fallback PAGAR a proposito: si la
+    sub-clave faltara, la prueba falla en vez de colar la politica por defecto.
+    """
+    assert politica.divisa_aceptada == "EUR"
+    for clave in ("si_falla", "si_divisa_distinta"):
+        assert politica.politica_de("R7_divisa", clave, PAGAR) == ESCALAR
+
+
+def test_la_factura_en_dolares_escala_aunque_los_digitos_cuadren(sintetica, mundo):
+    """El fallo mas peligroso: un importe de 3.012,89 en dolares "cuadra".
+
+    `normaliza._limpia_importe` borra la marca de divisa, asi que el motor
+    compara un `Decimal` contra otro y no ve la diferencia: pagar 3.012,89 EUR
+    por una factura de 3.012,89 USD es pagar de menos. La unica defensa es leer
+    la marca del texto CRUDO (antes de normalizar) y escalar.
+    """
+    cuerpo = _marca_divisa(sintetica.texto(pedido=mundo.pedido_base), "USD")
+    assert "TOTAL: 3.012,89 USD" in cuerpo
+    decision = mundo.decisor.decide(lee_texto(cuerpo))
+
+    assert decision.resultado == ESCALAR
+    # El motivo nombra las dos unidades: `campos['importe_erp']` es un decimal
+    # pelado, asi que sin decirlo aqui el revisor leeria "3012.89" y "3012.89".
+    assert algun_motivo(decision, "divisa distinta")
+    assert algun_motivo(decision, "3012.89 USD")
+    assert algun_motivo(decision, "3012.89 EUR")
+    assert decision.campos["divisa_documento"] == ["USD"]
+    assert decision.campos["divisa_erp"] == "EUR"
+    assert [h.nombre for h in decision.hechos if h.regla == "R7_divisa"] == \
+        ["si_divisa_distinta"]
+    # Escalar no es un hecho duro: no autoriza a NO_PAGAR.
+    assert not duros(decision)
+
+
+def test_una_mencion_a_otra_divisa_en_la_nota_no_escala(sintetica, mundo):
+    """La divisa se lee **pegada al importe**, no en el documento entero.
+
+    Una factura en euros que solo menciona dolares en las condiciones de pago
+    es una factura en euros. Escalarla seria un falso positivo sobre un
+    documento correcto, que es como se pierde la confianza en la regla.
+    """
+    decision = sintetica.decide(
+        pedido=mundo.pedido_base,
+        nota="Equipo valorado en 500 USD segun el proveedor del componente.",
+    )
+    assert decision.campos["divisa_documento"] == []
+    assert decision.resultado == PAGAR
+    assert not algun_motivo(decision, "divisa")
+
+
+def test_la_divisa_impresa_se_publica_aunque_coincida(sintetica, mundo):
+    """Ausencia de marca y marca en euros son cosas distintas, y se distinguen.
+
+    Guardarlo permite decir "no lo declara" en vez de suponer euros: es lo que
+    hara que el dia que el proveedor empiece a emitir en libras se note.
+    """
+    limpia = sintetica.decide(pedido=mundo.pedido_base)
+    assert limpia.campos["divisa_documento"] == []
+
+    con_marca = mundo.decisor.decide(lee_texto(_marca_divisa(
+        sintetica.texto(pedido=mundo.pedido_base), "EUR")))
+    assert con_marca.campos["divisa_documento"] == ["EUR"]
+    assert con_marca.resultado == PAGAR
+
+
+@pytest.mark.parametrize("marca", ["EUR", "€"])
+def test_la_marca_en_euros_paga_escrita_como_codigo_o_como_simbolo(
+        sintetica, mundo, marca):
+    """`EUR` y `€` son la misma declaracion, y ninguna es una anomalia.
+
+    El simbolo no puede ser un hueco: la mitad de las facturas reales escriben
+    `€` y no `EUR`, y si el simbolo no se leyera, esas facturas se pagarian a
+    ciegas. Que las dos formas acaben en `["EUR"]` es lo que garantiza que la
+    tabla de tres estados no tenga un cuarto estado silencioso.
+    """
+    con_marca = mundo.decisor.decide(lee_texto(_marca_divisa(
+        sintetica.texto(pedido=mundo.pedido_base), marca)))
+    assert con_marca.campos["divisa_documento"] == ["EUR"]
+    assert con_marca.resultado == PAGAR
+    assert not algun_motivo(con_marca, "divisa")
+
+
+def test_el_simbolo_del_dolar_escala_igual_que_el_codigo(sintetica, mundo):
+    """El simbolo tambien declara: `$` es USD, y USD no es la divisa del ERP."""
+    con_marca = mundo.decisor.decide(lee_texto(_marca_divisa(
+        sintetica.texto(pedido=mundo.pedido_base), "$")))
+    assert con_marca.campos["divisa_documento"] == ["USD"]
+    assert con_marca.resultado == ESCALAR
+    assert algun_motivo(con_marca, "divisa distinta")
+
+
+def test_un_escaneo_en_divisa_ajena_no_se_recompone_con_el_importe_del_erp(
+        sintetica, mundo):
+    """La puerta de atras del OCR: `_repara_importes_ocr` devuelve `esperado`.
+
+    Cuando el OCR desalinea el separador decimal, la reparacion acepta el
+    importe del ERP como bueno. Con el documento en otra divisa eso sustituye
+    la cifra que el proveedor imprimio por una que no es la suya, y la factura
+    sale PAGAR con el "arreglo" tapando el problema.
+    """
+    cuerpo = _marca_divisa(sintetica.texto(pedido=mundo.pedido_base), "USD")
+    cuerpo = cuerpo.replace("3.012,89", "3.012.89")  # separador que el OCR movio
+    decision = mundo.decisor.decide(lee_texto(cuerpo, metodo="vision_local"))
+
+    assert decision.campos["notas_importe"] == []
+    assert decision.resultado == ESCALAR
+    assert algun_motivo(decision, "divisa distinta")
+
+
+def test_la_divisa_aceptada_es_politica_y_no_codigo(sintetica, mundo, politica):
+    """Invertir el umbral basta: el mismo documento, la misma factura, PAGAR."""
+    en_dolares = dataclasses.replace(politica, divisa_aceptada="USD")
+    decisor = norma.Decisor(mundo.maestro, mundo.asientos, en_dolares)
+    cuerpo = _marca_divisa(sintetica.texto(pedido=mundo.pedido_base), "USD")
+    decision = decisor.decide(lee_texto(cuerpo))
+    assert decision.resultado == PAGAR
+    assert decision.campos["divisa_documento"] == ["USD"]
+    assert decision.campos["divisa_erp"] == "USD"

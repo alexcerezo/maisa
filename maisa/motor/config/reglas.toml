@@ -5,12 +5,15 @@
 # decision declaran con que version se tomaron, asi que un cambio invalida lo
 # que dependa de ella en cascada sin tocar una linea de Python.
 
-version = "norma_v3.1"
+version = "norma_v3.2"
 fuente = "FINAL_v7_DEFINITIVO_ahorasi.xlsx#Norma_Pagos_v3"
 descripcion = """Norma de pagos a proveedores v3 (vigente tras el incidente de marzo).
 v3.1: la regla 6 nombra sus anomalias (pedido repetido en el lote, orden de
 resultado dentro del documento, pedido pendiente de revision, escaneo sin IBAN
-legible) en vez de escalarlas todas en bloque."""
+legible) en vez de escalarlas todas en bloque.
+v3.2: la regla 7 compara la divisa del importe impreso con la del importe del
+ERP. El ERP solo declara euros, asi que un documento marcado en otra divisa no
+se convierte ni se compara por digitos: se escala."""
 
 [umbrales]
 # Regla 2 y 3: tolerancia explicita de un centimo.
@@ -33,6 +36,12 @@ confianza_minima_campo = 0.70
 hoy = "2026-09-19"
 # Umbral de "importe anomalo" heredado del maestro (informativo, no decide).
 umbral_pago_maximo = "5000.00"
+# Regla 7: la divisa en la que viene el importe del ERP. El puente del ERP
+# (`alberto_erp.py`) exporta siete columnas y **ninguna** es la divisa: el
+# importe_esperado esta en euros y no hay tipo de cambio en ningun sitio. Por
+# eso "convertir" no es una operacion disponible y un importe marcado en otra
+# divisa se escala en vez de inventarse un cambio.
+divisa_aceptada = "EUR"
 
 # Precedencia explicita entre resultados. Si dos reglas disparan, gana la que
 # este mas a la derecha. Documentado en la seccion 2.3 del plan
@@ -92,6 +101,16 @@ si_documento_no_legible = "ESCALAR"
 # numero" es pagar otra cosa; y no hay descuadre que lo delate. Nunca baja a
 # PAGAR ni se registra como evidencia: es una anomalia, no una curiosidad.
 divisa_extranjera = "ESCALAR"
+
+[reglas.R7_divisa]
+descripcion = "El importe que se coteja viene en la divisa del ERP"
+# Se escala, nunca se paga, aunque los digitos coincidan: dos importes en
+# divisas distintas no son el mismo importe, y el tipo de cambio del dia es una
+# decision de negocio, no un dato que el motor tenga. Escalando, la traza deja
+# el importe impreso original (que normalizar el `Decimal` borra) al lado del
+# `importe_erp`, y el humano decide con el cambio que toque ese dia.
+si_falla = "ESCALAR"
+si_divisa_distinta = "ESCALAR"
 
 # Motivos que NO son ambiguedad: son hechos duros y por tanto NO_PAGAR.
 # Un humano no tiene nada que decidir aqui; pagar seria un error, no una duda.

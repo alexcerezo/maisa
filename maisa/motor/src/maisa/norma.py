@@ -4,8 +4,14 @@ Contrato: la extraccion propone, la norma decide. Aqui no hay modelo de
 lenguaje ni heuristica opaca; hay hechos verificables contra el ERP y el
 maestro, y una politica explicita que convierte esos hechos en un resultado.
 
-Las reglas son R1..R6 de la Norma v3 (ver ``config/reglas.toml``). El orden y
+Las reglas son R1..R7 de la Norma v3 (ver ``config/reglas.toml``). El orden y
 la precedencia entre resultados estan declarados como datos.
+
+R7 (divisa) es la unica regla que no compara dos datos del mismo sistema: mira
+si el documento declara una divisa distinta de la del ERP. Callar no escala
+-la ausencia de "EUR" en una factura española es lo normal, y se asume la
+divisa del ERP-, pero declarar otra si: el importe impreso estaria en otra
+moneda, y el tipo de cambio del dia no es un dato que el motor tenga.
 """
 from __future__ import annotations
 
@@ -24,7 +30,7 @@ from .normaliza import (
     match_estricto,
     match_seguro,
 )
-from .texto import Lectura, extrae_iva_pct
+from .texto import Lectura, divisas_declaradas, extrae_iva_pct
 
 # Pedido ya normalizado por norm_pedido: PO-<anio>-<cuerpo>.
 _RE_PEDIDO = re.compile(r"^PO-(\d{3,4})-(\d{4})$")
@@ -122,6 +128,7 @@ class Politica:
     confianza_minima: float
     calidad_texto_minima: float
     hoy: str
+    divisa_aceptada: str
     precedencia: dict[str, int]
     reglas: dict[str, dict]
     hechos_duros: dict[str, str]
@@ -193,6 +200,7 @@ class Politica:
             confianza_minima=float(u.get("confianza_minima_campo", 0.70)),
             calidad_texto_minima=float(u.get("calidad_texto_minima", 0.60)),
             hoy=str(u.get("hoy", "")),
+            divisa_aceptada=str(u.get("divisa_aceptada", "EUR")).strip().upper(),
             precedencia={k: int(v) for k, v in datos["precedencia"].items()},
             reglas=datos["reglas"],
             hechos_duros=datos["hechos_duros"],
@@ -260,6 +268,22 @@ class Decisor:
     def _es_ocr(lectura: Lectura) -> bool:
         return lectura.metodo.startswith("vision")
 
+    def _divisas_documento(self, lectura: Lectura) -> list[str]:
+        """Divisas (ISO-4217) que el documento marca junto al importe que se coteja.
+
+        Se lee del TEXTO crudo porque normalizar el importe borra la marca:
+        `normaliza._limpia_importe` convierte "TOTAL 1.000,00 USD" en
+        `Decimal("1000.00")`, indistinguible de la misma cifra en euros. Una
+        lista vacia no significa euros: significa que no lo declara, y esa
+        diferencia es la que permite escalar solo cuando hay un dato en contra.
+        """
+        return divisas_declaradas(lectura.texto)
+
+    def _divisas_ajenas(self, lectura: Lectura) -> list[str]:
+        """De las divisas declaradas, las que no son la del ERP."""
+        return [d for d in self._divisas_documento(lectura)
+                if d != self.pol.divisa_aceptada]
+
     def _repara_anio(self, candidato: str) -> str | None:
         """Repara el anio de un pedido leido por OCR (``PO-206-0724``).
 
@@ -283,6 +307,11 @@ class Decisor:
         """
         nifs = [v for v in lectura.valores("nif") if v in self.maestro.por_nif]
         if not nifs:
+            return None
+        if self._divisas_ajenas(lectura):
+            # El rescate casa el importe IMPRESO contra el importe del ERP, que
+            # esta en euros. Con el documento marcado en otra divisa, que dos
+            # cifras coincidan es casualidad de digitos: no se rescata nada.
             return None
         for nif in nifs:
             for campo in ("total", "base"):
@@ -571,8 +600,42 @@ class Decisor:
         base = self._mejor_decimal(lectura.valores("base"))
         iva = self._mejor_decimal(lectura.valores("iva"))
         total = self._mejor_decimal(lectura.valores("total"))
+
+        # --- R7: divisa del importe (antes de reparar nada) --------------------
+        # Va antes que la reparacion de importes y eso es lo importante:
+        # `_repara_importes_ocr` sustituye el total impreso por el del ERP cuando
+        # los digitos quedan cerca, y con el documento en otra divisa eso
+        # borraria justo el dato que hay que enseñar, la cifra que el proveedor
+        # imprimio. Aqui no se convierte ni se adivina un tipo de cambio: el
+        # puente del ERP exporta siete columnas y ninguna es la divisa, asi que
+        # "convertir" seria inventarse el numero. Se deja constancia de que el
+        # importe impreso esta en otra moneda y decide un humano, que si tiene
+        # el cambio del dia.
+        divisas = self._divisas_documento(lectura)
+        ajenas = [d for d in divisas if d != self.pol.divisa_aceptada]
+        campos["divisa_documento"] = divisas
+        campos["divisa_erp"] = self.pol.divisa_aceptada
+        if ajenas:
+            impreso = (f"{euros(total)} {'/'.join(ajenas)}" if total is not None
+                       else f"ilegible en {'/'.join(ajenas)}")
+            hechos.append(Hecho(
+                "R7_divisa", False,
+                f"el importe viene en {'/'.join(ajenas)} y no en "
+                f"{self.pol.divisa_aceptada}",
+                {"divisa_documento": ajenas,
+                 "divisa_erp": self.pol.divisa_aceptada,
+                 "total_impreso": str(total) if total is not None else None},
+                nombre="si_divisa_distinta",
+            ))
+            motivos.append(
+                f"divisa distinta de la del ERP: el documento factura en "
+                f"{'/'.join(ajenas)} y el pedido esta en "
+                f"{self.pol.divisa_aceptada} ({impreso} frente a "
+                f"{euros(asiento.importe)} {self.pol.divisa_aceptada})"
+            )
+
         notas_importe: list[str] = []
-        if self._es_ocr(lectura):
+        if self._es_ocr(lectura) and not ajenas:
             base, iva, total, notas_importe = self._repara_importes_ocr(
                 lectura, base, iva, total, asiento
             )
