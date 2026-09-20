@@ -1,0 +1,29 @@
+{
+  "asientos_vigentes": 516,
+  "congelado_en": "2026-09-20T01:05:33+00:00",
+  "detalles_guardados": 500,
+  "entrega": {
+    "coincide_con_traza": true,
+    "lineas_invalidas": 0,
+    "total": 500
+  },
+  "facturas_en_el_listado": 500,
+  "generado_por": "tools/descargar_fixtures.py",
+  "origen": "https://82.70.78.22.sslip.io",
+  "pdfs": [
+    "2026-01-08_P001.pdf",
+    "2026-03-28_P002.pdf",
+    "2026-04-08_P007.pdf",
+    "2026-0233-A_catering.pdf",
+    "2026-06-04_P006.pdf",
+    "copia_2026_0518.pdf",
+    "FA-2508_consultoría.pdf",
+    "2026-07-09_P010.pdf",
+    "scan_002.pdf"
+  ],
+  "por_resultado": {
+    "ESCALAR": 43,
+    "NO_PAGAR": 9,
+    "PAGAR": 448
+  }
+}

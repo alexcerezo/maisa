@@ -145,9 +145,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def _montar_ui(app: FastAPI, settings: Settings) -> None:
     """Sirve el visor en `/` para que no haga falta CORS.
 
-    La decision se toma **en cada peticion**, no al arrancar: asi el frontend se
-    puede dejar en `UI_DIR` con el contenedor ya levantado. Si no hay
-    `index.html` se devuelve un mensaje informativo en lugar de un 404.
+    `UI_DIR` apunta al **build** del panel (`maisa/ui/dist`), no a su codigo
+    fuente: la plantilla `maisa/ui/index.html` tambien existe sin construir y
+    carga `/src/main.tsx`, que un navegador no ejecuta. Sirviendo esa, el
+    resultado seria una pagina en blanco en vez del aviso de que no hay visor.
+
+    La decision se toma **en cada peticion**, no al arrancar: asi el build se
+    puede reemplazar con el contenedor ya levantado. Si no hay `index.html` se
+    devuelve un mensaje informativo en lugar de un 404.
     """
     ui_dir = settings.ui_dir
 
@@ -163,8 +168,9 @@ def _montar_ui(app: FastAPI, settings: Settings) -> None:
                 "servicio": "albertitos-api",
                 "api_version": API_VERSION,
                 "mensaje": (
-                    "No hay visor estatico en UI_DIR: coloca el frontend en esa carpeta y se "
-                    "servira automaticamente en /."
+                    "No hay visor estatico en UI_DIR: construye el panel con "
+                    "`npm run build` en maisa/ui (deja el resultado en ui/dist, que es lo que "
+                    "apunta UI_DIR) y se servira automaticamente en /."
                 ),
                 "ui_dir": str(ui_dir),
                 "docs": "/docs",
@@ -177,7 +183,11 @@ def _montar_ui(app: FastAPI, settings: Settings) -> None:
         app.mount("/", StaticFiles(directory=ui_dir, html=True), name="ui")
         logger.info("Visor estatico servido desde %s (sin reinicio)", ui_dir)
     else:
-        logger.warning("UI_DIR no existe (%s): / solo devolvera el mensaje informativo", ui_dir)
+        logger.warning(
+            "UI_DIR no existe (%s): / solo devolvera el mensaje informativo. "
+            "Si falta, es que no se ha construido el panel: `npm run build` en maisa/ui.",
+            ui_dir,
+        )
 
 
 app = create_app()

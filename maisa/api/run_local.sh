@@ -68,7 +68,10 @@ export ERP_URL="${ERP_URL:-http://127.0.0.1:8009}"
 
 export OUTPUTS_DIR="${OUTPUTS_DIR:-$MAISA/outputs}"
 export FACTURAS_DIR="${FACTURAS_DIR:-$MAISA/data/facturas}"
-export UI_DIR="${UI_DIR:-$MAISA/ui}"
+# `dist` es el BUILD del panel (`npm run build`). Apuntando a `$MAISA/ui`, `/`
+# serviria la plantilla de Vite sin construir y el navegador daria una pagina en
+# blanco, porque el `index.html` del fuente tambien existe.
+export UI_DIR="${UI_DIR:-$MAISA/ui/dist}"
 export API_PORT="${API_PORT:-8010}"
 export API_HOST="${API_HOST:-0.0.0.0}"
 export LOG_LEVEL="${LOG_LEVEL:-INFO}"
