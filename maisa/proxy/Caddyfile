@@ -1,0 +1,78 @@
+# ---------------------------------------------------------------------------
+# Proxy TLS (Caddy) de Albertitos: la unica puerta HTTPS del sistema.
+#
+# Caddy NO sabe nada del negocio. Solo hace dos cosas:
+#   1. Pide y renueva solo el certificado de `{$SITE_ADDRESS}` (ACME/Let's
+#      Encrypt). El reto HTTP-01 se sirve por el puerto 80 y el TLS-ALPN por el
+#      443: los dos tienen que estar abiertos en el NSG de OCI.
+#   2. Reenvia a la API/BFF por el DNS interno de la red Docker. El trafico
+#      navegador -> Caddy va cifrado; Caddy -> API va en claro dentro de la red
+#      compartida, que no sale de la maquina.
+#
+# Variables (las inyecta docker-compose.yml, ver .env.example):
+#   SITE_ADDRESS  nombre publico, por defecto 82.70.78.22.sslip.io
+#   API_UPSTREAM  destino, por defecto albertitos-api:8000
+#
+# El correo de contacto ACME no es variable: es la opcion global `email` de
+# abajo, y viene comentada (ver el porque en su comentario).
+# ---------------------------------------------------------------------------
+{
+	# CA explicita. Sin esto Caddy intenta tambien ZeroSSL, que exige
+	# credenciales EAB (no las tenemos) y ensucia los logs con un fallo por
+	# cada emision. Let's Encrypt es la que queremos y la unica que se usa.
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+
+	# Correo de contacto ACME: DESACTIVADO a proposito.
+	#
+	# El campo `contact` es opcional en ACME y Let's Encrypt registra la cuenta
+	# sin el, asi que el certificado se emite igual. Se deja apagado porque un
+	# valor de relleno NO cuela: Let's Encrypt rechaza los dominios reservados
+	# (`example.com` incluido) con `invalidContact` y el certificado no se
+	# emite. Un buzon falso es peor que ninguno: promete un aviso que no llega.
+	#
+	# Si quieres recibir los avisos de caducidad (util cuando la renovacion
+	# automatica empieza a fallar), descomenta la linea y pon un correo REAL:
+	#
+	#   email tu-correo@tu-dominio.com
+	#
+	# No hace falta reiniciar nada mas: `docker compose restart caddy`.
+
+	# El admin API de Caddy se deja escuchando SOLO en loopback DENTRO del
+	# contenedor: no se publica (el `ports` de docker-compose.yml no lo abre) ni
+	# se anuncia en `albertitos_net`, asi que nadie de la red compartida lo
+	# alcanza. Se necesita porque Caddy no tiene endpoint de salud propio: el
+	# `healthcheck` del contenedor pregunta aqui para saber si Caddy esta vivo
+	# CON su configuracion cargada.
+	#
+	# No sirve sondear el 80: cualquier peticion por http responde 308 hacia
+	# https, y al seguir el redirect el cliente falla el TLS (el certificado es
+	# del nombre, no de 127.0.0.1). Y sondear el 443 mete la salud de la API en
+	# la del proxy, que no es lo mismo.
+	admin 127.0.0.1:2019
+}
+
+{$SITE_ADDRESS:82.70.78.22.sslip.io} {
+	# El visor y los JSON son texto: comprimirlos abarata la demo en 4G.
+	encode zstd gzip
+
+	# Cabeceras de proxy para que la API sepa como la estan llamando. Uvicorn
+	# solo las respeta si `FORWARDED_ALLOW_IPS` incluye la IP de Caddy (ver el
+	# `environment` de maisa/api/docker-compose.yml); si no, `/docs` intentaria
+	# cargar el openapi por http y el navegador lo bloquearia.
+	reverse_proxy {$API_UPSTREAM:albertitos-api:8000} {
+		# El cliente real, para que los logs de la API no digan siempre la IP
+		# del contenedor de Caddy.
+		header_up X-Real-IP {remote_host}
+	}
+
+	# Una linea por peticion en el log del contenedor. Sin esto, cuando algo
+	# falla no se sabe si la peticion llego siquiera a la API.
+	log {
+		output stdout
+		format console
+	}
+
+	# Este nombre solo debe usarse por HTTPS. Las demas cabeceras de seguridad
+	# las pone la API (app/errors.py).
+	header Strict-Transport-Security "max-age=31536000"
+}

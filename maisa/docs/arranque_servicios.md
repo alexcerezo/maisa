@@ -1,13 +1,20 @@
 # Arranque de servicios — Maisa / Albertitos
 
 Runbook para levantar el sistema completo desde cero en esta máquina y dejarlo
-alcanzable **desde Internet** (la API en `http://82.70.78.22:8010`) y desde dentro de
-Docker. La LAN no es una vía de consumo: solo se usa el DNS interno de `albertitos_net`
-entre contenedores. Está escrito para ejecutarse de arriba abajo, sin
-preguntar nada: cada paso lleva el comando literal y el motivo por el que va ahí.
+alcanzable **desde Internet** (la API en `https://82.70.78.22.sslip.io`, y también por
+`http://82.70.78.22:8010`) y desde dentro de Docker. La LAN no es una vía de consumo: solo
+se usa el DNS interno de `albertitos_net` entre contenedores. Está escrito para ejecutarse
+de arriba abajo, sin preguntar nada: cada paso lleva el comando literal y el motivo por el
+que va ahí.
+
+> **La vía de reparto es HTTPS.** El visor vive en un hosting con HTTPS (Framer/Vercel) y
+> el navegador bloquea por *mixed content* cualquier llamada a una API `http://`. La URL
+> que se reparte es `https://82.70.78.22.sslip.io` (§3.8). El `8010` en claro sigue
+> abierto, pero es para diagnóstico y para el smoke test, no para el frontend.
 
 Decisiones de arquitectura que sostienen este runbook: `maisa/docs/ADR-0001-middleware-bff.md`.
 Detalle de la API: `maisa/api/README.md`. Detalle del OCR: `maisa/ocr_service/README.md`.
+Detalle del HTTPS: `maisa/proxy/README.md`.
 
 ---
 
@@ -18,7 +25,8 @@ Detalle de la API: `maisa/api/README.md`. Detalle del OCR: `maisa/ocr_service/RE
 | MongoDB 7 (replica set `rs0`, 1 nodo) | `albertitos-mongo` | `mongo:7.0` | `albertitos_net` | `127.0.0.1:27017->27017` | **NO** |
 | Inicializador del replica set | `albertitos-mongo-init` | `mongo:7.0` | `albertitos_net` | — | — |
 | OCR (FastAPI + RapidOCR) | `ocr-api` | `ocr-rapidocr-arm64:latest` | `albertitos_net` + red propia del OCR (§7.9) | `0.0.0.0:8866->8866` | **NO** (el NSG no abre 8866) |
-| API/BFF (FastAPI) | `albertitos-api` | `albertitos-api:latest` | `albertitos_net` | `0.0.0.0:8010->8000` | **Sí — la puerta del sistema** |
+| API/BFF (FastAPI) | `albertitos-api` | `albertitos-api:latest` | `albertitos_net` | `0.0.0.0:8010->8000` | **Sí** (en claro; diagnóstico y smoke) |
+| Proxy TLS (Caddy) | `albertitos-proxy` | `caddy:2.8-alpine` | `albertitos_net` | `0.0.0.0:80->80`, `0.0.0.0:443->443` | **Sí — la puerta del sistema (HTTPS)** |
 | ERP simulado (fuera de Docker) | — | proceso Python | — | `127.0.0.1:8009` | **NO** (solo loopback del host) |
 
 «Publicado» es lo que expone Docker en el host; «alcanzable desde Internet» es lo que el NSG
@@ -26,7 +34,12 @@ deja pasar. El OCR y el ERP están publicados en el host pero **no** son alcanza
 fuera, que es lo correcto (`maisa/api/README.md` §2.2).
 
 Puertos elegidos: **8010** para la API porque 8009 es el ERP y 8866 el OCR; **8866** para el
-OCR porque es el histórico de Paddle Serving y evita el 8080 habitual.
+OCR porque es el histórico de Paddle Serving y evita el 8080 habitual; **80 y 443** para el
+proxy TLS, que son los que Let's Encrypt necesita para validar el nombre.
+
+El proxy **no** sustituye al `8010`: Caddy reenvía a `albertitos-api:8000` por el DNS interno,
+y el `8010` sigue publicado para diagnóstico. La API no sabe que hay un proxy delante salvo
+por `FORWARDED_ALLOW_IPS` (§3.8).
 
 DNS interno de `albertitos_net` (lo que se usa **desde dentro** de un contenedor):
 `mongo:27017`, `ocr-api:8866` (alias `ocr:8866`).
@@ -65,7 +78,7 @@ cualquier `up` aborta.
 ## 3. Orden de arranque, y por qué ese orden
 
 ```
-   red  ->  Mongo  ->  mongo-init (healthy)  ->  asientos  ->  OCR  ->  API  ->  (ERP)  ->  (visor)
+   red  ->  Mongo  ->  mongo-init (healthy)  ->  asientos  ->  OCR  ->  API  ->  proxy TLS  ->  (ERP)  ->  (visor)
 ```
 
 | # | Paso | Por qué va aquí |
@@ -75,9 +88,10 @@ cualquier `up` aborta.
 | 3 | `mongo-init` | `rs.initiate()` **no** puede ir en `/docker-entrypoint-initdb.d` (el entrypoint oficial ejecuta esos scripts contra un mongod temporal sin replica set). Va en un contenedor aparte que espera a que Mongo esté `healthy`. |
 | 4 | Importar asientos | Necesita el replica set ya iniciado y las credenciales de `.env`. Si la API arrancase antes, `/api/asientos` daría `total: 0` sin que nada fallara. |
 | 5 | OCR | La API lo consulta en `/health/ready` y lo usa en `POST /api/ocr`. |
-| 6 | API | Es la última porque es la que **informa** del resto: su `/health` dice qué está caído. Al crearla se leen las credenciales de `maisa/.env`, así que si el `.env` cambia hay que **recrearla** (§7.3). |
-| 7 | ERP | Solo lo necesita el motor para refetchear el snapshot. Escucha en loopback del host: no se publica. |
-| 8 | Visor | No es un servicio: son ficheros en `maisa/ui/`. La API los sirve en `/`. |
+| 6 | API | Es la última pieza con estado propia: es la que **informa** del resto, porque su `/health` dice qué está caído. Al crearla se leen las credenciales de `maisa/.env`, así que si el `.env` cambia hay que **recrearla** (§7.3). |
+| 7 | Proxy TLS | Necesita la API arriba para reenviarle: si arranca antes, Caddy sirve `502` (el certificado lo saca igual, porque el reto ACME no depende de la API). |
+| 8 | ERP | Solo lo necesita el motor para refetchear el snapshot. Escucha en loopback del host: no se publica. |
+| 9 | Visor | No es un servicio: son ficheros en `maisa/ui/`. La API los sirve en `/`. |
 
 ### 3.1 Red (una sola vez)
 
@@ -146,7 +160,39 @@ concreta, defínela en `maisa/api/.env` (que entonces sí hay que crear) o expó
 `127.0.0.1:27017` y sin esa opción el driver intentaría reconectar contra sí mismo desde
 dentro del contenedor.
 
-### 3.6 ERP simulado (solo si hace falta refetchear)
+### 3.6 Proxy TLS (HTTPS)
+
+```bash
+docker compose -f maisa/proxy/docker-compose.yml up -d
+docker compose -f maisa/proxy/docker-compose.yml logs -f caddy   # buscar "certificate obtained successfully"
+```
+
+Caddy pide el certificado a Let's Encrypt para `82.70.78.22.sslip.io` (DNS comodín que
+resuelve a la IP escrita en el nombre, así que **no** hace falta dominio propio) y reenvía a
+`albertitos-api:8000` por el DNS interno de `albertitos_net`. El detalle, en
+`maisa/proxy/README.md`.
+
+Dos cosas que tienen que estar antes, o el certificado **no** se emite:
+
+1. **NSG abierto en 80 y 443.** El reto HTTP-01 llega desde Internet; sin la regla, Caddy
+   reintenta en bucle sin emitir nada. El comando `oci` exacto está en
+   `maisa/proxy/README.md` §2.
+2. **`FORWARDED_ALLOW_IPS` en la API.** Va en `maisa/api/docker-compose.yml` con la subred
+   de `albertitos_net` (`172.20.0.0/16`). uvicorn solo cree `X-Forwarded-Proto` si el
+   origen está en esa lista; sin esto la API genera URLs `http://` y el navegador las
+   bloquea igual, ahora por *mixed content* inverso.
+
+```bash
+curl -sS -o /dev/null -w 'status=%{http_code} tls=%{ssl_verify_result}\n' \
+  https://82.70.78.22.sslip.io/health          # status=200 tls=0
+```
+
+El `8010` en claro **no** se cierra: sigue siendo la vía de diagnóstico y la que usa el smoke
+test contra `127.0.0.1`. Lo que cambia es qué URL se reparte al frontend.
+
+---
+
+### 3.7 ERP simulado (solo si hace falta refetchear)
 
 ```bash
 cd maisa/data/corpus
@@ -154,7 +200,7 @@ python3 alberto_erp.py --puerto 8009     # o: make erp
 curl -s http://127.0.0.1:8009/erp/estado # o: make erp-status
 ```
 
-### 3.7 Visor
+### 3.8 Visor
 
 Colocar el frontend en `maisa/ui/` (está montado en el contenedor como `/datos/ui:ro`). Si
 el directorio no tiene contenido, `GET /` devuelve un mensaje informativo en vez de un 404.
@@ -179,10 +225,14 @@ basta con dejar o quitar el `index.html`: no hay que reiniciar ni recrear el con
 | OCR por su puerto publicado | `cd maisa/ocr_service && ./smoke_lan.sh ../data/facturas/2026-01-25_P001.pdf` | 4/4 OK, con `RESULTADO: OCR operativo por localhost Y por LAN`. Prueba el OCR **directamente**, no a través de la API; el script y su nombre son del servicio de OCR y usan la IP privada del anfitrión como comprobación local |
 | API viva | `curl -s http://127.0.0.1:8010/health` | `"estado": "ok"` y `mongo.ok`/`ocr.ok`/`escritura.ok` a `true` |
 | API lista | `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8010/health/ready` | `200` (503 si falta una dependencia crítica: `mongo,ocr`) |
-| API desde Internet | `curl -s http://82.70.78.22:8010/health` | mismo JSON que por `127.0.0.1`. Es la vía de reparto real |
+| API desde Internet (HTTPS) | `curl -s https://82.70.78.22.sslip.io/health` | mismo JSON que por `127.0.0.1`. **Es la vía de reparto real** |
+| API desde Internet (claro) | `curl -s http://82.70.78.22:8010/health` | el mismo JSON. Sigue abierta para diagnóstico, pero un visor en HTTPS **no** puede usarla |
+| Certificado TLS | `curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://82.70.78.22.sslip.io/health` | `200 0` (`0` = certificado válido y verificado) |
+| Redirección http → https | `curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://82.70.78.22.sslip.io/api/meta` | `308 https://82.70.78.22.sslip.io/api/meta` |
 | Proxy del OCR | `curl -s -X POST 'http://127.0.0.1:8010/api/ocr' -F file=@maisa/data/facturas/2026-01-08_P001.pdf` | `200` en 1–5 s según el motor elegido (reenvía a `ocr-api:8866`) |
 | Visor | `curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://127.0.0.1:8010/` | `200 text/html` sirviendo `index.html` si existe; si no, `200 application/json` con el mensaje informativo (§7.11) |
 | **Todo de una pasada** | `PUBLIC_IP=<IP pública> ./maisa/api/smoke_lan.sh --publico --engine local` | `10 de 10 OK` (14 con `--subir`). Recorre salud, estadísticas, facturas, PDF con `sha256`, asientos, snapshots, visor y `POST /api/ocr`; sale `1` diciendo qué falló |
+| **Todo de una pasada, por HTTPS** | `PUBLIC_IP=82.70.78.22 ./maisa/api/smoke_lan.sh --base https://82.70.78.22.sslip.io --engine local` | el mismo `10 de 10 OK`, pero pasando por Caddy. `curl` verifica el certificado, así que un fallo aquí es un fallo real de TLS, no un falso positivo |
 
 El `healthcheck` del contenedor usa `/health` y **no** `/health/ready` a propósito: un
 contenedor debe reiniciarse si el proceso no responde, no porque Mongo esté un momento caído.
@@ -468,6 +518,28 @@ bueno **cualquiera de los dos** casos de §7.11: `text/html` (hay visor) o `appl
 hay). Antes exigía `text/html` y fallaba legítimamente con `maisa/ui/` vacío. El resto de la salida
 es la mejor comprobación de una pasada que hay en el repo.
 
+### 7.13 El proxy salía `(unhealthy)` aunque el HTTPS funcionaba
+
+`albertitos-proxy` aparecía como `Up (unhealthy)` con `https://82.70.78.22.sslip.io/health`
+devolviendo `200`. La causa estaba en el `healthcheck`, que sondeaba
+`http://127.0.0.1:80/`: Caddy responde **siempre** `308` hacia https en el 80, y al seguir el
+redirect el cliente intenta TLS contra `127.0.0.1`. Como el certificado es del **nombre** y no
+de la IP, Caddy rechaza el saludo (SNI desconocido) y `wget` muere con `SSL alert number 80` /
+`Connection reset by peer`. El proxy estaba perfecto; el que se equivocaba era el sondeo.
+
+Sondear el 443 tampoco vale: ataría la salud del proxy a la de la API (un reinicio de la API
+marcaría el proxy como enfermo). Caddy no tiene endpoint de salud propio, así que el
+`healthcheck` pregunta al **admin API** (`admin 127.0.0.1:2019` en el `Caddyfile`, escuchando
+solo en loopback **dentro** del contenedor y sin publicarse):
+
+```console
+$ docker exec albertitos-proxy wget -q --spider http://127.0.0.1:2019/config/ && echo OK
+OK
+```
+
+Eso comprueba lo que de verdad importa —Caddy vivo **con su configuración cargada**— sin
+depender del certificado (que tarda unos segundos en emitirse) ni de la API.
+
 ---
 
 ## 8. Qué NO está implementado todavía
@@ -477,18 +549,18 @@ es la mejor comprobación de una pasada que hay en el repo.
 | **Frontend/visor completo** (`maisa/ui/`) | En curso. El montaje está hecho y probado: en cuanto haya un `index.html` en `maisa/ui/`, la API lo sirve en `/` (en caliente, sin reiniciar). Hoy el directorio está vacío (solo `.gitkeep`), así que `/` devuelve el mensaje informativo en JSON. Lo que falta es el visor, no la tubería. |
 | **Persistencia en Mongo de `expedientes` y `eventos`** | **Parcial.** `POST /api/facturas` ya escribe expedientes y eventos (subidas por la API). Lo que sigue sin escribir es el **motor**: las decisiones viven solo en `outputs/outcomes_traza.jsonl`, y `ejecuciones` y `excel_filas` están **vacías** (`TRASPASO.md` §1: «Persistencia Mongo (`expedientes`…) — a hacer»). Cuando el motor escriba ahí, `GET /api/facturas` debería preferir Mongo. |
 | **Autenticación real** | Hoy `API_KEY` es una **clave compartida**, no usuarios ni roles. El usuario que usa la API (`albertitos_app`) tiene `readWrite` sobre `albertitos` (lo necesita para `POST /api/facturas`). |
-| **TLS** | No hay. La API ya está publicada en Internet y **escribe**: es lo primero que falta cerrar. |
+| ~~TLS~~ | **Resuelto.** La API se reparte por `https://82.70.78.22.sslip.io` con certificado de Let's Encrypt (`maisa/proxy/`, §3.6). El `8010` en claro sigue publicado a propósito, para diagnóstico. Lo que **falta** de este frente es cerrar el `8010` al público cuando ya nadie lo necesite, y fijar el origen del visor en `CORS_ORIGINS` en vez del `*` actual (`maisa/api/.env`). |
 | **Cierre del `8866` del OCR** | Sigue publicado en `0.0.0.0:8866` por su propio compose, ahora que el frontend entra por `/api/ocr`. Decisión pendiente (ADR-0001 §5). |
 | **`GET /api/asientos/{asiento_id}` no filtra por `vigente`** | Con un solo snapshot es equivalente; con varios habrá que decidir cuál devolver. |
 | **Caché/ETag en el listado** | Con 500 facturas la traza cabe en memoria; si el volumen crece, tocará paginar desde Mongo y cachear. |
 
 ---
 
-## 9. Estado verificado el 2026-09-19
+## 9. Estado verificado
 
-Comprobado sobre esta máquina entre las 17:20 y las 17:45 UTC. Todo en verde. El visor
-(`maisa/ui/`) sigue vacío (solo `.gitkeep`), así que `/` devuelve el JSON informativo: es una
-respuesta **correcta** y el smoke la da por buena (§7.11 y §7.12):
+**2026-09-19, 17:20–17:45 UTC** (arranque completo) y **2026-09-20, 00:40–01:00 UTC** (proxy TLS).
+Todo en verde. El visor (`maisa/ui/`) sigue vacío (solo `.gitkeep`), así que `/` devuelve el
+JSON informativo: es una respuesta **correcta** y el smoke la da por buena (§7.11 y §7.12):
 
 | Pieza | Verificación | Resultado |
 |---|---|---|
@@ -503,9 +575,15 @@ respuesta **correcta** y el smoke la da por buena (§7.11 y §7.12):
 | Autenticación de Mongo | lectura anónima desde el propio contenedor | rechazada: `Command aggregate requires authentication` |
 | Tests de la API | `.venv-api/bin/python -m pytest maisa/api` | `92 passed` (no necesitan Mongo ni OCR). El `-q` ya viene en `maisa/api/pytest.ini`; añadir otro `-q` a mano lo deja en `-qq` y **se come el resumen** |
 | `albertitos-api` | `docker ps`, `docker port` | `Up (healthy)`, `0.0.0.0:8010->8000/tcp`, imagen `albertitos-api:latest`, usuario `apiuser` |
+| `albertitos-proxy` | `docker ps` | `Up (healthy)`, `0.0.0.0:80->80/tcp`, `0.0.0.0:443->443/tcp`, imagen `caddy:2.8-alpine` |
+| Certificado TLS | `openssl s_client -connect 82.70.78.22.sslip.io:443` | `CN=82.70.78.22.sslip.io`, emitido por `Let's Encrypt (YE2)`, válido del 2026-09-19 al 2026-12-18; Caddy lo renueva solo |
+| API desde Internet (HTTPS) | `GET https://82.70.78.22.sslip.io/health` | `200` con `ssl_verify_result=0` (certificado **verificado**, no `--insecure`) |
+| HTTP → HTTPS | `GET http://82.70.78.22.sslip.io/api/meta` | `308` a `https://82.70.78.22.sslip.io/api/meta` |
+| IP real en el log de la API | `docker logs albertitos-api` tras una petición por HTTPS | `82.70.78.22:0 - "GET /health"`: `FORWARDED_ALLOW_IPS` está surtiendo efecto (sin él saldría la IP del contenedor de Caddy) |
+| Smoke test por HTTPS | `PUBLIC_IP=82.70.78.22 ./maisa/api/smoke_lan.sh --base https://82.70.78.22.sslip.io --engine local` | **10 de 10 OK**, todo el recorrido pasando por Caddy |
 | API, dependencias | `GET /health` | `"estado": "ok"`, `mongo.ok: true`, `ocr.ok: true`, `escritura.ok: true` |
 | API lista | `GET /health/ready` | `200` |
-| API desde Internet | `GET http://82.70.78.22:8010/health`, `/`, `/api/facturas?limit=1` | `200` en los tres |
+| API desde Internet (claro, 8010) | `GET http://82.70.78.22:8010/health`, `/`, `/api/facturas?limit=1` | `200` en los tres |
 | Puertos no publicados | `curl --max-time 5 http://82.70.78.22:{8866,27017,8009}/health` | `000` en los tres (OCI descarta el paquete; el reparto es correcto) |
 | API contra Mongo | `GET /api/estadisticas` | `total: 500`, `PAGAR 448 / NO_PAGAR 9 / ESCALAR 43`, `asientos_vigentes: 516`, `mongo.ok: true`, `lineas_invalidas: 0`, `coincide_con_traza: true` |
 | Asientos y snapshots | `GET /api/asientos?limit=1`, `GET /api/snapshots` | `total: 516`; 1 snapshot (`snap-2026-09-19T08-25-58Z`, 516 asientos, 26 páginas, `vigente: true`) |
@@ -521,3 +599,9 @@ respondió por la nube, pero si su cuota o su token fallan el OCR debe caer al m
 ese camino no se ha forzado a propósito. Tampoco se ha probado la API con `API_KEY` definida
 (hoy corre en modo abierto, ver §8). Y el visor no se ha abierto en un navegador real: solo se
 ha comprobado que `/` responde (con `maisa/ui/` vacío, el mensaje informativo en JSON).
+
+Del lado del HTTPS, lo comprobado es la **tubería** (certificado verificado, `308` en el 80,
+smoke de 10 comprobaciones por Caddy), no la integración con el visor: falta abrir el visor en
+Vercel contra `https://82.70.78.22.sslip.io` y, en esa prueba, fijar su origen exacto en
+`CORS_ORIGINS` en lugar del `*` que hoy tiene `maisa/api/.env`. Con `*`, un fallo de CORS no
+saldría aquí: aparecería solo en la consola del navegador.

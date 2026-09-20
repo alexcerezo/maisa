@@ -81,6 +81,19 @@ services:
       FACTURAS_DIR: /datos/facturas
       UI_DIR: /datos/ui
       API_PORT: ${API_PORT:-8010}
+      # Detras del proxy TLS (maisa/proxy) la peticion llega desde OTRO
+      # contenedor, no desde 127.0.0.1, que es lo unico que uvicorn se cree por
+      # defecto. Sin esto, uvicorn ignora `X-Forwarded-Proto` y cree que la
+      # peticion llego por http: cualquier URL absoluta o redireccion que
+      # generase la API saldria en http y el navegador la bloquearia (mixed
+      # content) por venir de una pagina https.
+      #
+      # Se confia SOLO en la subred de `albertitos_net`, no en `*`: asi un
+      # cliente que entre directo por el 8010 no puede falsificar
+      # `X-Forwarded-For` y ensuciar los logs. Si la red se recrea con otro
+      # rango, hay que cambiar este valor (se ve con
+      # `docker network inspect albertitos_net`).
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.20.0.0/16}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8010,http://127.0.0.1:8010,http://localhost:5173,http://127.0.0.1:5173}
       CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
       # Sin API_KEY la API arranca en MODO ABIERTO: cualquiera que llegue al

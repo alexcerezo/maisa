@@ -1,0 +1,90 @@
+# Proxy TLS (Caddy) de Albertitos: termina HTTPS y reenvia a la API/BFF.
+#
+#   docker network create albertitos_net          # una sola vez (si no existe)
+#   docker compose -f maisa/proxy/docker-compose.yml up -d
+#   docker compose -f maisa/proxy/docker-compose.yml logs -f caddy
+#
+# Por que existe:
+#   El navegador no deja que una pagina servida por HTTPS llame a una API por
+#   HTTP (mixed content): la peticion se bloquea antes de salir. Como el visor
+#   vive en un hosting con HTTPS (Framer/Vercel), la API tiene que hablar HTTPS
+#   o no hay forma de consumirla desde ahi.
+#
+# Que hace y que no:
+#   * Publica 80 y 443. El 80 solo sirve el reto ACME de Let's Encrypt (y el
+#     redirect a https); el 443 es la via de consumo.
+#   * NO toca la API: sigue escuchando en 8010 tal cual. Esa via HTTP directa
+#     se mantiene para diagnostico y para el smoke test.
+#   * NO crea redes: se une a `albertitos_net`, la red externa compartida con
+#     `mongo`, `ocr-api` y `albertitos-api`.
+#
+# Requisito de infraestructura: el NSG de la instancia tiene que dejar pasar
+# TCP 80 y TCP 443 desde 0.0.0.0/0. Sin eso Let's Encrypt no puede validar el
+# nombre y no se emite certificado (Caddy lo reintenta en bucle). El comando
+# exacto esta en el README de esta carpeta.
+#
+# Persistencia: el certificado y la cuenta ACME viven en el volumen
+# `caddy_data`. Si se borra, Caddy vuelve a pedir el certificado (ojo con el
+# limite de emisiones de Let's Encrypt: 5 por nombre y semana).
+
+name: albertitos-proxy
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: albertitos-proxy
+    restart: unless-stopped
+
+    # Aqui viven `albertitos-api` (destino) y el resto de la red compartida.
+    networks:
+      - albertitos_net
+
+    # Las dos unicas puertas nuevas. El 8010 sigue siendo de la API.
+    ports:
+      - "80:80"
+      - "443:443"
+
+    # Valores por defecto pensados para este despliegue. Para cambiarlos, copia
+    # `.env.example` a `.env` en esta misma carpeta (no se versiona) o
+    # exportalos antes de lanzar compose.
+    environment:
+      # Nombre publico. `sslip.io` resuelve cualquier IP embebida en el nombre,
+      # asi que no hace falta comprar un dominio: el certificado se emite para
+      # este nombre y el DNS lo apunta a la IP publica de la instancia.
+      SITE_ADDRESS: ${SITE_ADDRESS:-82.70.78.22.sslip.io}
+      # Destino por el DNS interno de Docker. El puerto INTERNO de la API es
+      # 8000, no 8010: el 8010 es solo lo que se publica en el anfitrion.
+      API_UPSTREAM: ${API_UPSTREAM:-albertitos-api:8000}
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificado, clave privada y cuenta ACME. Es lo unico con estado.
+      - caddy_data:/data
+      # Configuracion autogenerada por Caddy.
+      - caddy_config:/config
+
+    healthcheck:
+      # Caddy no tiene endpoint de salud propio: se le pregunta al admin API
+      # (loopback dentro del contenedor, ver el `admin` del Caddyfile). Asi la
+      # salud del proxy no depende ni del certificado (que tarda unos segundos
+      # en emitirse) ni de la API.
+      #
+      # NO se puede sondear el 80: responde 308 hacia https y el cliente falla
+      # el TLS al seguir el redirect (el certificado es del nombre, no de
+      # 127.0.0.1). Con el 443 la salud del proxy quedaria atada a la de la API.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+networks:
+  # Red externa compartida con la API, Mongo y el OCR. Se declara externa para
+  # que compose no la cree, no la recree ni se la lleve por delante.
+  albertitos_net:
+    external: true
+    name: albertitos_net
+
+volumes:
+  caddy_data:
+  caddy_config:
