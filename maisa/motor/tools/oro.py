@@ -199,6 +199,9 @@ ESCALARES_POLITICA = {
     "confianza_minima_campo": ("confianza_minima", float),
     "hoy": ("hoy", str),
     "version": ("version", str),
+    # Ensaya "y si el ERP no facturara en euros?": es el unico cambio que mueve
+    # la regla 7 sin tocar el texto de ninguna factura.
+    "divisa_aceptada": ("divisa_aceptada", str),
 }
 CAMPOS_ASIENTO = ("estado", "importe", "nif", "proveedor", "fecha")
 CAMPOS_PROVEEDOR = ("iban", "nif", "razon_social", "ciudad", "condiciones")
