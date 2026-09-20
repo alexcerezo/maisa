@@ -146,6 +146,22 @@ _RE_NOTA = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 _RE_PIE = re.compile(r"Documento emitido conforme|Documento generado por el sistema", re.I)
+
+# Divisas distintas del euro. El conjunto no es arbitrario: es **exactamente**
+# el que `normaliza._limpia_importe` borra del importe antes de convertirlo a
+# decimal. "USD 930.20" y "EUR 930.20" salen de alli como el mismo 930.20, y el
+# maestro no tiene columna de moneda (`Importe_Total` es un numero pelado), asi
+# que aguas abajo las dos facturas son indistinguibles y el cambio desaparece
+# sin dejar nada incoherente que detectar. El euro y sus formas no entran: son
+# la moneda de casa y marcar el 297 de 471 documentos no informa de nada.
+# Las divisas que `_limpia_importe` NO borra (CAD, AUD...) no hacen falta aqui:
+# sobreviven dentro del importe, `a_decimal` no las reconoce y el campo queda
+# ilegible, que ya escala por su cuenta.
+_RE_DIVISA_EXTRANJERA = re.compile(
+    r"\b(?:usd|gbp|chf|jpy|mxn|brl|reales|reais|dolares?|libras?|francos?|yenes?)\b",
+    re.IGNORECASE,
+)
+_SIMBOLO_DIVISA = {"$": "USD", "\u00a3": "GBP", "\u00a5": "JPY", "\u20b9": "INR"}
 _RE_CAMPO_NUM = re.compile(r"^[^a-z]{0,60}?[\d][\d.,]*\s*(?:EUR|€)?\s*$")
 # Forma de fecha completa (d/m/a). Se usa para conservar una fecha que existe
 # como texto pero no en el calendario (31/02/2026) y poder motivarla aparte.
@@ -217,6 +233,33 @@ def ordenes_de_resultado(texto: str) -> list[str]:
     return ordenes
 
 
+def divisa_extranjera(texto: str) -> list[str]:
+    """Divisas distintas del euro que el documento declara, si declara alguna.
+
+    No es un campo mas de la extraccion: es una condicion de escalado. El motor
+    decide sobre importes pelados y el maestro no guarda la moneda, asi que una
+    factura de 930,20 USD con el mismo numero que un pedido de 930,20 EUR se
+    pagaria como si el cambio no existiera. El fallo no deja rastro: no hay
+    descuadre, ni NIF ajeno, ni IBAN raro que mirar, solo un importe que
+    "cuadra". Por eso se detecta aqui y escala en `norma`.
+
+    Devuelve las marcas halladas (codigo ISO, palabra o simbolo) para poder
+    mostrarlas en la traza; vacio si el documento no declara divisa o declara
+    euros. Se compara sin acentos porque cada emisor escribe "DOLARES" a su
+    manera.
+    """
+    plano = _sin_acentos(texto)
+    marcas: list[str] = []
+    for m in _RE_DIVISA_EXTRANJERA.finditer(plano):
+        marca = m.group(0).upper()
+        if marca not in marcas:
+            marcas.append(marca)
+    for simbolo, codigo in _SIMBOLO_DIVISA.items():
+        if simbolo in texto and codigo not in marcas:
+            marcas.append(codigo)
+    return marcas
+
+
 @dataclass
 class Candidato:
     """Un valor leido con su procedencia literal."""
@@ -244,6 +287,7 @@ class Lectura:
     sospechosos: list[str] = field(default_factory=list)
     sospechosos_meta: list[str] = field(default_factory=list)
     ordenes: list[str] = field(default_factory=list)
+    divisa_extranjera: list[str] = field(default_factory=list)
     nota: str = ""
     texto: str = ""
     texto_ilegible: bool = False
@@ -256,6 +300,7 @@ class Lectura:
             "file_id": self.file_id, "paginas": self.paginas, "metodo": self.metodo,
             "texto_ilegible": self.texto_ilegible, "sospechosos": self.sospechosos,
             "sospechosos_meta": self.sospechosos_meta, "ordenes": self.ordenes,
+            "divisa_extranjera": self.divisa_extranjera,
             "nota": self.nota,
         }
         for campo in ("nif", "iban", "pedido", "fecha", "base", "iva", "total", "num_factura"):
@@ -323,6 +368,7 @@ def extrae(texto: str, file_id: str, paginas: int, metodo: str, meta: str = "") 
     lectura.nota = nota_documento(plano)
     lectura.sospechosos = instrucciones(plano + "\n" + lectura.nota)
     lectura.ordenes = ordenes_de_resultado(plano + "\n" + lectura.nota + "\n" + meta)
+    lectura.divisa_extranjera = divisa_extranjera(plano)
     if meta:
         lectura.sospechosos_meta = instrucciones(meta)
     for marca in lectura.sospechosos_meta:

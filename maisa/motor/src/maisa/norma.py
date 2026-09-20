@@ -461,6 +461,24 @@ class Decisor:
         if lectura.texto_ilegible:
             hechos.append(Hecho("R6_anomalia", False, "capa de texto corrupta"))
             motivos.append("capa de texto corrupta (fuentes sin mapear)")
+        if lectura.divisa_extranjera:
+            # El importe llega pelado (`_limpia_importe` borra la divisa) y el
+            # maestro no guarda la moneda. Una factura de 930,20 USD con el
+            # mismo numero que un pedido de 930,20 EUR se pagaria como si el
+            # cambio no existiera, y no hay nada incoherente que lo delate:
+            # ningun descuadre, ningun NIF ajeno, ningun IBAN raro. Solo un
+            # importe que "cuadra". Por eso no basta con registrarlo como se
+            # registra una instruccion inyectada: escala.
+            hechos.append(Hecho(
+                "R6_anomalia", False, "importe en divisa distinta del euro",
+                {"divisas": lectura.divisa_extranjera[:5]},
+                nombre="divisa_extranjera",
+            ))
+            campos["divisa_extranjera"] = lectura.divisa_extranjera[:8]
+            motivos.append(
+                "la factura declara el importe en "
+                + "/".join(lectura.divisa_extranjera[:3]) + ", no en euros"
+            )
         if lectura.sospechosos:
             # Evidencia, no causa: el texto de un documento no decide. Si la
             # factura ademas tiene un defecto real, ese defecto ya la escala;
