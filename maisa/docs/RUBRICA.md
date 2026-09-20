@@ -18,9 +18,30 @@ hecho, aquí dice que no está hecho.
 
 | Requisito | Estado | Evidencia |
 |---|---|---|
-| Un registro por archivo | ✅ | 540 registros, uno por `file_id` |
+| Un registro por archivo | ✅ | 540 registros, uno por `file_id`; **0 duplicados** entre ambos lotes |
 | Ambos lotes | ✅ | 500 (lote 1) + 40 (lote 2) |
-| Resultado aceptado | ✅ | `outcomes.jsonl` + `outcomes_lote2.jsonl` |
+| Resultado aceptado | ✅ | `PAGAR` 467, `ESCALAR` 63, `NO_PAGAR` 10; **0 fuera de vocabulario** |
+
+Comprobado sobre los ficheros que se entregan, no sobre una copia:
+
+- 540 líneas, JSON válido una por línea, `UTF-8` **sin BOM**, y **exactamente** las claves
+  `file_id` y `result` (ni una más, que es lo que pide el contrato).
+- Los 540 `file_id` corresponden a un PDF que existe: 500 en `maisa/data/facturas/`, 40 en
+  `maisa/data/facturas_lote2/facturas_primin/`.
+- El reparto por resultado cuadra **por lotes** contra la traza: 448+19 = 467 `PAGAR`,
+  43+20 = 63 `ESCALAR`, 9+1 = 10 `NO_PAGAR`.
+
+**La entrega y la traza son la misma decisión.** Comparadas una a una, las 540 facturas dan
+**0 desacuerdos** (500/500 en el lote 1, 40/40 en el lote 2): mismo `file_id`, mismo `result`.
+Esto es lo que permite enseñar en la defensa el expediente de una factura y que el veredicto
+que se ve en pantalla sea el que está en el JSONL.
+
+> Ojo con `coincide_con_traza` del manifiesto: hoy vale `false` y **no** significa que la
+> entrega esté mal. Esa bandera (`api/app/routers/estadisticas.py`) compara el conjunto de
+> `file_id` de la traza con el de la entrega; desde que la API sirve los **dos** lotes
+> (`config.traza_paths`), compara 540 contra 500 y no puede dar `true`. La comparación que
+> importa —lote 1 contra lote 1, resultado a resultado— da 0 desacuerdos. Hay que arreglar la
+> bandera para que compare por lote, o dejará de ser la garantía que dice el README que es.
 
 ---
 
@@ -37,9 +58,30 @@ hecho, aquí dice que no está hecho.
 | Spec y plan | `maisa/spec_y_plan.md` |
 | Entrega | `maisa/docs/ENTREGA.md` |
 
-**Pendiente:** ADRs numerados para las decisiones que hoy viven dentro del plan (formato de
-salida, elección de motor, segunda lectura, multi-lote) y una tabla de alternativas
-descartadas con su trade-off. Un ADR por decisión, corto.
+**El PDF de la entrega es `maisa/motor/docs/albertitos_plan.md`.** Se genera con
+`motor/tools/md_a_pdf.py` (§163 de `motor/docs/lote2.md`), y es el que trae las 5 decisiones
+del §3. Trae **5 ADRs** con contexto, alternativas, decisión, consecuencias aceptadas y
+evidencia — el formato exacto que pide el README del corpus, y dentro de su horquilla de
+«entre dos y cinco decisiones relevantes»:
+
+| ADR | Decisión |
+|---|---|
+| 1 | El ERP es la fuente de verdad; conciliación a tres bandas PDF ↔ ERP ↔ Excel |
+| 2 | Escalera de lectura: capa de texto primero, OCR solo como rescate |
+| 3 | Reparar la lectura anclándose en el ERP, no adivinando |
+| 4 | El texto de un documento es dato, nunca control (inyección de prompt) |
+| 5 | Descartamos la validación del dígito de control del IBAN |
+
+Los organizadores «podrán hacer preguntas sobre cualquier decisión, alternativa o trade-off
+registrado en el PDF», así que la preparación de los 35 pts es poder defender estos cinco, uno
+a uno, con su alternativa descartada y su porqué.
+
+> **Cuidado con `maisa/albertitos_plan.md`.** Es un resto del commit `3ee9be0` (19-sep 13:39)
+> que **nadie referencia** y que **contradice** el PDF entregado: dice que el OCR «todavía es un
+> esqueleto» y que el throughput está «por medir», cuando `motor/docs/capacidad.md` §4 ya lo
+> mide (4,08 s por escaneo en frío, techo de 806/hora por ranura). También lista otros seis ADRs.
+> No es el documento que se entrega: el que se entrega sale de `motor/docs/`. Conviene borrarlo
+> o dejarlo apuntando al bueno, porque cualquiera que abra el repo se lo puede creer.
 
 ---
 
@@ -80,6 +122,9 @@ hash no se rompe y que se puede continuar encima sin reescribir nada.
 - La **latencia** se pintaba como `0,0 s` en 302 de las 540 facturas —la mediana está en 43 ms—,
   o sea que el dato que la rúbrica pide expresamente era ilegible. Ahora `4 ms` contra `299 ms`
   distingue una lectura de capa de texto de una de OCR.
+- La **traza y la entrega** están comprobadas una a una: 540/540 sin un solo desacuerdo. Es lo
+  que hace que el expediente que se enseña sea la decisión que se entregó, y no un ejemplo
+  parecido.
 
 ---
 
