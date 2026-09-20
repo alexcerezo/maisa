@@ -1,11 +1,17 @@
-"""Acceso a MongoDB en **solo lectura**.
+"""Acceso a MongoDB, con la escritura reducida a un unico caso.
 
 Reglas que se cumplen aqui y conviene no romper:
 
-  * Solo `find`, `count_documents` y `aggregate`. Nunca `insert`/`update`/
-    `delete`/`$out`/`$merge`/`$where`: la escritura la gobierna el motor, no la
-    API. El usuario de app (`albertitos_app`) ya es `readWrite`, asi que el
-    limite lo pone esta capa.
+  * Para todo lo que decide el motor (asientos, snapshots, expedientes): solo
+    `find`, `count_documents` y `aggregate`. Nunca `insert`/`update`/`delete`/
+    `$out`/`$merge`/`$where`: esa escritura la gobierna el motor, no la API.
+  * **Unica excepcion:** la coleccion `revisiones`. Marcar una factura
+    `ESCALAR` como revisada es una accion de un operador humano sobre el
+    panel, no una decision del pipeline, y vive en su propia coleccion sin
+    tocar `asientos` ni `expedientes`. Es el unico lugar de este modulo que
+    hace `update_one(..., upsert=True)`.
+  * El usuario de app (`albertitos_app`) ya es `readWrite`, asi que el limite
+    de las demas colecciones lo pone esta capa, no los permisos de Mongo.
   * Un unico `MongoClient` reutilizado por proceso (crear un cliente por
     peticion agota el pool y multiplica los handshakes).
   * Timeouts cortos (`MONGO_TIMEOUT_MS`): si Mongo no esta, la API debe
@@ -20,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from bson import ObjectId
@@ -35,6 +41,7 @@ logger = logging.getLogger("albertitos-api")
 # Colecciones del esquema (docker/mongosh/02-schema-init.js) que la API consulta.
 COLECCION_ASIENTOS = "asientos"
 COLECCION_SNAPSHOTS = "erp_snapshots"
+COLECCION_REVISIONES = "revisiones"
 
 # Indices que el esquema deberia tener para las consultas de esta API.
 # La API NO los crea: si falta alguno, se avisa en /health y en el README.
@@ -47,6 +54,17 @@ INDICES_ESPERADOS: dict[str, tuple[str, ...]] = {
         "ix_vigente_parcial",
     ),
     COLECCION_SNAPSHOTS: ("ix_descargado", "ix_vigente_parcial"),
+    COLECCION_REVISIONES: ("ix_estado",),
+}
+
+ESTADOS_REVISION = ("PENDIENTE", "RESUELTA")
+
+PROYECCION_REVISION = {
+    "_id": 1,
+    "estado": 1,
+    "revisor": 1,
+    "comentario": 1,
+    "actualizado_en": 1,
 }
 
 # Proyeccion de lectura: se excluye lo pesado si algun dia el esquema crece.
@@ -297,6 +315,64 @@ class MongoRepo:
     async def obtener_snapshot_vigente(self) -> dict | None:
         try:
             return await asyncio.to_thread(self._obtener_snapshot_vigente)
+        except MongoNoDisponible:
+            raise
+        except Exception as exc:
+            raise MongoNoDisponible(sanear(str(exc), self.uri)) from None
+
+    # ------------------------------------------------------------------ #
+    # Revision humana de facturas ESCALAR (unica escritura de este modulo)
+    # ------------------------------------------------------------------ #
+    def _listar_revisiones(self, file_ids: list[str]) -> dict[str, dict]:
+        if not file_ids:
+            return {}
+        coleccion = self._db()[COLECCION_REVISIONES]
+        cursor = coleccion.find({"_id": {"$in": list(file_ids)}}, PROYECCION_REVISION)
+        return {doc["_id"]: a_json(doc) for doc in cursor}
+
+    async def listar_revisiones(self, file_ids: list[str]) -> dict[str, dict]:
+        """Revisiones existentes, indexadas por `file_id`. Ausente == pendiente."""
+        try:
+            return await asyncio.to_thread(self._listar_revisiones, file_ids)
+        except MongoNoDisponible:
+            raise
+        except Exception as exc:
+            raise MongoNoDisponible(sanear(str(exc), self.uri)) from None
+
+    async def obtener_revision(self, file_id: str) -> dict | None:
+        revisiones = await self.listar_revisiones([file_id])
+        return revisiones.get(file_id)
+
+    def _marcar_revision(
+        self, file_id: str, *, estado: str, revisor: str | None, comentario: str | None
+    ) -> dict:
+        coleccion = self._db()[COLECCION_REVISIONES]
+        coleccion.update_one(
+            {"_id": file_id},
+            {
+                "$set": {
+                    "estado": estado,
+                    "revisor": revisor,
+                    "comentario": comentario,
+                    "actualizado_en": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+        return a_json(coleccion.find_one({"_id": file_id}, PROYECCION_REVISION))
+
+    async def marcar_revision(
+        self, file_id: str, *, estado: str, revisor: str | None = None, comentario: str | None = None
+    ) -> dict:
+        """Registra que un operador marco `file_id` como PENDIENTE o RESUELTA.
+
+        Es intencionadamente un `upsert`: la primera vez que se revisa una
+        factura no existe fila previa, y volver a marcarla actualiza la misma.
+        """
+        try:
+            return await asyncio.to_thread(
+                self._marcar_revision, file_id, estado=estado, revisor=revisor, comentario=comentario
+            )
         except MongoNoDisponible:
             raise
         except Exception as exc:

@@ -597,5 +597,45 @@
   db["pdfs.files"].createIndex({ "metadata.sha256": 1 }, { name: "ix_meta_sha256" });
   db["pdfs.chunks"].createIndex({ files_id: 1, n: 1 }, { name: "ix_files_id_n" });
 
+  // =====================================================================
+  // 10. revisiones — estado de revision humana de facturas ESCALAR
+  // =====================================================================
+  // Unica coleccion que escribe la API (no el motor): registra si un
+  // operador ha marcado una factura como revisada desde el panel. No es una
+  // decision del pipeline, es una accion humana sobre lo que el motor decidio.
+  ensureCollection("revisiones", {
+    validator: {
+      $jsonSchema: {
+        bsonType: "object",
+        title: "Revision humana de una factura",
+        required: ["_id", "estado", "actualizado_en"],
+        properties: {
+          _id: { bsonType: "string", description: "file_id: nombre exacto del PDF" },
+          estado: { enum: ["PENDIENTE", "RESUELTA"] },
+          revisor: { bsonType: ["string", "null"] },
+          comentario: { bsonType: ["string", "null"] },
+          actualizado_en: { bsonType: "date" }
+        }
+      }
+    },
+    validationLevel: "strict",
+    validationAction: "error"
+  });
+
+  db.revisiones.createIndex({ estado: 1 }, { name: "ix_estado" });
+
+  db.migraciones.updateOne(
+    { _id: 2 },
+    {
+      $setOnInsert: {
+        _id: 2,
+        aplicada_en: new Date(),
+        descripcion: "Anade coleccion revisiones (estado de revision humana de ESCALAR)",
+        hash_script: null
+      }
+    },
+    { upsert: true }
+  );
+
   print("[02-schema] Esquema aplicado correctamente.");
 })(db.getSiblingDB(process.env.MONGO_DB || "albertitos"));

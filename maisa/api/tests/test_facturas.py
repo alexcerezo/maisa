@@ -144,6 +144,43 @@ def test_detalle_inexistente_da_404(client):
     assert respuesta.json()["error"]["codigo"] == "factura_no_encontrada"
 
 
+def test_detalle_incluye_revision_pendiente_por_defecto(cliente_con_fakes):
+    respuesta = cliente_con_fakes.get("/api/facturas/2026-02-01_P002.pdf")
+    assert respuesta.json()["revision"] is None
+
+
+def test_marcar_revision_resuelta_y_reflejarla_en_el_detalle(cliente_con_fakes):
+    file_id = "2026-02-01_P002.pdf"
+    respuesta = cliente_con_fakes.put(
+        f"/api/facturas/{file_id}/revision",
+        json={"estado": "RESUELTA", "revisor": "alberto", "comentario": "importe confirmado a mano"},
+    )
+    assert respuesta.status_code == 200
+    cuerpo = respuesta.json()
+    assert cuerpo["estado"] == "RESUELTA"
+    assert cuerpo["revisor"] == "alberto"
+
+    detalle = cliente_con_fakes.get(f"/api/facturas/{file_id}").json()
+    assert detalle["revision"]["estado"] == "RESUELTA"
+    assert detalle["revision"]["comentario"] == "importe confirmado a mano"
+
+
+def test_marcar_revision_estado_invalido(cliente_con_fakes):
+    respuesta = cliente_con_fakes.put(
+        "/api/facturas/2026-02-01_P002.pdf/revision", json={"estado": "QUIZAS"}
+    )
+    assert respuesta.status_code == 400
+    assert respuesta.json()["error"]["codigo"] == "estado_invalido"
+
+
+def test_marcar_revision_factura_inexistente_da_404(cliente_con_fakes):
+    respuesta = cliente_con_fakes.put(
+        "/api/facturas/2026-12-31_P999.pdf/revision", json={"estado": "RESUELTA"}
+    )
+    assert respuesta.status_code == 404
+    assert respuesta.json()["error"]["codigo"] == "factura_no_encontrada"
+
+
 def test_pdf_inline(client):
     respuesta = client.get(f"/api/facturas/{PDF_VALIDO}/pdf")
     assert respuesta.status_code == 200

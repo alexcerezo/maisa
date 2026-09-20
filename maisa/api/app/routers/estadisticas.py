@@ -41,9 +41,21 @@ async def estadisticas(
 
     resultados_entrega = entrega.resultados()
 
+    pendientes_revision: int | None = None
+    if mongo_error is None:
+        escalados = traza.file_ids_por_resultado("ESCALAR")
+        try:
+            revisiones = await mongo.listar_revisiones(escalados)
+            pendientes_revision = sum(
+                1 for file_id in escalados if revisiones.get(file_id, {}).get("estado") != "RESUELTA"
+            )
+        except MongoNoDisponible as exc:
+            mongo_error = str(exc)
+
     return {
         **datos,
         "asientos_vigentes": asientos_vigentes,
+        "pendientes_revision": pendientes_revision,
         "mongo": {"ok": mongo_error is None, "error": mongo_error},
         "entrega": {
             "total": entrega.total(),
