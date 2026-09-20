@@ -51,21 +51,35 @@ descartadas con su trade-off. Un ADR por decisión, corto.
 | Verbo de la rúbrica | Dónde se responde | Estado |
 |---|---|---|
 | Estado | Columna de resultado y de cola en el panel; `result` en la entrega | ✅ |
-| Evidencia | Panel de hechos + PDF + `campos` de la segunda lectura | ✅ |
-| Versiones | `hash` / `hash_prev` encadenados; `sello_previo` del evento `fin` | ✅ |
-| Latencia | Percentiles por escalón en el evento `fin` de la traza | ✅ |
+| Evidencia | Panel de hechos + PDF + `anclajes` (dónde está cada dato en el PDF) + `campos` de la segunda lectura | ✅ |
+| Versiones | `version_norma` y `sha256` por factura en el panel; `hash`/`hash_prev` encadenados y `sello_previo` del evento `fin` | ✅ |
+| Latencia | Por factura en el panel (`latencia()`: `10 ms`, `1,2 s`) y percentiles por escalón en el evento `fin` | ✅ |
 | Errores | `motivos` y severidades; fallos del ERP documentados | ✅ |
 | **Reintentos** | `erp_retry_transient`, `erp_rate_limit_backoff`, `SES-401 → login` | ⚠️ solo en doc, no en el panel |
-| Trabajo pendiente | `pendientes_revision`, `cola_segunda_lectura` | ✅ |
+| Trabajo pendiente | `pendientes_revision`, `cola_segunda_lectura`, cola de segunda lectura filtrable | ✅ |
 
 | Fuente | Dónde |
 |---|---|
 | Traza encadenada por hash | `maisa/outputs/outcomes_lote2_traza_hash.jsonl` |
 | Recorrido narrado de una decisión | `maisa/traces/trazabilidad.md` |
 | Panel | `maisa/ui` (`/facturas`, `/facturas/:fileId`) |
+| Arnés que mata el lote y comprueba la cadena | `maisa/motor/tools/evidencia_resiliencia.py` |
 
-**Pendiente:** llevar los **reintentos** al panel. Hoy son lo único de la rúbrica que solo
-existe en un markdown, y la rúbrica pide *seguir* una decisión, no leer sobre ella.
+**Pendiente:** llevar los **reintentos** al panel. Es lo único de la rúbrica que solo existe en un
+markdown. Pero no se puede pintar desde los datos: el corpus no trae ni un evento de reintento (el
+lote 2 corrió sin ERP y el lote 1 no tuvo incidencias transitorias), así que un contador de
+reintentos en el panel habría que **inventarlo**. Lo honesto es defenderlo con el arnés, que sí lo
+provoca de verdad: `evidencia_resiliencia.py` mata el pipeline a mitad, comprueba que la cadena de
+hash no se rompe y que se puede continuar encima sin reescribir nada.
+
+**Cerrado en este tramo** (lo que la rúbrica pedía y no se veía):
+
+- La **segunda lectura** existía en los datos y no se veía en ninguna parte: 9 de las 63 escaladas
+  la traen (4 confirmables, 4 desvíos, 1 sin conclusión). Ahora es una columna, un panel en el
+  expediente y un contador de trabajo pendiente, con filtro propio.
+- La **latencia** se pintaba como `0,0 s` en 302 de las 540 facturas —la mediana está en 43 ms—,
+  o sea que el dato que la rúbrica pide expresamente era ilegible. Ahora `4 ms` contra `299 ms`
+  distingue una lectura de capa de texto de una de OCR.
 
 ---
 
