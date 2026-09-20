@@ -97,7 +97,7 @@ a uno, con su alternativa descartada y su porqué.
 | Versiones | `version_norma` y `sha256` por factura en el panel; `hash`/`hash_prev` encadenados y `sello_previo` del evento `fin` | ✅ |
 | Latencia | Por factura en el panel (`latencia()`: `10 ms`, `1,2 s`) y percentiles por escalón en el evento `fin` | ✅ |
 | Errores | `motivos` y severidades; fallos del ERP documentados | ✅ |
-| **Reintentos** | `erp_retry_transient`, `erp_rate_limit_backoff`, `SES-401 → login` | ⚠️ solo en doc, no en el panel |
+| **Reintentos** | Panel **La descarga del ERP** en el listado: la descarga vigente con `reintentos` (`ora_00600`, `ses_401`, `erp_429`), su duración y su estado. `erp_retry_transient`, `erp_rate_limit_backoff` y `SES-401 → login` en `resiliencia.md` §3.1–§3.3 | ✅ |
 | Trabajo pendiente | `pendientes_revision`, `cola_segunda_lectura`, cola de segunda lectura filtrable | ✅ |
 
 | Fuente | Dónde |
@@ -105,14 +105,24 @@ a uno, con su alternativa descartada y su porqué.
 | Traza encadenada por hash | `maisa/outputs/outcomes_lote2_traza_hash.jsonl` |
 | Recorrido narrado de una decisión | `maisa/traces/trazabilidad.md` |
 | Panel | `maisa/ui` (`/facturas`, `/facturas/:fileId`) |
+| Descargas del ERP, con sus reintentos | `GET /api/snapshots` → congelado en `maisa/ui/public/data/snapshots.json` |
 | Arnés que mata el lote y comprueba la cadena | `maisa/motor/tools/evidencia_resiliencia.py` |
 
-**Pendiente:** llevar los **reintentos** al panel. Es lo único de la rúbrica que solo existe en un
-markdown. Pero no se puede pintar desde los datos: el corpus no trae ni un evento de reintento (el
-lote 2 corrió sin ERP y el lote 1 no tuvo incidencias transitorias), así que un contador de
-reintentos en el panel habría que **inventarlo**. Lo honesto es defenderlo con el arnés, que sí lo
-provoca de verdad: `evidencia_resiliencia.py` mata el pipeline a mitad, comprueba que la cadena de
-hash no se rompe y que se puede continuar encima sin reescribir nada.
+**De qué son los reintentos** (el matiz que no se puede saltar en la defensa). Son de la **descarga
+de asientos del ERP**, no de la decisión de cada factura. Quien reintenta es el cliente del ERP
+(`motor/src/maisa/erp.py`, dataclass `Telemetria`): cuando el ERP contesta `ORA-00600` o corta la
+sesión, el cliente lo reintenta y el contador sube **una vez por descarga**, no 516 veces. El panel
+lo dice con esas palabras y no funde los dos números en una sola cifra de "reintentos", porque eso
+mezclaría 2 reintentos de red con 9 escaladas de decisión y ninguna de las dos sería la cifra que
+se está viendo.
+
+La resiliencia **de la decisión** es otra cosa y ya estaba en pantalla: el motor no reintenta una
+lectura, la **escala** —la cola de segunda lectura, en la tarjeta de al lado—. El corpus no trae ni
+un evento de reintento por factura (el lote 2 corrió sin ERP y el lote 1 no tuvo incidencias
+transitorias), así que un contador de reintentos *por factura* habría que inventarlo. Lo que sí se
+provoca de verdad es con el arnés: `evidencia_resiliencia.py` mata el pipeline a mitad, comprueba
+que la cadena de hash no se rompe y que se puede continuar encima sin reescribir nada, y en el
+bloque del ERP levanta `ORA-00600` y `ERP-429` contra el bridge vivo (`resiliencia.md` §3).
 
 **Cerrado en este tramo** (lo que la rúbrica pedía y no se veía):
 
@@ -125,6 +135,11 @@ hash no se rompe y que se puede continuar encima sin reescribir nada.
 - La **traza y la entrega** están comprobadas una a una: 540/540 sin un solo desacuerdo. Es lo
   que hace que el expediente que se enseña sea la decisión que se entregó, y no un ejemplo
   parecido.
+- Los **reintentos** del ERP. El dato estaba en Mongo y servido por `GET /api/snapshots` desde el
+  primer día (`reintentos: {ora_00600: 2, ses_401: 0, erp_429: 0}`) y **ninguna pantalla lo leía**:
+  era el último verbo de la rúbrica que solo existía en un markdown. El listado enseña ahora la
+  descarga vigente —516 asientos, 26 páginas, 4,4 s, `COMPLETO`— con sus reintentos nombrados, y
+  también los que están a cero: un cero enseñado es una medida, un cero ausente es un hueco.
 
 ---
 

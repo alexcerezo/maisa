@@ -18,6 +18,7 @@ import {
     pedirDetalle,
     pedirEstadisticas,
     pedirPdf,
+    pedirSnapshots,
     pedirTodasLasFacturas,
 } from "./cliente";
 import { esJson } from "./config";
@@ -25,6 +26,7 @@ import {
     RUTA_ESTADISTICAS,
     RUTA_FACTURAS,
     RUTA_MANIFIESTO,
+    RUTA_SNAPSHOTS,
     hayPdfCongelado,
     rutaDetalle,
     rutaPdfCongelado,
@@ -35,7 +37,7 @@ import {
     aplicarFiltrosExtra,
     type FiltrosVista,
 } from "./filtros";
-import type { Estadisticas, FacturaDetalle, FacturaResumen } from "./types";
+import type { Estadisticas, FacturaDetalle, FacturaResumen, Pagina, Snapshot } from "./types";
 
 /** De donde se esta leyendo. */
 export type Fuente = "vivo" | "congelado";
@@ -109,6 +111,22 @@ export async function cargarEstadisticas(acceso: Acceso): Promise<Estadisticas> 
         return pedirEstadisticas({ api: acceso.api, apiKey: acceso.apiKey });
     }
     return bajarJson<Estadisticas>(RUTA_ESTADISTICAS, "los contadores del congelado");
+}
+
+/**
+ * Las descargas del ERP, del origen que toque.
+ *
+ * Va por `Acceso` y no lee el fichero congelado directamente (como si hace
+ * `cargarEscalabilidad`, que es un artefacto del build) porque **el dato vive en
+ * Mongo**: en vivo lo sirve la API y en congelado hay una foto de lo que sirvio.
+ * Sin la rama congelada el panel se quedaria sin la salud del ERP justo cuando
+ * mas hace falta que es cuando la API no contesta.
+ */
+export async function cargarSnapshots(acceso: Acceso): Promise<Pagina<Snapshot>> {
+    if (acceso.fuente === "vivo") {
+        return pedirSnapshots({ api: acceso.api, apiKey: acceso.apiKey });
+    }
+    return bajarJson<Pagina<Snapshot>>(RUTA_SNAPSHOTS, "las descargas del ERP del congelado");
 }
 
 /**

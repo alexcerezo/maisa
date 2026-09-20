@@ -29,10 +29,16 @@ import {
     type ReactNode,
 } from "react";
 
-import { cargarDetalle, cargarFacturas, cargarPdf, type ConjuntoFacturas } from "./datos";
+import {
+    cargarDetalle,
+    cargarFacturas,
+    cargarPdf,
+    cargarSnapshots,
+    type ConjuntoFacturas,
+} from "./datos";
 import { elegirFuente, type EstadoFuente } from "./fuente";
 import type { FiltrosVista } from "./filtros";
-import type { FacturaDetalle } from "./types";
+import type { FacturaDetalle, Snapshot } from "./types";
 
 export interface ResultadoPeticion<T> {
     datos: T | null;
@@ -203,6 +209,25 @@ export function useFacturas(
     return usePeticion(clave, async () => {
         if (!estado) throw new Error("Se ha pedido el listado antes de saber la fuente.");
         return cargarFacturas(estado.acceso, filtros);
+    });
+}
+
+/**
+ * La salud de la descarga del ERP.
+ *
+ * Si espera a `useFuente`, al contrario que `useEscalabilidad`: los snapshots
+ * salen de Mongo y en congelado se leen de `public/data/snapshots.json`, asi que
+ * cual de los dos origenes se usa depende de la comprobacion de la fuente. La
+ * clave lleva `estado.fuente` delante por eso mismo: si el panel cae de vivo a
+ * congelado, el numero que se enseña es otro y hay que volver a pedirlo.
+ */
+export function useSnapshots(): ResultadoPeticion<Snapshot[]> {
+    const { estado } = useFuente();
+    const clave = estado ? `${estado.fuente}\u0001snapshots` : null;
+    return usePeticion(clave, async () => {
+        if (!estado) throw new Error("Se ha pedido la salud del ERP antes de saber la fuente.");
+        const pagina = await cargarSnapshots(estado.acceso);
+        return pagina.items;
     });
 }
 

@@ -28,7 +28,14 @@
 
 import { esJson } from "./config";
 import { parametrosDeConsulta, type FiltrosApi } from "./filtros";
-import type { ErrorApi, Estadisticas, FacturaDetalle, FacturaResumen, Pagina } from "./types";
+import type {
+    ErrorApi,
+    Estadisticas,
+    FacturaDetalle,
+    FacturaResumen,
+    Pagina,
+    Snapshot,
+} from "./types";
 
 /** Con quien hay que hablar. Sale de `config.ts`. */
 export interface AccesoApi {
@@ -198,6 +205,23 @@ export async function pedirEstadisticas(
     const ruta = "/api/estadisticas";
     const respuesta = await pedir(ruta, { ...acceso, tiempoMs });
     return leerJson<Estadisticas>(respuesta, ruta);
+}
+
+/**
+ * Las descargas del ERP registradas.
+ *
+ * Devuelve la lista entera y no una por `_id` porque hoy hay una sola descarga
+ * vigente y el panel enseña esa: pedir "la vigente" seria una ruta que la API no
+ * tiene, y el dia que haya historico el panel lo quiere entero para poder decir
+ * que hubo antes.
+ */
+export async function pedirSnapshots(
+    acceso: AccesoApi,
+    tiempoMs = TIEMPO_COMPROBACION,
+): Promise<Pagina<Snapshot>> {
+    const ruta = "/api/snapshots";
+    const respuesta = await pedir(ruta, { ...acceso, tiempoMs });
+    return leerJson<Pagina<Snapshot>>(respuesta, ruta);
 }
 
 /** Una pagina del listado. Normalmente no se llama directamente. */

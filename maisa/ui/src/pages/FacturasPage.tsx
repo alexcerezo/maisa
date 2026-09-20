@@ -19,12 +19,13 @@ import { useMemo } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 
 import type { FiltrosVista } from "@/api/filtros";
-import { useFacturas, useFuente } from "@/api/hooks";
+import { useFacturas, useFuente, useSnapshots } from "@/api/hooks";
 import type { EstadoCola, Resultado } from "@/api/types";
 import { BarraFiltros } from "@/components/BarraFiltros";
 import { FalloDeCarga, SinResultados } from "@/components/Estados";
 import { AvisoFuente } from "@/components/Fuente";
 import { Paginacion } from "@/components/Paginacion";
+import { PanelErp } from "@/components/PanelErp";
 import { TablaFacturas } from "@/components/TablaFacturas";
 import { TarjetasEstadisticas } from "@/components/TarjetasEstadisticas";
 import { entero } from "@/lib/formato";
@@ -87,6 +88,11 @@ export default function FacturasPage() {
     const puestos = cuantosFiltros(filtros);
 
     const listado = useFacturas(filtros);
+
+    // La salud del ERP se pide en paralelo al listado: no depende de los filtros
+    // (es de la descarga de asientos, no de las facturas que se esten mirando) y
+    // esperarla para pintar la tabla retrasaria lo que si importa.
+    const erp = useSnapshots();
 
     // Cuantas facturas del conjunto actual se quedan fuera por no tener fecha.
     // Hace falta preguntar lo mismo **sin** las fechas, y eso es una segunda
@@ -193,6 +199,12 @@ export default function FacturasPage() {
                 alElegirResultado={alElegirResultado}
                 colaActiva={filtros.segundaLectura ?? null}
                 alElegirCola={alElegirCola}
+            />
+
+            <PanelErp
+                snapshots={erp.datos}
+                cargando={erp.cargando}
+                error={erp.error}
             />
 
             <BarraFiltros

@@ -16,6 +16,7 @@ Que escribe (todo bajo `--out`, por defecto `public/data/`)
 -----------------------------------------------------------
     manifiesto.json          cuando se congelo, de donde y cuantos. Trazabilidad.
     estadisticas.json        GET /api/estadisticas      -> los contadores
+    snapshots.json           GET /api/snapshots        -> la salud del ERP
     facturas.json            GET /api/facturas -> la tabla entera (paginando)
     facturas/<slug>.json     GET /api/facturas/{file_id} -> un detalle por factura
     pdfs/<slug>              unos pocos PDFs, para el <iframe> sin API
@@ -216,6 +217,17 @@ def main() -> int:
     escribir(out / "estadisticas.json", compacto(estadisticas))
     escribir(out / "facturas.json", compacto(listado))
 
+    # La salud del ERP (reintentos, duracion, estado). No es fatal: el panel
+    # enseña esa tarjeta solo si hay descargas, asi que quedarse sin la foto del
+    # ERP no puede tumbar el congelado entero, que es lo que sostiene la demo.
+    try:
+        snapshots = json.loads(pedir(base, "/api/snapshots?limit=50", args.timeout))
+        escribir(out / "snapshots.json", compacto(snapshots))
+        print("snapshots: %d descargas del ERP" % snapshots.get("total", 0))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        snapshots = None
+        print("snapshots: no disponibles (%s)" % exc, file=sys.stderr)
+
     def descargar_detalle(file_id: str) -> dict | None:
         try:
             crudo = pedir(base, "/api/facturas/" + urllib.parse.quote(file_id), args.timeout)
@@ -251,6 +263,7 @@ def main() -> int:
         "por_resultado": estadisticas.get("por_resultado"),
         "asientos_vigentes": estadisticas.get("asientos_vigentes"),
         "entrega": estadisticas.get("entrega"),
+        "snapshots": (snapshots or {}).get("total"),
         "generado_por": "tools/descargar_fixtures.py",
     }
     (out / "manifiesto.json").write_text(

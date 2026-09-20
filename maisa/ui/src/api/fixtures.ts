@@ -38,6 +38,7 @@ export function slugFileId(fileId: string): string {
 export const RUTA_ESTADISTICAS = "/data/estadisticas.json";
 export const RUTA_FACTURAS = "/data/facturas.json";
 export const RUTA_MANIFIESTO = "/data/manifiesto.json";
+export const RUTA_SNAPSHOTS = "/data/snapshots.json";
 
 /** El detalle de una factura, ya congelado. */
 export function rutaDetalle(fileId: string): string {
@@ -94,5 +95,7 @@ export interface Manifiesto {
     por_resultado: Record<string, number> | null;
     asientos_vigentes: number | null;
     entrega: { total: number; lineas_invalidas: number; coincide_con_traza: boolean } | null;
+    /** Cuantas descargas del ERP trae `snapshots.json`. `null` si no se pudo bajar. */
+    snapshots: number | null;
     generado_por: string;
 }
