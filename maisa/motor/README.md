@@ -112,6 +112,27 @@ reparación, y un escaneo que el lector no supo medir no vale 0.0: la media de
 declara cuántas quedan fuera, para que 0.9903 no se lea como «y los escaneos,
 vete a saber».
 
+### El único contraste que mira desde fuera
+
+`oro.py` y `valida_entrega.py` comparan nuestro criterio con el nuestro. El
+contraste externo se hace con una referencia que **no se versiona**: se pasa como
+dato de entrada y la herramienta dice si cada decisión cae en el conjunto de
+resultados que esa referencia admite. Acepta el envoltorio de un `oracle.json`
+ajeno (`verdict.acceptable`, `verdict.primary`, `findings`) o un JSONL plano de
+decisiones, autodetectados por estructura.
+
+```bash
+PYTHONPATH=motor/src python motor/tools/conformidad.py \
+    --outcomes outputs/outcomes.jsonl --referencia <referencia.json|referencia.jsonl>
+```
+
+Sobre el lote de 500 y la referencia externa que usamos: 489/500 coinciden con su
+resultado preferido, 499/500 caen dentro de lo admisible (99.8%) y queda **un**
+`FUERA_ALTO` — el escaneo del que no se lee ni NIF ni fecha y del que la
+referencia solo admite `ESCALAR`/`NO_PAGAR`. Ese desacuerdo está atribuido en
+`docs/albertitos_plan.md`. Como es una medida y no una puerta, su exit 1 es
+esperado: no se puede colgar de CI sin lista blanca.
+
 ### Recortar la cola de revisión sin decidir ningún pago
 
 El motor manda 43 de las 500 facturas a `ESCALAR`: esas son la **cola de revisión
@@ -190,8 +211,9 @@ motor/
 ├── config/reglas.toml   la norma v3 como datos
 ├── src/maisa/           el motor (11 módulos)
 ├── tests/               suite + banco de oro (tests/oro/)
-├── tools/               oro.py, valida_entrega.py, censo_extraccion.py, cola_revision.py,
-│                        bench_motores.py, md_a_pdf.py, bench.py, evidencia_resiliencia.py
+├── tools/               oro.py, valida_entrega.py, conformidad.py, censo_extraccion.py,
+│                        cola_revision.py, bench_motores.py, md_a_pdf.py, bench.py,
+│                        evidencia_resiliencia.py
 ├── docs/                arquitectura, capacidad, resiliencia, lote 2, simulador
 ├── .cache/ocr/          texto de los 29 escaneados, indexado por sha256
 ├── .cache/motores/      lecturas de local y nube de esos 29, para medir sin repetir
