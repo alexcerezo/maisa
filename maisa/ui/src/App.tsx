@@ -1,25 +1,60 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
+import { AvisoFuente } from "./components/AvisoFuente";
 import FacturaDetallePage from "./pages/FacturaDetallePage";
 import FacturasPage from "./pages/FacturasPage";
 
 /**
- * Dos rutas reales, y una de ellas con parámetro.
+ * El armazon: cabecera, banda de fuente y las rutas.
  *
- * El detalle vive en la URL (`/facturas/:fileId`) y no en un estado interno de
- * la pantalla: así se puede recargar sin perderlo y el enlace se comparte. Es
- * lo único que hay que fijar antes de repartir los carriles, porque el carril
- * del detalle y el de la tabla tienen que estar de acuerdo en esto.
+ * La banda de fuente (`AvisoFuente`) vive **aqui** y no dentro de la tabla, y es
+ * lo unico de esta pantalla que se decidio con cuidado. Saber si lo que se esta
+ * leyendo es la API de ahora o el ultimo volcado importa igual en la tabla que en
+ * el detalle: una decision tomada sobre datos de hace un mes tiene que verse
+ * igual de marcada en los dos sitios. Dentro de `FacturasPage` solo saldria en la
+ * tabla, y quien llegase a una factura por un enlace directo no lo veria nunca.
  *
- * Ojo con el `*`: sin él, cualquier ruta desconocida deja la pantalla en blanco.
+ * El enlace de la cabecera conserva los filtros cuando ya se esta en la tabla:
+ * pulsar el nombre del producto no deberia borrar una busqueda que ha costado
+ * escribir. Desde el detalle si lleva a la lista limpia, porque alli el que
+ * manda es el boton "volver", que si trae los filtros.
  */
-export default function App() {
+function Estructura() {
+    const { pathname, search } = useLocation();
+    const destino = pathname === "/facturas" ? `/facturas${search}` : "/facturas";
+
     return (
-        <Routes>
-            <Route path="/" element={<Navigate to="/facturas" replace />} />
-            <Route path="/facturas" element={<FacturasPage />} />
-            <Route path="/facturas/:fileId" element={<FacturaDetallePage />} />
-            <Route path="*" element={<Navigate to="/facturas" replace />} />
-        </Routes>
+        <div className="min-h-screen bg-slate-50 text-slate-900">
+            <header className="border-b border-slate-200 bg-white">
+                <div className="mx-auto flex max-w-[110rem] items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
+                    <Link
+                        to={destino}
+                        className="text-sm font-semibold tracking-tight text-slate-900 hover:text-slate-600"
+                    >
+                        Maisa
+                    </Link>
+                </div>
+            </header>
+
+            <div className="mx-auto max-w-[110rem] px-4 pt-4 sm:px-6 lg:px-8">
+                <AvisoFuente />
+            </div>
+
+            <Routes>
+                <Route path="/" element={<Navigate to="/facturas" replace />} />
+                <Route path="/facturas" element={<FacturasPage />} />
+                <Route path="/facturas/:fileId" element={<FacturaDetallePage />} />
+                {/*
+                 * El comodin es obligatorio: sin el, una direccion desconocida deja
+                 * la pantalla en blanco, sin cabecera ni banda de fuente, y parece
+                 * que la aplicacion se ha roto.
+                 */}
+                <Route path="*" element={<Navigate to="/facturas" replace />} />
+            </Routes>
+        </div>
     );
+}
+
+export default function App() {
+    return <Estructura />;
 }
