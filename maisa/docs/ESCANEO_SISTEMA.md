@@ -10,6 +10,15 @@ está desplegado, cómo está configurado, qué responde y qué falta. No sustit
 (`docs/arranque_servicios.md`) ni al ADR (`docs/ADR-0001-middleware-bff.md`): los resume y los
 verifica contra la máquina.
 
+> **Actualización posterior al escaneo (TLS resuelto).** El hallazgo #2 de §9 (**sin TLS**) ya está
+> cerrado: delante de la API hay un **Caddy** (`albertitos-proxy`) que termina TLS con certificado
+> de **Let's Encrypt** y reenvía a `albertitos-api:8000`. La vía pública pasa a ser
+> **`https://82.70.78.22.sslip.io`** y el NSG abre también **80** y **443**. El `8010` en claro sigue
+> abierto a propósito para diagnóstico, pero un visor servido por HTTPS **no puede** usarlo (bloqueo
+> por *mixed content*): es la razón de este cambio. Los números de este documento (§3, §5.3, §10) son
+> los del escaneo original; para el estado actual de la puerta pública, ver
+> `maisa/proxy/README.md` y §2.5 del README de la API.
+
 ---
 
 ## 1. Resumen ejecutivo
@@ -24,7 +33,7 @@ verifica contra la máquina.
 | Visor web (`maisa/ui/`) | 🔴 **Vacío** (solo `.gitkeep`) — `/` devuelve JSON informativo |
 | Traza de entrega | 🟢 500 líneas, `PAGAR 448 / NO_PAGAR 9 / ESCALAR 43` |
 | Red compartida `albertitos_net` | 🟢 Existe, con los 3 contenedores dentro |
-| TLS / autenticación fuerte | 🔴 Ausentes — la API corre en **modo abierto** y es pública |
+| TLS / autenticación fuerte | 🟡 **TLS resuelto** después del escaneo (Caddy + Let's Encrypt); la **autenticación fuerte sigue ausente**: la API corre en **modo abierto** y es pública |
 
 **Conclusión:** el núcleo (Mongo + OCR + API + motor) está **operativo y verificado de punta a
 punta**. Lo que falta es de cara al exterior: visor, TLS y autenticación real.
@@ -166,7 +175,9 @@ Respuesta de `GET /health`: `{"status":"ok", ...}` con ambos motores disponibles
 ### 5.3 API/BFF — `albertitos-api`
 
 - **Imagen:** `albertitos-api:latest`, usuario `apiuser`, `restart: unless-stopped`.
-- **Publicación:** `0.0.0.0:8010 -> 8000` — **la única superficie pública**.
+- **Publicación:** `0.0.0.0:8010 -> 8000`. En el escaneo era **la única superficie pública**; desde
+  entonces hay un proxy TLS delante y la vía de reparto es `https://82.70.78.22.sslip.io` (ver la
+  nota de cabecera).
 - **Rol:** capa de transporte/lectura/captura. **No decide nada**; lee la traza, sirve PDFs,
   consulta Mongo (solo lectura del catálogo) y hace de proxy del OCR.
 - **Volúmenes (solo lectura):** `outputs/`, `data/facturas/`, `ui/`.
@@ -293,7 +304,7 @@ alexcerezo-maisa/
 | # | Severidad | Hallazgo | Detalle |
 |---|---|---|---|
 | 1 | 🔴 Crítico | **API pública en modo abierto y con escritura** | `modo_abierto: true`, `API_KEY` sin definir, `SUBIDAS_HABILITADAS=1`. Cualquiera que alcance `82.70.78.22:8010` puede **leer y subir facturas**. |
-| 2 | 🔴 Crítico | **Sin TLS** | Todo el tráfico (incluidas subidas de PDF) viaja en claro por Internet. |
+| 2 | 🟢 Resuelto | ~~**Sin TLS**~~ **TLS por delante (Caddy + Let's Encrypt)** | Cerrado después del escaneo: la vía pública es `https://82.70.78.22.sslip.io` y el HTTP redirige con `308`. Ver la nota de cabecera y `maisa/proxy/README.md`. |
 | 3 | 🟠 Alto | **Puerto 8866 del OCR publicado en `0.0.0.0`** | No lo abre el NSG, pero es superficie innecesaria; el frontend entra por `/api/ocr`. |
 | 4 | 🟠 Alto | **Persistencia del motor en Mongo incompleta** | `expedientes`, `eventos`, `excel_filas` vacíos; las decisiones solo viven en JSONL. |
 | 5 | 🟡 Medio | **Visor (`maisa/ui/`) vacío** | La tubería está probada, pero `/` devuelve JSON en vez del visor. |
@@ -316,7 +327,14 @@ curl -s http://127.0.0.1:8010/health/ready -o /dev/null -w '%{http_code}\n'
 curl -s http://127.0.0.1:8010/api/estadisticas
 curl -s http://127.0.0.1:8866/health
 
-# Desde Internet (la única puerta)
+# Desde Internet (la puerta pública: HTTPS con certificado de Let's Encrypt)
+curl -s -o /dev/null -w '%{http_code}\n' https://82.70.78.22.sslip.io/health
+# El HTTP redirige a HTTPS (esperado: 308)
+curl -s -o /dev/null -w '%{http_code} -> %{redirect_url}\n' http://82.70.78.22.sslip.io/api/meta
+# El certificado y su validez
+echo | openssl s_client -connect 82.70.78.22:443 -servername 82.70.78.22.sslip.io 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -dates
+# La API en claro sigue publicada, pero no sirve desde una página HTTPS
 curl -s -o /dev/null -w '%{http_code}\n' http://82.70.78.22:8010/health
 
 # Puertos que NO deben responder desde fuera (esperado: 000)

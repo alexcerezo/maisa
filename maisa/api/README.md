@@ -20,7 +20,7 @@ Albertitos (motor de decisión de pago de facturas, HackSpain 2026).
 
 > **Se consume por Internet o desde dentro de Docker, y por ningún otro sitio.** La LAN
 > (`10.0.0.75`) **no** es una vía soportada: no se reparte esa URL ni se documenta como forma de
-> acceso. Las dos únicas bases válidas son `http://82.70.78.22:8010` (pública) y
+> acceso. Las dos únicas bases válidas son `https://82.70.78.22.sslip.io` (pública, con TLS) y
 > `http://albertitos-api:8000` (DNS interno de la red Docker). Ver §2.1.
 
 **Cómo leer este documento.** Si vienes de cero: §0 (resumen y **vocabulario** — sin él, nombres
@@ -35,15 +35,15 @@ facturas**, §3.8. Si lo que quieres es **levantarlo**: §5 y `docs/arranque_ser
 
 | Pregunta | Respuesta |
 |---|---|
-| **¿Por dónde entro desde Internet?** | **`http://82.70.78.22:8010`** — el puerto está abierto en el NSG de la instancia y verificado desde fuera de la red. Es la **única** vía pública. Ver §2.4. |
+| **¿Por dónde entro desde Internet?** | **`https://82.70.78.22.sslip.io`** — un Caddy delante termina TLS con certificado de Let's Encrypt y reenvía a la API. Es la **única** URL que hay que repartir. El `8010` en claro sigue abierto, pero **no sirve** desde una página HTTPS: el navegador lo bloquea por *mixed content*. Ver §2.1 y §2.5. |
 | ¿Y desde otro contenedor? | `http://albertitos-api:8000` (DNS interno). Ojo: el puerto **interno** es `8000`, no `8010`. |
 | ¿Y desde la propia máquina? | `http://127.0.0.1:8010` — solo para el healthcheck y el diagnóstico. No es una vía de reparto. |
 | **¿Y por la LAN (`10.0.0.75`)?** | **No.** La LAN no se usa nunca como vía de consumo. Ver §2.1. |
-| ¿Documentación interactiva? | `http://82.70.78.22:8010/docs` |
+| ¿Documentación interactiva? | `https://82.70.78.22.sslip.io/docs` |
 | ¿Hace falta alguna cabecera? | Solo `X-API-Key` **si** arrancas con `API_KEY` definida. Por defecto, ninguna. |
 | **¿Puedo subir facturas nuevas?** | Sí: `POST /api/facturas`, multipart con el campo `file`. Guarda el PDF en GridFS, el expediente en Mongo y la traza en `eventos`. Ver §3.8. |
 | ¿Está expuesta la base de datos? | **No.** Mongo sigue en `127.0.0.1:27017` y no se publica. |
-| ¿Hay CORS que configurar? | No, si el frontend se sirve desde la propia API (mismo origen). |
+| ¿Hay CORS que configurar? | No, si el frontend se sirve desde la propia API (mismo origen). **Sí** si vive en otro dominio —el visor está en Vercel—: su origen tiene que estar en `CORS_ORIGINS`. Ver §4. |
 
 ### Vocabulario: las palabras que usa el resto del documento
 
@@ -145,7 +145,8 @@ flowchart TD
 ```mermaid
 flowchart LR
     subgraph ABIERTO["✅ Publicado en 0.0.0.0 del host"]
-        P1["albertitos-api · :8010<br/>→ abierto en el NSG (Internet)"]
+        P0["albertitos-proxy · :443 y :80<br/>→ abierto en el NSG: la puerta HTTPS (§2.5)"]
+        P1["albertitos-api · :8010<br/>→ abierto en el NSG (diagnóstico, en claro)"]
         P2["ocr-api · :8866<br/>→ NO abierto en el NSG"]
     end
     subgraph CERRADO["🔒 Solo loopback o red interna (no alcanzable desde fuera)"]
@@ -171,15 +172,21 @@ LAN de la instancia (`10.0.0.75`) no se reparte y no se documenta como forma de 
 
 | Desde dónde | URL base | Por qué |
 |---|---|---|
-| **Internet (vía de reparto)** | **`http://82.70.78.22:8010`** | IP pública de la VNIC, abierta en el NSG de la instancia (§2.4). |
+| **Internet (vía de reparto)** | **`https://82.70.78.22.sslip.io`** | Nombre `sslip.io` que resuelve a la IP pública de la VNIC. Ahí termina TLS un Caddy (§2.5) que reenvía a la API. **Esta es la URL que se reparte.** |
 | **Otro contenedor en `albertitos_net`** | **`http://albertitos-api:8000`** | DNS interno. Ojo: el puerto **interno** es `8000`, no `8010`. |
 | La propia máquina (diagnóstico) | `http://127.0.0.1:8010` | Mapeo `0.0.0.0:8010` → `8000` del contenedor. Sirve para el healthcheck y para probar sin salir. |
-| Swagger UI | `http://82.70.78.22:8010/docs` | Documentación interactiva. |
+| Internet en claro (diagnóstico) | `http://82.70.78.22:8010` | La misma API sin pasar por Caddy. Sigue abierta a propósito, pero **desde una página HTTPS el navegador la bloquea**: no la repartas. |
+| Swagger UI | `https://82.70.78.22.sslip.io/docs` | Documentación interactiva. |
 
 > **La IP pública es efímera.** En OCI una IP efímera puede cambiar si se reinicia la instancia.
 > Para comprobar la actual: `oci public-ip get --private-ip-id <ocid> --query 'data."ip-address"'`
 > (ver §2.4) o, desde fuera, la que te hayan repartido. Si cambia, no hay que tocar nada en la API
 > (ya escucha en `0.0.0.0`); solo hay que repartir la URL nueva.
+>
+> **Ojo con el nombre HTTPS.** El certificado es del **nombre**, y el nombre lleva la IP embebida
+> (`82.70.78.22.sslip.io`). Si la IP cambia, ese nombre deja de apuntar aquí: hay que actualizar
+> `SITE_ADDRESS` en `maisa/proxy/.env` y volver a levantar el proxy, que pedirá el certificado del
+> nombre nuevo. Repartir la IP nueva no basta.
 
 **Qué puerto elegir.** `8010` es el puerto del API. El `8009` es el ERP simulado, el `8866` el OCR
 y el `27017` Mongo. Para cambiarlo, define `API_PORT` (ver §4) y vuelve a levantar el compose.
@@ -198,29 +205,29 @@ y el `27017` Mongo. Para cambiarlo, define `API_PORT` (ver §4) y vuelve a levan
 
 ```console
 # Sin API_KEY (modo por defecto): no hace falta ninguna cabecera.
-$ curl -s http://82.70.78.22:8010/api/estadisticas
+$ curl -s https://82.70.78.22.sslip.io/api/estadisticas
 {"total":500,"por_resultado":{"PAGAR":448,"NO_PAGAR":9,"ESCALAR":43}, ...}
 
 # Con API_KEY definida: hay que mandarla en todas las rutas de /api.
-$ curl -s -H 'X-API-Key: <clave>' http://82.70.78.22:8010/api/estadisticas
+$ curl -s -H 'X-API-Key: <clave>' https://82.70.78.22.sslip.io/api/estadisticas
 {"total":500, ...}                       # 200 si la clave coincide
 
-$ curl -s -w '\nHTTP %{http_code}\n' http://82.70.78.22:8010/api/estadisticas
+$ curl -s -w '\nHTTP %{http_code}\n' https://82.70.78.22.sslip.io/api/estadisticas
 {"error":{"codigo":"no_autorizado","mensaje":"Falta la cabecera X-API-Key o no es valida."}}
 HTTP 401
 
 # El health sigue siendo público a propósito (para el healthcheck y el panel).
-$ curl -s http://82.70.78.22:8010/health
+$ curl -s https://82.70.78.22.sslip.io/health
 {"estado":"ok","servicio":"albertitos-api","dependencias":{"mongo":{...},"ocr":{...},"escritura":{...}}, ...}
 
 # Subida al OCR: multipart, campo `file`.
-$ curl -s -X POST 'http://82.70.78.22:8010/api/ocr?engine=cloud' \
+$ curl -s -X POST 'https://82.70.78.22.sslip.io/api/ocr?engine=cloud' \
        -F file=@maisa/data/facturas/2026-01-08_P001.pdf
 {"texto":"FACTURA\n\nFactura: 2026/11604 Fecha: 08/01/2026\n\nPedido: PO-2...",
  "motor":"cloud","paginas":1,"lineas":0,"segundos_ocr":4.4016,"segundos_proxy":4.4125, ...}
 
 # Subida de una factura NUEVA: mismo campo `file`. Ver §3.8.
-$ curl -s -X POST 'http://82.70.78.22:8010/api/facturas?lote=1' \
+$ curl -s -X POST 'https://82.70.78.22.sslip.io/api/facturas?lote=1' \
        -F file=@maisa/data/facturas/2026-01-08_P001.pdf
 {"file_id":"2026-01-08_P001.pdf","duplicado":false,"lote_id":"lote1", ...}
 ```
@@ -229,7 +236,7 @@ $ curl -s -X POST 'http://82.70.78.22:8010/api/facturas?lote=1' \
 
 ```console
 # 1. La API responde por Internet (esta es la via de reparto).
-$ curl -s -o /dev/null -w '%{http_code}\n' http://82.70.78.22:8010/health
+$ curl -s -o /dev/null -w '%{http_code}\n' https://82.70.78.22.sslip.io/health
 200
 
 # 2. Y por el DNS interno, desde dentro de la red Docker.
@@ -249,10 +256,15 @@ $ curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 http://82.70.78.22:27017
 # 5. Ni el ERP simulado, que solo escucha en loopback.
 $ curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 http://82.70.78.22:8009
 000
+
+# 6. Y por HTTP el proxy redirige a HTTPS (nada se sirve en claro por el 443/80).
+$ curl -s -o /dev/null -w '%{http_code} -> %{redirect_url}\n' http://82.70.78.22.sslip.io/api/meta
+308 -> https://82.70.78.22.sslip.io/api/meta
 ```
 
-Los cinco salen así en esta máquina: la API responde por Internet y por el DNS interno, y todo lo
-demás (`8866`, `27017`, `8009`) expira desde fuera. Eso es exactamente el reparto que se quiere.
+Los cinco primeros salen así en esta máquina: la API responde por Internet y por el DNS interno, y
+todo lo demás (`8866`, `27017`, `8009`) expira desde fuera. Eso es exactamente el reparto que se
+quiere. El sexto confirma que la puerta pública es HTTPS: ver §2.5.
 
 ### 2.4 ¿Y desde Internet? La IP pública de la VM de Oracle
 
@@ -262,7 +274,7 @@ Esta máquina es una instancia de **Oracle Cloud** (`eu-madrid-3`, `VM.Standard.
 | Concepto | Valor | ¿Sirve para entrar desde fuera? |
 |---|---|---|
 | IP privada del VCN | `10.0.0.75` (subred `10.0.0.0/24`) | Sí, desde dentro del VCN (no es una vía de consumo). |
-| **IP pública de la VNIC** | **`82.70.78.22`** — Oracle Corporation, AS31898 | **Sí, ya abierta.** Es la URL que se reparte. Ver §2.1. |
+| **IP pública de la VNIC** | **`82.70.78.22`** — Oracle Corporation, AS31898 | **Sí, ya abierta.** Es la IP que hay detrás del nombre HTTPS que se reparte. Ver §2.1. |
 | Nombre interno de la instancia | `instance-20260911-1133.maisa.oraclevcn.com` | Solo resuelve **dentro del VCN** (DNS interno de Oracle); no existe en el DNS público. |
 
 La `82.70.78.22` es una IP pública **propia de la VNIC**, no un NAT compartido: lo confirma que la
@@ -296,7 +308,9 @@ y **no pasa por `INPUT`**, así que el `REJECT` final del cortafuegos del host n
 | Capa | Regla | Efecto |
 |---|---|---|
 | Security list de la subred | `TCP 22` desde `0.0.0.0/0` + ICMP | Solo SSH. **No se ha tocado.** |
-| NSG de la instancia | `INGRESS TCP 8010` desde `0.0.0.0/0` | **Abre la API.** Es la única regla de ingreso del NSG. |
+| NSG de la instancia | `INGRESS TCP 80` desde `0.0.0.0/0` | Reto ACME de Let's Encrypt y redirección a HTTPS. |
+| NSG de la instancia | `INGRESS TCP 443` desde `0.0.0.0/0` | **La puerta del sistema**: aquí termina el TLS (§2.5). |
+| NSG de la instancia | `INGRESS TCP 8010` desde `0.0.0.0/0` | La API en claro. Se mantiene a propósito para diagnóstico, pero un visor servido por HTTPS **no puede** usarla (mixed content). |
 | NSG de la instancia | `EGRESS all` a `0.0.0.0/0` | Salida. La pone la *quick action* de la consola. |
 
 El puerto se abrió con:
@@ -360,8 +374,9 @@ base de datos. Si esto no es una demo desechable, antes de repartir la URL:
 1. **`API_KEY` obligatoria** (§4). Es un `X-API-Key` compartido: sirve contra *scraping* casual, no
    contra un atacante decidido. Con `SUBIDAS_HABILITADAS=false` se cierra la escritura sin tocar el
    resto de la API.
-2. **TLS por delante** (Caddy, nginx o el balanceador de OCI). Tal cual, la clave, los PDFs subidos
-   y los datos viajan en claro por HTTP.
+2. ~~**TLS por delante**~~ **Hecho** (§2.5): hay un Caddy con certificado de Let's Encrypt delante,
+   y la URL que se reparte es `https://82.70.78.22.sslip.io`. Queda cerrar al público el `8010` en
+   claro cuando ya nadie lo necesite para diagnóstico.
 3. **Acotar el origen** si la audiencia es conocida: cambiar el `source` de la regla de `0.0.0.0/0`
    a los CIDR reales.
 
@@ -373,10 +388,10 @@ $ oci network nsg rules remove \
     --security-rules '[{"direction":"INGRESS","protocol":"6","source":"0.0.0.0/0","sourceType":"CIDR_BLOCK","isStateless":false,"tcpOptions":{"destinationPortRange":{"min":8010,"max":8010}}}]'
 ```
 
-> **Aviso de seguridad (decisión pendiente).** En este despliegue el `8010` está abierto al mundo,
-> `API_KEY` **no** está definida y **no hay TLS**. La API lee 500 facturas y **ahora también
-> escribe**. Es aceptable para la demo del hackathon, pero es lo primero que hay que cerrar antes de
-> dejar esto en marcha: activa `API_KEY` y/o pon TLS por delante.
+> **Aviso de seguridad.** El **TLS ya está resuelto** (§2.5), pero el `8010` en claro **sigue**
+> abierto al mundo y `API_KEY` **no** está definida. La API lee 500 facturas y **también escribe**.
+> Es aceptable para la demo del hackathon, pero antes de dejarlo en marcha de verdad hay que activar
+> `API_KEY` y cerrar el `8010` (o restringir su `source` a los CIDR reales).
 
 > **Pendiente de limpieza en OCI.** La *quick action* de la consola dejó **dos** NSG con el mismo
 > nombre (`ig-quick-action-NSG`) y **los dos** colgando de la misma VNIC. La regla del `8010` está
@@ -393,6 +408,52 @@ $ ssh -N -L 8010:127.0.0.1:8010 ubuntu@82.70.78.22
 
 Con el túnel abierto, `http://127.0.0.1:8010` de tu máquina es la API de la VM, y el `8010` puede
 quedarse cerrado en el NSG.
+
+---
+
+### 2.5 HTTPS: por qué hay un proxy delante
+
+**El problema, en una frase:** si el visor se sirve por `https://…` (Vercel lo sirve así), el
+navegador **no le deja** llamar a `http://82.70.78.22:8010`. Es *mixed content*: la petición ni sale,
+da error antes de llegar al servidor. No se arregla desde la API — hay que ponerle TLS delante.
+
+**La solución:** un contenedor **Caddy** (`albertitos-proxy`, en `maisa/proxy/`) que escucha en el
+**80** y el **443**, pide un certificado de **Let's Encrypt** y reenvía a `albertitos-api:8000` por
+la red interna. La API sigue igual: escucha en `8000` dentro de su contenedor y no sabe nada de TLS.
+
+```
+Navegador / visor (HTTPS)
+        │  443, TLS
+        ▼
+albertitos-proxy  (Caddy, :443)  ── pide y renueva el certificado solo
+        │  HTTP por albertitos_net, añade X-Real-IP
+        ▼
+albertitos-api  (:8000 dentro del contenedor)
+```
+
+**¿Y el nombre?** No hay dominio, así que se usa **`sslip.io`**, un DNS público que devuelve la IP
+que va escrita en el nombre: `82.70.78.22.sslip.io` → `82.70.78.22`. Con eso Let's Encrypt emite un
+certificado **de verdad**, sin avisos, para un nombre que resuelve a esta máquina. `sslip.io` está
+en la *Public Suffix List*, así que el límite de emisión de Let's Encrypt es por nombre y no se
+comparte con nadie.
+
+**Lo único que hay que saber para consumirla:**
+
+```console
+$ export API_BASE=https://82.70.78.22.sslip.io
+$ curl -s "$API_BASE/health"        # 200, JSON con "estado":"ok"
+$ curl -s "$API_BASE/api/meta"      # 200, "modo_abierto": true
+```
+
+- **Certificado válido**: emisor `Let's Encrypt`, nombre `82.70.78.22.sslip.io`, se renueva solo.
+- **HTTP redirige**: `http://82.70.78.22.sslip.io/api/meta` responde **308** a HTTPS.
+- **La IP real del cliente llega bien**: Caddy añade `X-Real-IP` y el contenedor de la API confía en
+  el proxy vía `FORWARDED_ALLOW_IPS` (§5), así que los logs y las estadísticas ven la IP de origen y
+  no la del proxy.
+- **CORS**: como el visor vive en otro dominio (Vercel), su origen tiene que estar en
+  `CORS_ORIGINS` (§4). Con `*` funciona para la demo, pero no es lo que quieres en producción.
+
+Operación, diagnóstico y problemas conocidos del proxy: **`maisa/proxy/README.md`**.
 
 ---
 
@@ -537,7 +598,7 @@ solo la subida falla; por eso `escritura` aparece en el cuerpo pero no tumba `/h
 
 ### 3.5 Ejemplos `curl` (salidas reales)
 
-Contra `http://127.0.0.1:8010`. Sustituye el host por `http://82.70.78.22:8010` desde Internet o
+Contra `http://127.0.0.1:8010`. Sustituye el host por `https://82.70.78.22.sslip.io` desde Internet o
 por `http://albertitos-api:8000` desde otro contenedor (ver §2.1).
 
 ```console
@@ -754,7 +815,7 @@ Formato uniforme, mensajes en español, sin trazas internas ni cadenas de conexi
 ### 3.7 Recetas: el camino que va a recorrer el frontend
 
 Cinco llamadas cubren el visor entero. Los ejemplos van contra `127.0.0.1`; usa
-`http://82.70.78.22:8010` desde Internet o `http://albertitos-api:8000` desde otro contenedor.
+`https://82.70.78.22.sslip.io` desde Internet o `http://albertitos-api:8000` desde otro contenedor.
 Añade `-H 'X-API-Key: ...'` en todas si `API_KEY` está definida.
 
 **1. La cabecera del panel** — dos números y a pintar:
@@ -801,7 +862,7 @@ $ curl -s http://127.0.0.1:8010/api/facturas/2026-0233-A_catering.pdf
 **4. El PDF original**, sin descargarlo (`content-disposition: inline`):
 
 ```html
-<iframe src="http://82.70.78.22:8010/api/facturas/2026-0233-A_catering.pdf/pdf"></iframe>
+<iframe src="https://82.70.78.22.sslip.io/api/facturas/2026-0233-A_catering.pdf/pdf"></iframe>
 ```
 
 **5. Leer un PDF que aún no está en la traza** (subida directa al OCR, sin pasar por el motor):
@@ -895,7 +956,7 @@ lo exige). `tamano_bytes` es `long` (`Int64`) y `sha256` casa `^[a-f0-9]{64}$`.
 **Subir sin OCR** (lo normal: solo se guarda el PDF):
 
 ```console
-$ curl -s -X POST 'http://82.70.78.22:8010/api/facturas?lote=1' \
+$ curl -s -X POST 'https://82.70.78.22.sslip.io/api/facturas?lote=1' \
        -F file=@maisa/data/facturas/2026-01-08_P001.pdf
 {"file_id":"2026-01-08_P001.pdf","duplicado":false,"lote_id":"lote1",
  "estado_proceso":"PENDIENTE",
@@ -918,7 +979,7 @@ HTTP 201
 **La misma subida otra vez** (idempotente, no reescribe):
 
 ```console
-$ curl -s -w '\nHTTP %{http_code}\n' -X POST 'http://82.70.78.22:8010/api/facturas?lote=1' \
+$ curl -s -w '\nHTTP %{http_code}\n' -X POST 'https://82.70.78.22.sslip.io/api/facturas?lote=1' \
        -F file=@maisa/data/facturas/2026-01-08_P001.pdf
 {"file_id":"2026-01-08_P001.pdf","duplicado":true,"lote_id":"lote1",
  "estado_proceso":"PENDIENTE","sha256":"12a5e1ef…","tamano_bytes":1904,
@@ -933,14 +994,14 @@ líneas ya normalizadas (0-based, `bbox` de 4 doubles).
 **Consultar lo subido** — no se mezcla con la traza del motor:
 
 ```console
-$ curl -s 'http://82.70.78.22:8010/api/expedientes?limit=1'
+$ curl -s 'https://82.70.78.22.sslip.io/api/expedientes?limit=1'
 {"total":1,"limit":1,"offset":0,"devueltas":1,"items":[{"_id":"2026-01-08_P001.pdf", ...}]}
 
-$ curl -s http://82.70.78.22:8010/api/expedientes/2026-01-08_P001.pdf
+$ curl -s https://82.70.78.22.sslip.io/api/expedientes/2026-01-08_P001.pdf
 {"_id":"2026-01-08_P001.pdf","lote_id":"lote1","estado_proceso":"PENDIENTE", ...}
 
 # El PDF sale por el mismo endpoint que los de la traza: primero disco, luego GridFS.
-$ curl -s -D - -o /dev/null http://82.70.78.22:8010/api/facturas/2026-01-08_P001.pdf/pdf
+$ curl -s -D - -o /dev/null https://82.70.78.22.sslip.io/api/facturas/2026-01-08_P001.pdf/pdf
 HTTP/1.1 200 OK
 content-type: application/pdf
 content-disposition: inline; filename="2026-01-08_P001.pdf"
@@ -1023,7 +1084,23 @@ $ docker compose -f maisa/api/docker-compose.yml up -d --build
 
 $ curl -s http://127.0.0.1:8010/health
 {"estado":"ok","servicio":"albertitos-api","dependencias":{...},"datos":{...}}
+```
 
+Si además quieres la vía pública (HTTPS), levanta el proxy TLS **después** de la API: necesita que
+`albertitos-api` ya esté en `albertitos_net` para poder resolver el nombre.
+
+```console
+$ cp maisa/proxy/.env.example maisa/proxy/.env   # SITE_ADDRESS=82.70.78.22.sslip.io
+$ docker compose -f maisa/proxy/docker-compose.yml up -d
+ Container albertitos-proxy  Started
+
+$ curl -s -o /dev/null -w '%{http_code}\n' https://82.70.78.22.sslip.io/health
+200
+```
+
+Detalles del proxy, certificados y diagnóstico: `maisa/proxy/README.md`.
+
+```console
 $ docker compose -f maisa/api/docker-compose.yml logs -f api
 albertitos-api  | INFO  albertitos-api: Traza cargada: 500 facturas (/datos/outputs/outcomes_traza.jsonl)
 albertitos-api  | WARNING albertitos-api: API_KEY no definida: la API arranca en MODO ABIERTO
@@ -1040,13 +1117,20 @@ motor se montan **en solo lectura** (`maisa/outputs` → `/datos/outputs`, `mais
 `/datos/facturas`, `maisa/ui` → `/datos/ui`), que son justo los valores de `OUTPUTS_DIR`,
 `FACTURAS_DIR` y `UI_DIR` que fija el `Dockerfile`.
 
+> **`FORWARDED_ALLOW_IPS` (detrás del proxy TLS).** Con Caddy delante, la conexión a la API llega
+> desde otro contenedor, no desde `127.0.0.1`. Uvicorn solo se fía de `127.0.0.1` por defecto, así
+> que sin esto las cabeceras `X-Forwarded-*` se ignoran y **todos** los clientes aparecerían con la
+> IP del proxy. El compose lo fija a la subred de `albertitos_net` (`172.20.0.0/16`) — una lista
+> blanca de CIDR, **no** `*`, para que un cliente que entre directo al `8010` no pueda falsificar su
+> `X-Forwarded-For`. Si tu red Docker usa otra subred, cambia el valor en `maisa/api/.env`.
+
 Para comprobar el despliegue de una pasada:
 
 ```console
-$ ./maisa/api/smoke_lan.sh --publico --engine local
-humo albertitos-api · bases: http://82.70.78.22:8010 · OCR engine=local
+$ PUBLIC_IP=82.70.78.22 ./maisa/api/smoke_lan.sh --publico --engine local
+humo albertitos-api · bases: https://82.70.78.22.sslip.io · OCR engine=local
 ...
-  OK    http://82.70.78.22:8010 /health                200 en 0.012s · mongo 1.97 ms · ocr 4.86 ms · escritura 2.07 ms
+  OK    https://82.70.78.22.sslip.io /health           200 en 0.076s · mongo 2.36 ms · ocr 3.97 ms · escritura 2.98 ms
 ...
   OK    POST /api/ocr?engine=local                     200 en 2.186s (ocr 2.177s) · motor=local · 1904 B enviados
 ==========================================================================
@@ -1062,8 +1146,10 @@ puede estar en *cooldown*, así que no sirve para un humo determinista. Solo nec
 Con `--subir` añade el ciclo de escritura completo (`201`, luego `200 duplicado`, `GET
 /api/expedientes/{file_id}` y el PDF desde GridFS) y acaba en **14 comprobaciones**. **Escribe en
 Mongo**, así que es opcional y al final imprime el comando para borrar lo que ha dejado. La variable
-`PUBLIC_IP` (o `--base <URL>`) es obligatoria con `--publico`; el nombre del fichero es histórico y
-la LAN no se prueba a propósito (ver la cabecera del propio script).
+`PUBLIC_IP` (o `--base <URL>`) es obligatoria con `--publico`; con `--publico` la base que se prueba
+es `https://$PUBLIC_IP.sslip.io` (la vía de reparto real, con TLS) y `PUBLIC_BASE=<url>` la cambia.
+El nombre del fichero es histórico y la LAN no se prueba a propósito (ver la cabecera del propio
+script).
 
 La imagen usa `python:3.12-slim`, corre como usuario **no root** (`apiuser`, uid 10001) y trae
 `HEALTHCHECK` contra `/health` (no `/health/ready`: un contenedor debe reiniciarse si el proceso no
@@ -1134,6 +1220,10 @@ $ uv run --python .venv-api/bin/python pytest maisa/api
   `MONGO_ROOT_PASSWORD` para que el contenedor expuesto no lleve la clave de root encima. No hay
   rutas absolutas de máquina escritas a mano: los defaults se derivan de la posición del paquete.
 - **Errores consistentes.** JSON uniforme, mensajes en español, sin trazas internas.
+- **TLS terminado en un proxy, no en la API.** Delante hay un Caddy (`albertitos-proxy`) con
+  certificado de Let's Encrypt que reenvía a `albertitos-api:8000` y añade `Strict-Transport-Security`.
+  La API no habla TLS ni falta que le hace: se queda escuchando en `8000` dentro de la red Docker y
+  la clave privada nunca entra en su contenedor. Ver §2.5.
 
 ---
 
@@ -1173,6 +1263,17 @@ maisa/api/
 La traza se lee con **recarga automática**: si el motor reescribe `outcomes_traza.jsonl`, la
 siguiente petición ya sirve los datos nuevos sin reiniciar la API.
 
+El terminador TLS vive aparte, en su propio proyecto compose, para que la API siga siendo arrancable
+sola (tests, local, o detrás de otro proxy):
+
+```
+maisa/proxy/
+├── Caddyfile            # TLS + reverse_proxy a albertitos-api:8000
+├── docker-compose.yml   # proyecto albertitos-proxy, se une a albertitos_net
+├── .env.example         # SITE_ADDRESS, API_UPSTREAM
+└── README.md            # operación, NSG, verificación y problemas conocidos
+```
+
 ---
 
 ## 8. Qué queda pendiente
@@ -1191,8 +1292,15 @@ siguiente petición ya sirve los datos nuevos sin reiniciar la API.
   `ejecuciones` y `excel_filas` siguen vacías. La API ya lee y escribe Mongo, así que añadirlo es
   un router.
 - **Autenticación real.** `API_KEY` es una clave compartida: sirve contra *scraping* casual, no
-  contra un atacante decidido. Falta usuario/rol (el esquema ya define `albertitos_app`) y **TLS por
-  delante**, porque la API ya está en Internet y **escribe**. Ver el aviso de §2.4.
+  contra un atacante decidido. Falta usuario/rol (el esquema ya define `albertitos_app`). ~~**TLS por
+  delante**~~ **Hecho** (§2.5): la vía pública ya es `https://82.70.78.22.sslip.io`. Queda cerrar el
+  `8010` en claro, que sigue abierto para diagnóstico. Ver el aviso de §2.4.
+- **Cerrar el `8010` en claro.** Cuando nadie necesite ya el acceso directo para diagnosticar, hay
+  que quitar esa regla del NSG: deja la API accesible solo por el proxy (que además añade HSTS). Es
+  el mismo comando de §2.4.
+- **Un dominio propio.** `82.70.78.22.sslip.io` vale para el hackathon, pero lleva la IP dentro: si
+  la IP efímera cambia, el nombre deja de resolver y hay que reemitir el certificado. Con un dominio
+  de verdad (`api.algo.com`) esto se va solo y además permite mover la máquina sin tocar la URL.
 - **`GET /api/asientos/{asiento_id}` no filtra por `vigente`.** Con un solo snapshot en la base es
   equivalente; cuando haya varios, un mismo `asiento_id` existirá en varios snapshots y habrá que
   decidir cuál devolver (o devolver todos).
@@ -1209,5 +1317,6 @@ siguiente petición ya sirve los datos nuevos sin reiniciar la API.
 
 - `maisa/docs/ADR-0001-middleware-bff.md` — la decisión de arquitectura y sus alternativas.
 - `maisa/docs/arranque_servicios.md` — runbook para levantar todo desde cero.
+- `maisa/proxy/README.md` — el proxy TLS (Caddy + Let's Encrypt): operación y diagnóstico.
 - `maisa/diseño_conceptual.md` (D-11, D-12) y `maisa/diseño_logico.md` §13 — las reglas previas
   sobre el replica set y la no exposición de la base de datos.

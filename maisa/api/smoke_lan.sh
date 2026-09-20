@@ -13,6 +13,11 @@
 # bases a probar se pasan con --base (repetible) o con --publico. La LAN no se
 # prueba a proposito: no es una via soportada.
 #
+# --publico prueba la via de reparto real, que es HTTPS: construye la base como
+# https://$PUBLIC_IP.sslip.io, el nombre que atiende el proxy TLS (maisa/proxy).
+# Con PUBLIC_BASE=<url> se prueba otra; para la API en claro, --base
+# http://$PUBLIC_IP:8010.
+#
 # Recorre el flujo completo contra un despliegue ya arrancado (Docker o local):
 #
 #   1. /health y /health/ready en cada base (mongo, ocr y escritura en verde,
@@ -54,7 +59,7 @@ LOTE=1
 QUIERE_PUBLICO=0
 
 uso() {
-  sed -n '2,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -86,7 +91,10 @@ if [ "${QUIERE_PUBLICO:-0}" = "1" ]; then
     echo "(como sacarla: §2.4 del README de la API)" >&2
     exit 2
   }
-  BASES+=("http://$PUBLIC_IP:$PUERTO")
+  # La via publica es HTTPS: delante hay un proxy TLS (maisa/proxy) que pide el
+  # certificado para el nombre que lleva la IP embebida. Para probar la API en
+  # claro o cualquier otro nombre, pasa la URL entera en PUBLIC_BASE.
+  BASES+=("${PUBLIC_BASE:-https://$PUBLIC_IP.sslip.io}")
 fi
 
 # Sin --base ni --publico se prueba el loopback, que es donde escucha el

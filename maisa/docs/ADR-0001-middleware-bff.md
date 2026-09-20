@@ -198,13 +198,26 @@ cargó (`asientos`). Por eso también es **de solo lectura** en Mongo y monta `o
 > recreando el contenedor, sin tocar la decisión. Causa, síntoma y arreglo en
 > `maisa/docs/arranque_servicios.md` §7.3; el estado verificado final, en su §9.
 
+> **TLS añadido el 2026-09-19 (no altera la decisión).** El visor se sirve desde **Vercel**, es
+> decir por HTTPS, y un navegador en una página HTTPS **no puede** llamar a `http://…:8010`: el
+> bloqueo por *mixed content* ocurre antes de que la petición salga. Como no hay dominio, se puso un
+> **Caddy** (`maisa/proxy/`) que termina TLS para `82.70.78.22.sslip.io` —un nombre de `sslip.io`,
+> DNS público que resuelve a la IP escrita en el nombre, así que Let's Encrypt emite un certificado
+> válido— y reenvía a `albertitos-api:8000` por `albertitos_net`. El NSG abre **80** y **443**.
+>
+> Esto **no** cambia la arquitectura del ADR: sigue habiendo un único servicio de aplicación
+> publicado y Mongo sigue en loopback. El proxy es un terminador, no un BFF nuevo: no enruta, no
+> traduce ni conoce el dominio. Lo único que toca de la API es una variable,
+> `FORWARDED_ALLOW_IPS`, para que Uvicorn acepte las cabeceras `X-Forwarded-*` del proxy y los logs
+> vean la IP real del cliente en vez de la del contenedor vecino.
+
 Pendiente, y así queda registrado:
 
 | Pendiente | Dónde está dicho |
 |---|---|
 | **Persistencia en Mongo de `expedientes` y `eventos`.** Parcial: `POST /api/facturas` ya escribe expedientes y eventos; lo que no escribe todavía el **motor** son sus decisiones, que viven solo en la traza de disco (`ejecuciones` y `excel_filas` siguen vacías). Cuando el motor escriba ahí, `GET /api/facturas` debería preferir Mongo y usar la traza como respaldo. | `TRASPASO.md` §1 («Persistencia Mongo (`expedientes`…) — **a hacer**»), `maisa/api/README.md` §7 y §3.8 |
 | **Autenticación real.** `API_KEY` es una clave compartida. La API está publicada en Internet y **escribe** (`POST /api/facturas`), así que hoy cualquiera puede subir PDFs: hace falta clave y/o cerrar la regla de entrada. Falta usuario/rol — y el usuario que usa la API hoy (`albertitos_app`) tiene `readWrite`, que es lo que necesita para escribir expedientes. | `maisa/api/README.md` §2.4, §3.8 y §7 |
-| **TLS**: la API ya sale a Internet sin cifrar. | `maisa/api/README.md` §7 |
+| **TLS** — ~~la API ya sale a Internet sin cifrar~~. **Resuelto** (2026-09-19, posterior al ADR): un Caddy delante termina TLS con certificado de Let's Encrypt y la vía pública es `https://82.70.78.22.sslip.io`. No cambia esta decisión (la API sigue siendo el único servicio publicado); solo añade el terminador. | `maisa/proxy/README.md`, `maisa/api/README.md` §2.5 |
 | **Decidir si el `8866` del OCR se deja publicado** en el host, ahora que el frontend entra por `/api/ocr` (el NSG ya lo bloquea desde fuera). | §2 de este ADR |
 | **El visor completo** (`maisa/ui/`): el montaje está hecho y probado, pero el frontend es un trabajo en curso. | `maisa/api/README.md` §7 |
 
@@ -217,6 +230,7 @@ Pendiente, y así queda registrado:
   las credenciales de Mongo (`env_file: ../.env`).
 - `maisa/api/.env.example` — las variables de la API y su valor por defecto (sin secretos).
 - `maisa/docs/arranque_servicios.md` — runbook de arranque y problemas conocidos.
+- `maisa/proxy/README.md` — el terminador TLS (Caddy + Let's Encrypt) que se añadió después.
 - `maisa/diseño_conceptual.md` D-11, D-12 y RNF-10.
 - `maisa/diseño_logico.md` §13 (Docker Compose) y §13.10 (verificación del despliegue).
 - `maisa/TRASPASO.md` §1 (reparto y estado de los módulos).
