@@ -12,7 +12,7 @@
  * se puede razonar sobre ella sin montar un navegador.
  */
 
-import { RESULTADOS, type Resultado } from "@/api/types";
+import { ESTADOS_COLA, RESULTADOS, type EstadoCola, type Resultado } from "@/api/types";
 import { limpiarTexto, type FiltrosVista } from "@/api/filtros";
 
 /** Los nombres de los parametros. Cortos porque van en enlaces que se comparten. */
@@ -23,6 +23,7 @@ export const CLAVES = {
     nif: "nif",
     desde: "desde",
     hasta: "hasta",
+    cola: "cola",
     pagina: "pagina",
 } as const;
 
@@ -52,6 +53,21 @@ function fechaValida(valor: string | null): string | null {
     return /^\d{4}-\d{2}-\d{2}$/.test(valor) ? valor : null;
 }
 
+/**
+ * El estado de cola que se acepta de la URL, o nada.
+ *
+ * Misma regla que `resultadoValido`: la direccion la escribe cualquiera, y un
+ * `?cola=lo_que_sea` no puede filtrar por un estado que no existe. La lista sale
+ * de `ESTADOS_COLA`, que es la constante cerrada del contrato.
+ *
+ * No hay valor para "sin segunda lectura" y es deliberado: eso no es una pregunta
+ * sobre trabajo pendiente, es el listado entero, y para eso ya esta no poner filtro.
+ */
+function estadoColaValido(valor: string | null): EstadoCola | null {
+    if (!valor) return null;
+    return ESTADOS_COLA.find((conocido) => conocido === valor) ?? null;
+}
+
 /** Lo que dice la direccion, ya saneado. */
 export function filtrosDeUrl(params: URLSearchParams): FiltrosVista {
     return {
@@ -61,6 +77,7 @@ export function filtrosDeUrl(params: URLSearchParams): FiltrosVista {
         nif: limpiarTexto(params.get(CLAVES.nif)),
         fechaDesde: fechaValida(params.get(CLAVES.desde)),
         fechaHasta: fechaValida(params.get(CLAVES.hasta)),
+        segundaLectura: estadoColaValido(params.get(CLAVES.cola)),
     };
 }
 
@@ -104,6 +121,8 @@ export function escribirFiltros(filtros: FiltrosVista, pagina: number): URLSearc
     const hasta = fechaValida(filtros.fechaHasta ?? null);
     if (hasta) params.set(CLAVES.hasta, hasta);
 
+    if (filtros.segundaLectura) params.set(CLAVES.cola, filtros.segundaLectura);
+
     // La primera pagina no se escribe: `?pagina=1` y nada son la misma vista, y
     // asi el enlace limpio de la primera pantalla se queda corto.
     if (pagina > 1) params.set(CLAVES.pagina, String(pagina));
@@ -120,5 +139,6 @@ export function cuantosFiltros(filtros: FiltrosVista): number {
     if (limpiarTexto(filtros.nif)) cuantos += 1;
     if (filtros.fechaDesde) cuantos += 1;
     if (filtros.fechaHasta) cuantos += 1;
+    if (filtros.segundaLectura) cuantos += 1;
     return cuantos;
 }

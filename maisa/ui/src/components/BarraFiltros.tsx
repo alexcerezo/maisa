@@ -21,6 +21,11 @@
  *    poner un filtro de fechas **desaparecen** de la tabla. Es correcto, pero
  *    parece perdida de datos, asi que cuando hay un filtro de fechas puesto se
  *    dice cuantas facturas se quedan fuera por no tener fecha.
+ *
+ * 4. **La segunda lectura es un grupo de botones y no un desplegable**, por lo
+ *    mismo que la decision: son tres valores, se cambian todo el rato y se quiere
+ *    ver cual esta puesto sin abrir nada. Cada boton lleva su `title` con la
+ *    explicacion larga, porque "Se puede cerrar" a secas no dice que se cierra.
  */
 
 import { CalendarDays, Search, X } from "lucide-react";
@@ -37,9 +42,15 @@ import {
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { LIMITE_TEXTO, type FiltrosVista } from "@/api/filtros";
-import { RESULTADOS, type Resultado } from "@/api/types";
+import { ESTADOS_COLA, RESULTADOS, type EstadoCola, type Resultado } from "@/api/types";
 import { entero } from "@/lib/formato";
-import { ETIQUETA_RESULTADO, ICONO_RESULTADO } from "@/theme";
+import {
+    ETIQUETA_COLA,
+    ETIQUETA_RESULTADO,
+    EXPLICACION_COLA,
+    ICONO_COLA,
+    ICONO_RESULTADO,
+} from "@/theme";
 import { cuantosFiltros } from "@/lib/urlFiltros";
 import { useTextoRetrasado } from "@/lib/useTextoRetrasado";
 
@@ -121,6 +132,33 @@ export function BarraFiltros({
                                 <ToggleGroupItem key={resultado} value={resultado}>
                                     <Icono />
                                     {ETIQUETA_RESULTADO[resultado]}
+                                </ToggleGroupItem>
+                            );
+                        })}
+                    </ToggleGroup>
+                </div>
+
+                <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Segunda lectura</Label>
+                    <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        size="sm"
+                        value={filtros.segundaLectura ?? ""}
+                        onValueChange={(valor) => {
+                            alCambiar({ segundaLectura: (valor || null) as EstadoCola | null });
+                        }}
+                    >
+                        {ESTADOS_COLA.map((estado) => {
+                            const Icono = ICONO_COLA[estado];
+                            return (
+                                <ToggleGroupItem
+                                    key={estado}
+                                    value={estado}
+                                    title={EXPLICACION_COLA[estado]}
+                                >
+                                    <Icono />
+                                    {ETIQUETA_COLA[estado]}
                                 </ToggleGroupItem>
                             );
                         })}

@@ -94,6 +94,119 @@ export interface FacturaResumen {
      */
     identificacion_fiable: boolean;
     version_norma: string;
+    /**
+     * Lo que aporta la **segunda lectura** del motor sobre una factura escalada,
+     * o `null` si nadie la ha releido. Hoy la traen 9 de las 63 escaladas: las
+     * que el OCR no supo leer a la primera.
+     */
+    segunda_lectura: SegundaLecturaResumen | null;
+}
+
+/**
+ * La evidencia de la segunda lectura, en su forma corta: la que viaja en el
+ * listado y basta para decidir si una escalada se puede cerrar sin abrirla.
+ *
+ * Los dos campos significan cosas **opuestas** y ese es el punto:
+ *
+ * - `confirmable: true` — el motor releyó el documento y los datos cuadran. La
+ *   incidencia se puede cerrar sin que nadie abra el PDF.
+ * - `desvio: true` — la relectura encontró un IBAN que no es el del maestro. Es
+ *   lo contrario: exige que lo mire una persona, y cuanto antes.
+ *
+ * `confirmable: false, desvio: false` **no es "no hay nada"**: es que la
+ * relectura no concluyó, así que la revisión humana sigue haciendo la misma
+ * falta que antes. Confundir eso con un "todo bien" es el error caro.
+ */
+export interface SegundaLecturaResumen {
+    confirmable: boolean;
+    desvio: boolean;
+}
+
+/**
+ * La segunda lectura con su evidencia completa. Solo la trae el detalle.
+ *
+ * `campos` son los valores que la relectura **sí** pudo sacar
+ * (`{iban: ["ES44…"]}`), que es lo que permite compararlos con el maestro sin
+ * abrir el documento. `motivos` explica en castellano por qué confirma o por qué
+ * no, y viene redactado para enseñarse tal cual.
+ */
+export interface SegundaLectura extends SegundaLecturaResumen {
+    campos?: Record<string, string[]>;
+    motivos?: string[];
+}
+
+/**
+ * El recuento de la cola de segunda lectura, tal como lo sirve
+ * `GET /api/estadisticas`.
+ *
+ * `con_evidencia` es la cuenta de las anotadas que **no** son ni confirmables ni
+ * desvíos, o sea las que la relectura dejó sin conclusión. Se calcula en el
+ * servidor y por eso se usa tal cual: recalcularlo en el cliente daría un número
+ * distinto el día que el motor añada un estado nuevo.
+ */
+export interface ColaSegundaLectura {
+    /** Escaladas que alguien ha releído. Hoy 9 de las 63. */
+    anotadas: number;
+    /** Se pueden cerrar sin abrir el PDF. */
+    confirmables: number;
+    /** Exigen persona: hay un IBAN que no es el del maestro. */
+    desvios: number;
+    /** La relectura no concluyó: sigue haciendo la misma falta que antes. */
+    con_evidencia: number;
+}
+
+/**
+ * En qué ha quedado una segunda lectura.
+ *
+ * Es un tipo del contrato y no del tema porque también lo usa el filtro de la
+ * vista (`FiltrosVista.segundaLectura`), y la capa de datos no debe depender de
+ * la de pintado. Cómo se pinta cada estado se decide en `theme.ts`.
+ *
+ * La tabla de verdad, que es lo que hay que mirar antes de tocar esto:
+ *
+ * | `desvio` | `confirmable` | estado            |
+ * | -------- | ------------- | ----------------- |
+ * | `true`   | (da igual)    | `desvio`          |
+ * | `false`  | `true`        | `confirmable`     |
+ * | `false`  | `false`       | `sin_conclusion`  |
+ *
+ * `desvio` manda sobre `confirmable`: una relectura que confirma el NIF pero
+ * encuentra un IBAN que no es el del maestro no se puede cerrar sola.
+ */
+export type EstadoCola = "confirmable" | "desvio" | "sin_conclusion";
+
+/**
+ * Los tres estados de cola, cerrados.
+ *
+ * Es la lista que valida el filtro de la URL, y vive aquí por el mismo motivo que
+ * `RESULTADOS`: es el contrato. Un `?cola=lo_que_sea` escrito a mano se descarta
+ * contra esta lista en vez de filtrar por un estado que el motor no produce.
+ *
+ * No incluye "sin segunda lectura" a propósito: eso es la ausencia del campo y no
+ * un estado. Filtrarlo no sería una pregunta sobre trabajo pendiente, sería el
+ * listado entero.
+ */
+export const ESTADOS_COLA = ["confirmable", "desvio", "sin_conclusion"] as const;
+
+/**
+ * En qué ha quedado la segunda lectura, o `null` si nadie la ha releído.
+ *
+ * `null` y `sin_conclusion` no son lo mismo y por eso no se colapsan: lo primero
+ * dice "no hay segunda lectura" (hoy 54 de las 63 escaladas) y lo segundo "la hay
+ * y no sirvió para cerrar nada". Pintarlas igual escondería justo el dato que se
+ * quiere enseñar.
+ *
+ * Vive aquí, junto al tipo, porque lo usan las dos capas: el filtro de la vista
+ * (`api/filtros.ts`) y el pintado (`theme.ts`). Duplicarlo sería tener dos tablas
+ * de verdad que se separarían en cuanto el motor añadiera un estado.
+ */
+export function estadoCola(
+    segunda: SegundaLecturaResumen | null | undefined,
+): EstadoCola | null {
+    if (!segunda) return null;
+    if (segunda.desvio) return "desvio";
+    if (segunda.confirmable) return "confirmable";
+    return "sin_conclusion";
 }
 
 /**
@@ -232,6 +345,11 @@ export interface FacturaDetalle {
     version_norma: string;
     /** El texto de donde salieron los datos. A veces tambien esta en `campos`. */
     nota_documento?: string;
+    /**
+     * La segunda lectura con su evidencia completa, o `null`. Es el mismo dato
+     * que `resumen.segunda_lectura`, pero con los campos y los motivos.
+     */
+    segunda_lectura: SegundaLectura | null;
     /** El mismo objeto que devuelve el listado. No hace falta pedir la tabla. */
     resumen: FacturaResumen;
 }
@@ -265,7 +383,22 @@ export interface Estadisticas {
     por_lote: Record<string, number>;
     /** Dinamico, y puede traer `"desconocido"` si el motor no lo dijo. */
     por_metodo_lectura: Record<string, number>;
-    asientos_vigentes: number;
+    /**
+     * `null` cuando Mongo no contesta. El campo no es opcional, es **anulable**:
+     * "no hay asientos" y "no he podido contarlos" son cosas distintas y el
+     * contrato tiene que poder decir la segunda.
+     */
+    asientos_vigentes: number | null;
+    /**
+     * Escaladas que siguen sin resolverse en el ERP. Es el **trabajo pendiente**
+     * del panel y el numero que se mira para saber si la cola baja.
+     *
+     * `null` cuando Mongo no contesta (sale de las revisiones guardadas, no de la
+     * traza), y por eso no se puede pintar como un cero.
+     */
+    pendientes_revision: number | null;
+    /** El recuento de la cola de segunda lectura. */
+    cola_segunda_lectura: ColaSegundaLectura;
     /**
      * Si Mongo contesta. **No es decorativo**: el listado sale del fichero de
      * traza y funciona con Mongo caido, pero el panel tiene que poder decirlo.
@@ -273,7 +406,6 @@ export interface Estadisticas {
     mongo: { ok: boolean; error: string | null };
     /** La entrega comparada con la traza. `coincide_con_traza` es la garantia. */
     entrega: { total: number; lineas_invalidas: number; coincide_con_traza: boolean };
-    /** `GET /api/estadisticas` no lo devuelve; lo añade el cliente al recibirlo. */
 }
 
 /**

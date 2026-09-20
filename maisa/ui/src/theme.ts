@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 
 import type { Gravedad, Severidad } from "./api/severidad";
-import type { Regla, Resultado } from "./api/types";
+import type { EstadoCola, Regla, Resultado } from "./api/types";
 
 /** El texto que se lee en el badge. En castellano, como el resto del panel. */
 export const ETIQUETA_RESULTADO: Record<Resultado, string> = {
@@ -155,3 +155,68 @@ export const ICONO_ESCALON: Record<string, LucideIcon> = {
     capa_texto: ScanLine,
     cache_ocr: ShieldAlert,
 };
+
+/**
+ * En que ha quedado la **segunda lectura** de una factura escalada.
+ *
+ * El tipo se declara en `api/types.ts`, junto al resto del contrato, porque
+ * tambien lo usa el filtro de la vista. Aqui solo se decide como se pinta.
+ *
+ * Es un estado propio y no un `Resultado` porque no lo es: una escalada con
+ * `confirmable` sigue siendo `ESCALAR` en la entrega —la norma no se toca—, lo
+ * que cambia es **cuanto trabajo humano le queda por delante**. Mezclar las dos
+ * cosas en un solo tipo haria creer que el motor cambio su decision, y no la
+ * cambio.
+ */
+export const ETIQUETA_COLA: Record<EstadoCola, string> = {
+    confirmable: "Se puede cerrar",
+    desvio: "Desvío de pago",
+    sin_conclusion: "La relectura no concluye",
+};
+
+/**
+ * El color del estado de cola. Sigue la misma regla que `CLASE_RESULTADO`: el
+ * verde dice "aqui ya no hay que hacer nada", el rojo "aqui hay una persona
+ * obligada" y el ambar "aqui sigue habiendo duda". Ninguno es "el sistema se ha
+ * roto", que es lo que diria el `destructive` de shadcn.
+ */
+export const CLASE_COLA: Record<EstadoCola, string> = {
+    confirmable:
+        "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300",
+    desvio: "border-red-600/30 bg-red-500/10 text-red-700 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-300",
+    sin_conclusion:
+        "border-amber-600/30 bg-amber-500/10 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-300",
+};
+
+export const ICONO_COLA: Record<EstadoCola, LucideIcon> = {
+    confirmable: CircleCheck,
+    desvio: Ban,
+    sin_conclusion: TriangleAlert,
+};
+
+/**
+ * Que significa cada estado, para el `title` y los `Tooltip`.
+ *
+ * Vive aqui y no en el componente porque el mismo texto lo usan la tabla y el
+ * expediente: si cada pantalla escribiera el suyo, la misma fila se explicaria de
+ * dos formas distintas y el panel se contradiria a si mismo.
+ *
+ * La frase de `confirmable` empieza por el verbo a proposito: el dato util no es
+ * "esta confirmada", es "**no hace falta abrirla**", que es el trabajo que ahorra.
+ */
+export const EXPLICACION_COLA: Record<EstadoCola, string> = {
+    confirmable:
+        "La segunda lectura ha releido el documento y los datos que faltaban cuadran con el maestro. No hace falta abrir el PDF: la incidencia se puede cerrar tal cual.",
+    desvio:
+        "La segunda lectura ha encontrado un dato que no es el del maestro. No se puede cerrar sola: aqui hay una persona obligada antes de pagar.",
+    sin_conclusion:
+        "La segunda lectura ha releido el documento y no ha desatado el nudo. La revision humana sigue haciendo la misma falta que antes de releerlo.",
+};
+
+/**
+ * El estado de cola de una factura, o `null` si nadie la ha releido.
+ *
+ * Se reexporta desde el contrato para que los componentes tengan un solo sitio
+ * del que tirar (`@/theme`) sin que la regla viva dos veces.
+ */
+export { estadoCola } from "./api/types";

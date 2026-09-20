@@ -13,14 +13,18 @@
 
 import { Badge } from "@/components/ui/badge";
 import type { Severidad } from "@/api/severidad";
-import type { Resultado } from "@/api/types";
+import type { Resultado, SegundaLecturaResumen } from "@/api/types";
 import {
+    CLASE_COLA,
     CLASE_RESULTADO,
     CLASE_SEVERIDAD,
+    ETIQUETA_COLA,
     ETIQUETA_RESULTADO,
     ETIQUETA_SEVERIDAD,
+    ICONO_COLA,
     ICONO_RESULTADO,
     ICONO_SEVERIDAD,
+    estadoCola,
 } from "@/theme";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +65,32 @@ export function EtiquetaSeveridad({
         <Badge variant="outline" className={cn(CLASE_SEVERIDAD[severidad], className)}>
             <Icono />
             {ETIQUETA_SEVERIDAD[severidad]}
+        </Badge>
+    );
+}
+
+/**
+ * En que ha quedado la segunda lectura de una escalada.
+ *
+ * **Devuelve `null` cuando no hay segunda lectura, y eso es deliberado**: 54 de
+ * las 63 escaladas no la tienen, y pintarles un badge de "sin conclusión" seria
+ * decir que el motor las releyó y no supo, cuando lo que pasa es que no las ha
+ * releido nadie. Un hueco es la verdad; un badge falso, no.
+ */
+export function EtiquetaCola({
+    segunda,
+    className,
+}: {
+    segunda: SegundaLecturaResumen | null | undefined;
+    className?: string;
+}) {
+    const estado = estadoCola(segunda);
+    if (!estado) return null;
+    const Icono = ICONO_COLA[estado];
+    return (
+        <Badge variant="outline" className={cn(CLASE_COLA[estado], className)}>
+            <Icono />
+            {ETIQUETA_COLA[estado]}
         </Badge>
     );
 }

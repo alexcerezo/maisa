@@ -162,6 +162,13 @@ function usePeticion<T>(clave: string | null, ejecutar: () => Promise<T>): Resul
  * las claves de un objeto depende de como se escribio, y dos filtros iguales
  * escritos en distinto orden darian claves distintas: se volveria a pedir lo
  * mismo y la tabla parpadearia sin motivo.
+ *
+ * **Todo filtro que cambie lo que se devuelve tiene que estar aqui.** Si falta uno,
+ * `usePeticion` devuelve el resultado de la consulta anterior —la clave no ha
+ * cambiado, luego "es la misma peticion"— y la tabla se queda con las filas de
+ * antes mientras la URL y los contadores dicen otra cosa. Es el fallo que tuvo el
+ * filtro de cola: se anadio a `aplicarFiltrosExtra` y no aqui, y filtrar por
+ * desvios dejaba las 25 filas de siempre.
  */
 function claveDeFiltros(filtros: FiltrosVista): string {
     const campos = [
@@ -172,6 +179,7 @@ function claveDeFiltros(filtros: FiltrosVista): string {
         filtros.fechaDesde ?? "",
         filtros.fechaHasta ?? "",
         filtros.nif ?? "",
+        filtros.segundaLectura ?? "",
     ];
     return campos.join("\u0001");
 }

@@ -16,16 +16,30 @@
  *    eso por una captura de pantalla y no por un aviso seria lo peor.
  */
 
-import { AlertTriangle, Check, Database, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Check, Database, ListChecks, type LucideIcon } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { gravedadResultado } from "@/api/severidad";
-import { RESULTADOS, type Estadisticas, type Resultado } from "@/api/types";
+import {
+    ESTADOS_COLA,
+    RESULTADOS,
+    type Estadisticas,
+    type EstadoCola,
+    type Resultado,
+} from "@/api/types";
 import { entero } from "@/lib/formato";
-import { CLASE_GRAVEDAD, ETIQUETA_RESULTADO, ICONO_RESULTADO } from "@/theme";
+import {
+    CLASE_COLA,
+    CLASE_GRAVEDAD,
+    ETIQUETA_COLA,
+    ETIQUETA_RESULTADO,
+    EXPLICACION_COLA,
+    ICONO_COLA,
+    ICONO_RESULTADO,
+} from "@/theme";
 import { cn } from "@/lib/utils";
 
 export function TarjetasEstadisticas({
@@ -33,11 +47,16 @@ export function TarjetasEstadisticas({
     cargando,
     resultadoActivo,
     alElegirResultado,
+    colaActiva,
+    alElegirCola,
 }: {
     estadisticas: Estadisticas | null;
     cargando: boolean;
     resultadoActivo: Resultado | null;
     alElegirResultado: (resultado: Resultado) => void;
+    /** El estado de cola filtrado, o `null` si no hay ninguno. */
+    colaActiva: EstadoCola | null;
+    alElegirCola: (estado: EstadoCola) => void;
 }) {
     if (cargando && !estadisticas) {
         return (
@@ -78,6 +97,12 @@ export function TarjetasEstadisticas({
             ) : null}
 
             <SaludDelSistema estadisticas={estadisticas} />
+
+            <ColaSegundaLectura
+                estadisticas={estadisticas}
+                colaActiva={colaActiva}
+                alElegirCola={alElegirCola}
+            />
         </div>
     );
 }
@@ -164,6 +189,139 @@ function TarjetaResultado({
 }
 
 /**
+ * El trabajo humano que queda, en una fila.
+ *
+ * Es el dato que la rubrica llama **trabajo pendiente**, y por eso va arriba y
+ * pulsable: "hay 63 escaladas y 9 ya se han releido" es la frase que abre una
+ * reunion, y la siguiente pregunta siempre es "¿cuales?". Los tres botones son esa
+ * respuesta y filtran el listado sin pasar por la barra de filtros.
+ *
+ * Tres cosas que no se hacen aqui a proposito:
+ *
+ * 1. **No se recalculan las cuentas.** `confirmables`, `desvios` y `con_evidencia`
+ *    las sirve la API. Restarlas en el cliente daria otro numero el dia que el
+ *    motor anada un estado, y el panel diria una cosa y la traza otra.
+ *
+ * 2. **`pendientes_revision` nulo no es cero.** Viene de Mongo y es `null` si no
+ *    contesta. Ensenar "0 escaladas" cuando la base de datos esta caida es
+ *    exactamente la mentira que este panel no se puede permitir, asi que se calla
+ *    el denominador y se dice el motivo en el `title`.
+ *
+ * 3. **No se esconde cuando `anotadas` es 0.** Un cero aqui es informacion —"nadie
+ *    ha releido nada todavia"—, no un hueco. Lo que si se esconde es el bloque
+ *    entero si no hay ninguna escalada pendiente, porque entonces no hay cola.
+ */
+function ColaSegundaLectura({
+    estadisticas,
+    colaActiva,
+    alElegirCola,
+}: {
+    estadisticas: Estadisticas;
+    colaActiva: EstadoCola | null;
+    alElegirCola: (estado: EstadoCola) => void;
+}) {
+    const cola = estadisticas.cola_segunda_lectura;
+    const pendientes = estadisticas.pendientes_revision;
+    if (pendientes === 0 && cola.anotadas === 0) return null;
+
+    const cuantas: Record<EstadoCola, number> = {
+        confirmable: cola.confirmables,
+        desvio: cola.desvios,
+        sin_conclusion: cola.con_evidencia,
+    };
+
+    return (
+        <Card size="sm" className="gap-0">
+            <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                <div>
+                    <span className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                        <ListChecks className="size-3.5" />
+                        Cola de segunda lectura
+                    </span>
+                    <p className="mt-1 text-sm">
+                        <span className="font-heading text-2xl leading-none font-semibold tabular-nums">
+                            {entero(cola.anotadas)}
+                        </span>{" "}
+                        <span className="text-muted-foreground">
+                            {pendientes === null ? (
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <span className="cursor-help underline decoration-dotted underline-offset-2">
+                                            escaladas releídas
+                                        </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent className="max-w-xs">
+                                        No se sabe sobre cuántas escaladas, porque Mongo no responde y
+                                        es quien cuenta las revisiones pendientes. El resto del panel
+                                        sale del fichero de traza y funciona igual.
+                                    </TooltipContent>
+                                </Tooltip>
+                            ) : (
+                                `de ${entero(pendientes)} escaladas releídas`
+                            )}
+                        </span>
+                    </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                    {ESTADOS_COLA.map((estado) => (
+                        <BotonCola
+                            key={estado}
+                            estado={estado}
+                            cuantas={cuantas[estado]}
+                            activa={colaActiva === estado}
+                            alPulsar={() => alElegirCola(estado)}
+                        />
+                    ))}
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+/**
+ * Un boton de la cola. Es un `<button>` de verdad, por lo mismo que las tarjetas
+ * de resultado: se tabula, se activa con el espacio y anuncia si esta pulsado.
+ */
+function BotonCola({
+    estado,
+    cuantas,
+    activa,
+    alPulsar,
+}: {
+    estado: EstadoCola;
+    cuantas: number;
+    activa: boolean;
+    alPulsar: () => void;
+}) {
+    const Icono = ICONO_COLA[estado];
+
+    return (
+        <button
+            type="button"
+            onClick={alPulsar}
+            aria-pressed={activa}
+            title={`${EXPLICACION_COLA[estado]} ${
+                activa ? "Pulsa para quitar el filtro." : "Pulsa para ver solo estas."
+            }`}
+            className={cn(
+                "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-[filter,box-shadow] outline-none",
+                "hover:brightness-[0.97] focus-visible:ring-3 focus-visible:ring-ring/50 dark:hover:brightness-110",
+                CLASE_COLA[estado],
+                // El que no tiene nada que enseñar se apaga pero no se esconde:
+                // que haya 0 desvíos es un dato, no un hueco.
+                cuantas === 0 && "opacity-50",
+                activa && "ring-2 ring-foreground/30",
+            )}
+        >
+            <Icono className="size-3.5 shrink-0" />
+            {ETIQUETA_COLA[estado]}
+            <span className="font-semibold tabular-nums">{entero(cuantas)}</span>
+        </button>
+    );
+}
+
+/**
  * Mongo, la entrega y los asientos.
  *
  * Cada dato lleva su `Tooltip` con la explicacion larga, porque son terminos del
@@ -200,8 +358,12 @@ function SaludDelSistema({ estadisticas }: { estadisticas: Estadisticas }) {
             <Dato
                 icono={Database}
                 tono="neutro"
-                texto={`${entero(estadisticas.asientos_vigentes)} asientos vigentes`}
-                explicacion="Asientos del ERP contra los que se concilia. Solo una descarga está vigente a la vez."
+                texto={
+                    estadisticas.asientos_vigentes === null
+                        ? "Asientos vigentes sin dato"
+                        : `${entero(estadisticas.asientos_vigentes)} asientos vigentes`
+                }
+                explicacion="Asientos del ERP contra los que se concilia. Solo una descarga está vigente a la vez. Sin dato significa que el catálogo no se pudo leer: no es que haya cero."
             />
 
             {metodos.map(([metodo, cuantas]) => (

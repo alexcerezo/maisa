@@ -20,7 +20,7 @@ import { useLocation, useSearchParams } from "react-router-dom";
 
 import type { FiltrosVista } from "@/api/filtros";
 import { useFacturas, useFuente } from "@/api/hooks";
-import type { Resultado } from "@/api/types";
+import type { EstadoCola, Resultado } from "@/api/types";
 import { BarraFiltros } from "@/components/BarraFiltros";
 import { FalloDeCarga, SinResultados } from "@/components/Estados";
 import { AvisoFuente } from "@/components/Fuente";
@@ -148,6 +148,7 @@ export default function FacturasPage() {
                     nif: null,
                     fechaDesde: null,
                     fechaHasta: null,
+                    segundaLectura: null,
                 },
                 1,
             ),
@@ -157,6 +158,10 @@ export default function FacturasPage() {
     // el filtro, para poder deshacer sin ir a buscar el boton de limpiar.
     const alElegirResultado = (resultado: Resultado) =>
         alCambiar({ resultado: filtros.resultado === resultado ? null : resultado });
+
+    // El boton de la cola es el mismo conmutador, por la misma razon.
+    const alElegirCola = (estado: EstadoCola) =>
+        alCambiar({ segundaLectura: filtros.segundaLectura === estado ? null : estado });
 
     // La primera pagina no se escribe (`escribirFiltros` la omite), asi que la
     // vista sin filtros queda en un `/facturas` limpio y no en `/facturas?pagina=1`.
@@ -186,6 +191,8 @@ export default function FacturasPage() {
                 cargando={cargandoListado}
                 resultadoActivo={filtros.resultado ?? null}
                 alElegirResultado={alElegirResultado}
+                colaActiva={filtros.segundaLectura ?? null}
+                alElegirCola={alElegirCola}
             />
 
             <BarraFiltros

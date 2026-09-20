@@ -25,12 +25,18 @@
  *    conciliacion se mira tambien desde el movil en una feria, y 7 columnas en
  *    400 px no se leen: se esconden las de contexto (proveedor, fecha, pedido) y
  *    se quedan las tres que deciden (resultado, factura, importe).
+ *
+ * 5. **La segunda lectura va debajo de la decision, en la misma celda.** Cualifica
+ *    a la decision ("ESCALAR, pero se puede cerrar sin abrir el PDF"), asi que su
+ *    sitio es ese y no una columna nueva: la traen 9 filas de 540, y una columna
+ *    propia seria una franja vacia en el 98 % de la tabla. Debajo de la etiqueta
+ *    de decision, el hueco ya existe.
  */
 
 import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { EtiquetaResultado } from "@/components/Etiquetas";
+import { EtiquetaCola, EtiquetaResultado } from "@/components/Etiquetas";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
     Table,
@@ -43,7 +49,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FacturaResumen } from "@/api/types";
 import { euros, eurosConSigno, fecha, porcentaje, SIN_DATO, texto } from "@/lib/formato";
-import { claseDesvio, ICONO_ESCALON } from "@/theme";
+import { claseDesvio, EXPLICACION_COLA, estadoCola, ICONO_ESCALON } from "@/theme";
 import { cn } from "@/lib/utils";
 
 export function TablaFacturas({
@@ -96,7 +102,7 @@ export function TablaFacturas({
                 <Table>
                     <TableHeader>
                         <TableRow className="hover:bg-transparent">
-                            <TableHead className="w-32 pl-4">Decisión</TableHead>
+                            <TableHead className="w-40 pl-4">Decisión</TableHead>
                             <TableHead>Factura</TableHead>
                             <TableHead className="hidden md:table-cell">Proveedor</TableHead>
                             <TableHead className="hidden lg:table-cell">Fecha</TableHead>
@@ -144,6 +150,7 @@ function FilaFactura({
 }) {
     const Escalon = ICONO_ESCALON[factura.escalon_lectura];
     const destino = `/facturas/${encodeURIComponent(factura.file_id)}${parametrosLista}`;
+    const cola = estadoCola(factura.segunda_lectura);
 
     return (
         <TableRow
@@ -156,6 +163,25 @@ function FilaFactura({
         >
             <TableCell className="pl-4">
                 <EtiquetaResultado resultado={factura.resultado} />
+                {/*
+                    La etiqueta de cola se explica con un `Tooltip` y no con texto
+                    suelto porque "se puede cerrar" a secas no dice que se cierra,
+                    y el que lo lee por primera vez tiene derecho a saberlo sin
+                    abrir el expediente.
+                */}
+                {cola ? (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <span className="mt-1 block cursor-help">
+                                <EtiquetaCola segunda={factura.segunda_lectura} />
+                            </span>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs">
+                            <p className="font-medium">Segunda lectura</p>
+                            <p className="text-muted-foreground">{EXPLICACION_COLA[cola]}</p>
+                        </TooltipContent>
+                    </Tooltip>
+                ) : null}
             </TableCell>
 
             <TableCell className="max-w-72">

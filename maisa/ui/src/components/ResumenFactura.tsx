@@ -22,10 +22,10 @@
 
 import { BadgeCheck, CircleAlert } from "lucide-react";
 
-import { EtiquetaResultado } from "@/components/Etiquetas";
+import { EtiquetaCola, EtiquetaResultado } from "@/components/Etiquetas";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { FacturaDetalle } from "@/api/types";
+import type { FacturaDetalle, SegundaLectura as Segunda } from "@/api/types";
 import {
     euros,
     eurosConSigno,
@@ -35,7 +35,16 @@ import {
     SIN_DATO,
     texto,
 } from "@/lib/formato";
-import { claseDesvio, ETIQUETA_ESCALON, ETIQUETA_METODO } from "@/theme";
+import {
+    claseDesvio,
+    CLASE_COLA,
+    ETIQUETA_COLA,
+    ETIQUETA_ESCALON,
+    ETIQUETA_METODO,
+    EXPLICACION_COLA,
+    estadoCola,
+    ICONO_COLA,
+} from "@/theme";
 import { cn } from "@/lib/utils";
 
 export function ResumenFactura({ detalle }: { detalle: FacturaDetalle }) {
@@ -47,6 +56,7 @@ export function ResumenFactura({ detalle }: { detalle: FacturaDetalle }) {
                 <CardHeader>
                     <div className="flex flex-wrap items-center gap-3">
                         <EtiquetaResultado resultado={detalle.resultado} className="text-sm" />
+                        <EtiquetaCola segunda={detalle.segunda_lectura} />
                         {detalle.identificacion_fiable ? (
                             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                                 <BadgeCheck className="size-3.5" />
@@ -96,6 +106,8 @@ export function ResumenFactura({ detalle }: { detalle: FacturaDetalle }) {
                 </CardContent>
             </Card>
 
+            <PanelSegundaLectura segunda={detalle.segunda_lectura} />
+
             {!detalle.identificacion_fiable ? (
                 <Alert className="border-amber-600/40 bg-amber-500/5 dark:border-amber-400/40 dark:bg-amber-400/5">
                     <CircleAlert className="text-amber-700 dark:text-amber-300" />
@@ -110,6 +122,81 @@ export function ResumenFactura({ detalle }: { detalle: FacturaDetalle }) {
                 </Alert>
             ) : null}
         </div>
+    );
+}
+
+/**
+ * La segunda lectura: quien la hizo, que saco y en que quedo.
+ *
+ * No se pinta nada cuando la factura no la trae (hoy 54 de las 63 escaladas), y
+ * eso es una decision de producto y no un `return null` de conveniencia: el hueco
+ * dice "nadie ha releido esto todavia", que es trabajo pendiente real. Rellenarlo
+ * con un "sin segunda lectura" en gris lo convertiria en mobiliario y dejaria de
+ * leerse.
+ *
+ * Los tres estados no son matices del mismo: `confirmable` ahorra el trabajo
+ * entero, `desvio` lo aumenta, y `sin_conclusion` lo deja exactamente donde estaba.
+ * Por eso el texto de arriba no se repite para los tres.
+ */
+function PanelSegundaLectura({ segunda }: { segunda: Segunda | null }) {
+    const estado = estadoCola(segunda);
+    if (!estado || !segunda) return null;
+
+    const Icono = ICONO_COLA[estado];
+    const campos = Object.entries(segunda.campos ?? {});
+    const motivos = segunda.motivos ?? [];
+
+    return (
+        <section className={cn("rounded-xl border p-4", CLASE_COLA[estado])}>
+            <div className="flex items-center gap-2">
+                <Icono className="size-4 shrink-0" />
+                <h2 className="text-sm font-medium">Segunda lectura: {ETIQUETA_COLA[estado]}</h2>
+            </div>
+
+            <p className="mt-1.5 text-sm opacity-90">{EXPLICACION_COLA[estado]}</p>
+
+            {/*
+                Los campos son la prueba de que la relectura sirvio de algo: son
+                los valores que saco y que la primera lectura no tenia. Cuando el
+                estado es `desvio` vienen vacios a proposito — lo que saco es
+                justamente lo que no cuadra, y eso va en los motivos.
+            */}
+            {campos.length > 0 ? (
+                <div className="mt-3">
+                    <h3 className="text-xs font-medium tracking-wide uppercase opacity-70">
+                        Lo que aportó la relectura
+                    </h3>
+                    <dl className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1.5">
+                        {campos.map(([clave, valores]) => (
+                            <div key={clave} className="min-w-0">
+                                <dt className="text-xs uppercase opacity-70">{clave}</dt>
+                                <dd className="font-mono text-xs break-all">
+                                    {valores.length > 0 ? valores.join(" · ") : SIN_DATO}
+                                </dd>
+                            </div>
+                        ))}
+                    </dl>
+                </div>
+            ) : null}
+
+            {motivos.length > 0 ? (
+                <div className="mt-3">
+                    <h3 className="text-xs font-medium tracking-wide uppercase opacity-70">
+                        Por qué
+                    </h3>
+                    <ul className="mt-1.5 space-y-1">
+                        {motivos.map((motivo, indice) => (
+                            <li
+                                key={`${indice}-${motivo}`}
+                                className="flex gap-2 text-sm before:mt-2 before:size-1 before:shrink-0 before:rounded-full before:bg-current before:content-[''] before:opacity-40"
+                            >
+                                {motivo}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            ) : null}
+        </section>
     );
 }
 

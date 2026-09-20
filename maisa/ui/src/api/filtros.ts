@@ -37,7 +37,7 @@
  * ser identicos.
  */
 
-import type { FacturaResumen, Resultado } from "./types";
+import { estadoCola, type EstadoCola, type FacturaResumen, type Resultado } from "./types";
 
 /**
  * Tope de caracteres de una busqueda. Espejo de `MAX_QUERY_LEN` en
@@ -74,6 +74,19 @@ export interface FiltrosVista extends FiltrosApi {
     fechaHasta?: string | null;
     /** Subcadena del NIF. El motor lo saca del maestro o del asiento. */
     nif?: string | null;
+    /**
+     * En que ha quedado la segunda lectura.
+     *
+     * Es un filtro de **vista** y no de API: `buscar()` en `traza.py` filtra por
+     * `resultado`, `lote`, `proveedor` y `q`, y no sabe nada de la cola. Pedirlo
+     * al servidor devolveria el listado entero sin filtrar y el panel enseñaria
+     * 500 filas donde dice que hay 4. Se aplica siempre en local, como las fechas.
+     *
+     * El valor es un `EstadoCola` y no un booleano porque las tres respuestas
+     * ("se cierra", "hay desvio", "no concluye") son tres trabajos distintos, y
+     * "hay segunda lectura" a secas no dice cual toca.
+     */
+    segundaLectura?: EstadoCola | null;
 }
 
 /**
@@ -172,7 +185,8 @@ export function aplicarFiltrosExtra(
     const desde = (filtros.fechaDesde ?? "").trim();
     const hasta = (filtros.fechaHasta ?? "").trim();
     const nif = limpiarTexto(filtros.nif);
-    if (!desde && !hasta && !nif) return [...items];
+    const cola = filtros.segundaLectura ?? null;
+    if (!desde && !hasta && !nif && !cola) return [...items];
 
     return items.filter((item) => {
         if (desde || hasta) {
@@ -181,6 +195,12 @@ export function aplicarFiltrosExtra(
             if (hasta && item.fecha > hasta) return false;
         }
         if (nif && !contiene(item.nif, nif)) return false;
+        // `estadoCola()` devuelve `null` cuando nadie la ha releido, y `null` no es
+        // un cuarto estado: dice "no hay segunda lectura", que es distinto de "la
+        // relectura no concluyo". Por eso el filtro compara contra `EstadoCola` y no
+        // ofrece una opcion "sin segunda lectura": pedir eso no es una pregunta sobre
+        // trabajo pendiente, es mirar el listado entero.
+        if (cola && estadoCola(item.segunda_lectura) !== cola) return false;
         return true;
     });
 }
