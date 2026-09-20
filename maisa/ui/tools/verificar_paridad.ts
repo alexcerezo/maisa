@@ -6,7 +6,7 @@
  *
  * 1. **El congelado se queda viejo.** Si alguien regenera las facturas y no los
  *    fixtures, el panel ensenaria un corpus distinto segun el origen. Se comparan
- *    los 500 registros campo a campo, no solo el numero.
+ *    los registros campo a campo, no solo el numero.
  *
  * 2. **El filtro de `filtros.ts` deja de parecerse al de `traza.py`.** Este es el
  *    peligroso: son dos implementaciones del mismo criterio en dos lenguajes
@@ -49,8 +49,15 @@ async function leerDelCongelado<T>(rutaWeb: string): Promise<T> {
 
 interface PaginaApi {
     total: number;
+    devueltas: number;
     items: FacturaResumen[];
 }
+
+/** El tope real de la API (`MAX_LIMIT`): pedir mas devuelve 500 igualmente. */
+const TAMANO_PAGINA = 500;
+
+/** Corte de seguridad: un servidor que ignore `offset` no acaba nunca. */
+const MAX_VUELTAS = 100;
 
 const manifiesto = await leerJson<{ origen?: string; congelado_en?: string }>(
     "../public/data/manifiesto.json",
@@ -98,15 +105,27 @@ function canonico(valor: unknown): string {
 
 async function pedirFacturas(filtros: FiltrosApi): Promise<FacturaResumen[]> {
     const parametros = parametrosDeConsulta(filtros);
-    // El limite se sube a 500 a proposito: asi la comparacion es sobre el
-    // conjunto entero y no sobre la primera pagina, que ocultaria justo los
-    // registros donde suele estar la diferencia.
-    parametros.set("limit", "500");
-    const respuesta = await fetch(`${API}/api/facturas?${parametros}`);
-    if (!respuesta.ok) {
-        throw new Error(`La API ha respondido ${respuesta.status} a /api/facturas?${parametros}`);
+    // Se pagina a 500 —el tope real de la API— hasta agotar el conjunto: la
+    // comparacion tiene que ser sobre el corpus entero y no sobre la primera
+    // pagina, que ocultaria justo los registros donde suele estar la diferencia.
+    // Pedir `?limit=99999` no vale: el servidor lo recorta a 500 en silencio.
+    const items: FacturaResumen[] = [];
+    let offset = 0;
+
+    for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta++) {
+        parametros.set("limit", String(TAMANO_PAGINA));
+        parametros.set("offset", String(offset));
+        const respuesta = await fetch(`${API}/api/facturas?${parametros}`);
+        if (!respuesta.ok) {
+            throw new Error(`La API ha respondido ${respuesta.status} a /api/facturas?${parametros}`);
+        }
+        const pagina = (await respuesta.json()) as PaginaApi;
+        items.push(...pagina.items);
+        offset += pagina.devueltas;
+        if (pagina.devueltas <= 0 || offset >= pagina.total) break;
     }
-    return ((await respuesta.json()) as PaginaApi).items;
+
+    return items;
 }
 
 // --------------------------------------------------------------------------

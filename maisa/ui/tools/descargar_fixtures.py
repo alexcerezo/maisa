@@ -16,8 +16,8 @@ Que escribe (todo bajo `--out`, por defecto `public/data/`)
 -----------------------------------------------------------
     manifiesto.json          cuando se congelo, de donde y cuantos. Trazabilidad.
     estadisticas.json        GET /api/estadisticas      -> los contadores
-    facturas.json            GET /api/facturas?limit=500 -> la tabla entera
-    facturas/<slug>.json     GET /api/facturas/{file_id} -> 500 detalles
+    facturas.json            GET /api/facturas -> la tabla entera (paginando)
+    facturas/<slug>.json     GET /api/facturas/{file_id} -> un detalle por factura
     pdfs/<slug>              unos pocos PDFs, para el <iframe> sin API
 
 Por que los detalles van en ficheros sueltos: el detalle solo se pide cuando
@@ -81,7 +81,43 @@ PDFS = [
     "FA-2508_consultoría.pdf",   # ESCALAR con medio listado a null
     "2026-07-09_P010.pdf",       # `ordenes_resultado`: instrucciones en el PDF
     "scan_002.pdf",              # `identidad_heredada`
+    "e02_P002.pdf",              # lote 2, ESCALAR: importe declarado en USD
 ]
+
+# El tope real de la API (`MAX_LIMIT`). Pedir mas no es un error: el servidor
+# recorta en silencio y devuelve `limit: 500`, asi que hay que paginar.
+TAMANO_PAGINA = 500
+
+# Corte de seguridad: con 540 facturas y paginas de 500 son dos vueltas. Si un
+# servidor ignorase `offset` devolveria lo mismo en cada vuelta y esto no
+# acabaria nunca.
+MAX_VUELTAS = 100
+
+
+def todas_las_facturas(base: str, timeout: float) -> dict:
+    """El listado entero, paginando. Espejo de `pedirTodasLasFacturas` (TS).
+
+    Se pagina en vez de pedir `?limit=99999` porque el tope se recorta **sin
+    avisar**: congelar una sola pagina dejaria el panel offline ensenando 500 de
+    540 sin decirlo.
+    """
+    items: list[dict] = []
+    total = 0
+    limite = TAMANO_PAGINA
+    offset = 0
+
+    for _ in range(MAX_VUELTAS):
+        pagina = json.loads(
+            pedir(base, "/api/facturas?limit=%d&offset=%d" % (TAMANO_PAGINA, offset), timeout)
+        )
+        total = pagina["total"]
+        limite = pagina["limit"]
+        items.extend(pagina["items"])
+        offset += pagina["devueltas"]
+        if pagina["devueltas"] <= 0 or offset >= pagina["total"]:
+            break
+
+    return {"total": total, "limit": limite, "offset": 0, "devueltas": len(items), "items": items}
 
 
 def slug(file_id: str) -> str:
@@ -173,7 +209,7 @@ def main() -> int:
         print("Arranca el sistema o pasa --base con la URL buena.", file=sys.stderr)
         return 1
 
-    listado = json.loads(pedir(base, "/api/facturas?limit=500", args.timeout))
+    listado = todas_las_facturas(base, args.timeout)
     items = listado["items"]
     print("\nlistado: %d facturas (total=%d, limit=%d)" % (len(items), listado["total"], listado["limit"]))
 
