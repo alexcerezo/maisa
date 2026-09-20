@@ -86,10 +86,28 @@ export interface Capacidad {
     ocr: {
         servicio_s_por_factura: number;
         facturas_por_hora_por_ranura: number;
-        paraleliza_el_contenedor: boolean;
-        speedup_1_a_4_hilos: number;
         frio_serial_s_por_factura: number;
         frio_serial_facturas_por_s: number;
+        /**
+         * Solapar y ganar caudal son dos cosas distintas, y el generador las
+         * mide por separado a proposito: `solapa_peticiones` sale del `idle` de
+         * `/health` (0 = los dos motores ocupados a la vez) y dice si las
+         * inferencias se pisan de verdad; `speedup_caudal_1_a_2` dice si eso se
+         * traduce en mas facturas por segundo, que solo pasa si sobran nucleos.
+         * Sustituyen a `paraleliza_el_contenedor`/`speedup_1_a_4_hilos`, que
+         * mezclaban las dos en un solo numero.
+         */
+        motores: number;
+        solapa_peticiones: boolean;
+        speedup_caudal_1_a_2: number;
+        en_vuelo: {
+            peticiones: number;
+            pared_mediana_s: number;
+            latencia_mediana_s: number;
+            facturas_por_s: number;
+            idle_minimo: number;
+        }[];
+        nota_concurrencia: string;
     };
 }
 

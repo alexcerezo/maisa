@@ -407,6 +407,67 @@ def plan_tipos(banco: dict) -> list[dict]:
         },
 ]
 
+#: El plan para nuevos tipos de archivo. El punto de extension es **el contrato
+#: de lectura**, no el motor: un lector nuevo produce una `Lectura` y la norma no
+#: se toca. Cada fila dice que falta y cuanto costaria en OCR.
+PLAN_TIPOS = [
+    {
+        "tipo": "Correo (.eml / .msg)",
+        "lector": "Cuerpo + adjuntos",
+        "detalle": (
+            "El cuerpo pasa a `texto` y cada adjunto PDF entra por el lector actual. "
+            "El `file_id` es el del mensaje y los adjuntos cuelgan de él, para no "
+            "contar dos veces la misma factura."
+        ),
+        "ocr": "Solo el adjunto escaneado",
+        "estado": "Contrato listo, falta el lector",
+    },
+    {
+        "tipo": "Imagen suelta (.jpg / .png / .tiff)",
+        "lector": "Visión directa",
+        "detalle": (
+            "No hay capa de texto: entra en el peldaño de visión y sale con "
+            "`metodo=vision_ocr`. La caché por sha256 ya cubre el reprocesado, así que "
+            "una imagen vista no se vuelve a pagar."
+        ),
+        "ocr": "Siempre, 4,08 s",
+        "estado": "Requiere un peldaño de entrada nuevo",
+    },
+    {
+        "tipo": "Hoja de cálculo (.xlsx / .csv)",
+        "lector": "Celdas → candidatos",
+        "detalle": (
+            "El maestro ya se lee de Excel, así que el motor de celdas existe. Lo que "
+            "falta es mapear columnas a los candidatos (`nif`, `iban`, `pedido`, "
+            "`fecha`, `base`, `iva`, `total`) con su confianza."
+        ),
+        "ocr": "Nunca",
+        "estado": "Aprovecha el lector del maestro",
+    },
+    {
+        "tipo": "Factura electrónica (XML / UBL / FacturaE)",
+        "lector": "Determinista",
+        "detalle": (
+            "El caso más barato y el más exacto: campos etiquetados, sin visión y sin "
+            "regex. Ya hay precedente en el proyecto leyendo XML en ISO-8859-1, así que "
+            "la trampa de codificación está identificada."
+        ),
+        "ocr": "Nunca",
+        "estado": "El más rentable de añadir",
+    },
+    {
+        "tipo": "Documento de texto (.docx / .odt)",
+        "lector": "Texto del documento",
+        "detalle": (
+            "Se extrae el texto y se aplica la misma extracción por patrones que hoy "
+            "corre sobre la capa de texto del PDF: el escalón `capa_texto` ya está "
+            "medido a 7,09 ms y 0 vCPU·s."
+        ),
+        "ocr": "Nunca, si trae texto",
+        "estado": "Reutiliza la extracción actual",
+    },
+]
+
 #: Lo que hay que tocar, en el codigo, para que entre un tipo nuevo. Va aparte
 #: de la tabla porque es la parte que se olvida y rompe la trazabilidad.
 PASOS_TIPO_NUEVO = [
