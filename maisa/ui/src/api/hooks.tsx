@@ -38,6 +38,11 @@ export interface ResultadoPeticion<T> {
     datos: T | null;
     error: Error | null;
     cargando: boolean;
+    /**
+     * Vuelve a pedir lo mismo. Sin esto, un fallo de red deja la pantalla muerta:
+     * el aviso de error ensena un boton de reintentar y no habia a que atarlo.
+     */
+    reintentar: () => void;
 }
 
 interface ValorFuente {
@@ -110,6 +115,7 @@ function usePeticion<T>(clave: string | null, ejecutar: () => Promise<T>): Resul
     const [datos, setDatos] = useState<T | null>(null);
     const [error, setError] = useState<Error | null>(null);
     const [cargando, setCargando] = useState(false);
+    const [intento, setIntento] = useState(0);
 
     const ultima = useRef(ejecutar);
     ultima.current = ejecutar;
@@ -144,9 +150,9 @@ function usePeticion<T>(clave: string | null, ejecutar: () => Promise<T>): Resul
         return () => {
             vivo = false;
         };
-    }, [clave]);
+    }, [clave, intento]);
 
-    return { datos, error, cargando };
+    return { datos, error, cargando, reintentar: () => setIntento((n) => n + 1) };
 }
 
 /**
@@ -170,10 +176,22 @@ function claveDeFiltros(filtros: FiltrosVista): string {
     return campos.join("\u0001");
 }
 
-/** Las facturas que casan con el filtro, del origen que toque. */
-export function useFacturas(filtros: FiltrosVista): ResultadoPeticion<ConjuntoFacturas> {
+/**
+ * Las facturas que casan con el filtro, del origen que toque.
+ *
+ * `activo` existe para el caso de la pantalla de la tabla: para poder decir
+ * cuantas facturas se quedan fuera por no tener fecha hace falta consultar el
+ * mismo filtro **sin** las fechas, y eso es una segunda peticion. Con `activo` en
+ * `false` no se pide nada (`usePeticion` recibe clave `null`), asi que la segunda
+ * consulta solo se lanza cuando de verdad hay un filtro de fechas puesto. Sin
+ * esto, cada carga de la tabla pediria el listado dos veces para nada.
+ */
+export function useFacturas(
+    filtros: FiltrosVista,
+    activo: boolean = true,
+): ResultadoPeticion<ConjuntoFacturas> {
     const { estado } = useFuente();
-    const clave = estado ? `${estado.fuente}\u0001${claveDeFiltros(filtros)}` : null;
+    const clave = estado && activo ? `${estado.fuente}\u0001${claveDeFiltros(filtros)}` : null;
     return usePeticion(clave, async () => {
         if (!estado) throw new Error("Se ha pedido el listado antes de saber la fuente.");
         return cargarFacturas(estado.acceso, filtros);

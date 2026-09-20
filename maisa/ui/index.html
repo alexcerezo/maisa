@@ -5,6 +5,37 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Maisa · Conciliación de facturas</title>
+    <script>
+        /*
+         * El tema, antes de que exista React.
+         *
+         * Esto tiene que ir en linea y en el `<head>`: si lo pusiera el
+         * proveedor de tema, la pagina se pintaria primero con la paleta clara y
+         * saltaria a la oscura al montar. En un panel de fondo blanco el salto
+         * es un fogonazo.
+         *
+         * La clave `albertitos.tema` esta repetida en `src/components/tema.tsx`
+         * (`CLAVE_TEMA`). Son dos trozos del mismo acuerdo: si se cambia en un
+         * sitio y no en el otro, el parpadeo vuelve sin que nadie sepa por que.
+         *
+         * Todo va en un `try` porque el almacenamiento puede estar prohibido
+         * (modo privado, cookies de terceros bloqueadas) y eso no puede dejar la
+         * pagina sin pintar.
+         */
+        (function () {
+            var oscuro = false;
+            try {
+                var guardado = localStorage.getItem("albertitos.tema");
+                oscuro = guardado
+                    ? guardado === "oscuro"
+                    : window.matchMedia("(prefers-color-scheme: dark)").matches;
+            } catch (error) {
+                oscuro = false;
+            }
+            document.documentElement.classList.toggle("dark", oscuro);
+            document.documentElement.style.colorScheme = oscuro ? "dark" : "light";
+        })();
+    </script>
 </head>
 
 <body>

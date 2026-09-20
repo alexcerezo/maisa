@@ -8,6 +8,20 @@
         ],
         "module": "ESNext",
         "moduleResolution": "bundler",
+        /* Alias `@/*` -> `src/*`. Lo exige shadcn: sus componentes se importan
+       entre si como `@/lib/utils` y `@/components/ui/...`. Tiene que estar
+       declarado en los DOS sitios, aqui (para que `tsc` lo resuelva al
+       comprobar tipos) y en `vite.config.ts` (para que lo resuelva el
+       empaquetador). Con solo uno de los dos, o falla el `build` o falla el
+       bundle en tiempo de ejecucion.
+
+       SIN `baseUrl`: TypeScript 7 lo elimino (TS5102) y las rutas de `paths` ya
+       se resuelven relativas a este fichero. Ponerlo rompe el `build`. */
+        "paths": {
+            "@/*": [
+                "./src/*"
+            ]
+        },
         "jsx": "react-jsx",
         /* Estricto a propósito: los tipos de este proyecto son la frontera entre los
        carriles de trabajo en paralelo (datos / tabla / detalle). Un `any` que se
