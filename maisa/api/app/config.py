@@ -187,6 +187,17 @@ class Settings:
         return self.outputs_dir / "outcomes.jsonl"
 
     @property
+    def cola_path(self) -> Path:
+        """Evidencia de la segunda lectura para la cola de revision (opcional).
+
+        La escribe `motor/tools/cola_revision.py`. No es la entrega ni la traza:
+        es una anotacion derivada que la API engancha a cada factura como
+        `segunda_lectura`. Distinta del estado de revision **humana** que guarda
+        Mongo (`revisiones`, `PENDIENTE`/`RESUELTA`).
+        """
+        return self.outputs_dir / "outcomes_cola.jsonl"
+
+    @property
     def cors_abierto(self) -> bool:
         return self.cors_origins == ("*",)
 
@@ -244,6 +255,7 @@ class Settings:
                 "facturas_dir": str(self.facturas_dir),
                 "traza_existe": self.traza_path.is_file(),
                 "entrega_existe": self.outcomes_path.is_file(),
+                "cola_existe": self.cola_path.is_file(),
             },
             "ui": {
                 "dir": str(self.ui_dir),

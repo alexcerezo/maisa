@@ -323,7 +323,41 @@ Layout de dos columnas, tal como lo describiste:
      técnico, no lo primero que ve un perfil no técnico pero debe poder
      abrirlo para auditoría/defensa.
 
-### 6.4 Pestaña de métricas agregadas (`PanelMetricasAgregadas`)
+### 6.4 La cola de revisión y su recorte
+
+El toggle **"Solo escaladas"** (`result === "ESCALAR"`) no es un filtro más: esas
+43 facturas **son la cola de trabajo** de la persona que revisa. El motor puede
+recortarla sin decidir ningún pago, y la API ya lo sirve, así que la lista debería
+aprovecharlo:
+
+- El listado trae `segunda_lectura` en cada fila escalada: `null`, o
+  `{confirmable, desvio}`.
+- `confirmable: true` (**4 de 43** hoy) → la segunda lectura resolvió el
+  identificador que faltaba, el maestro lo confirma y la escalada desaparece. Se
+  puede cerrar **con la evidencia delante**, sin abrir el PDF. En la lista: badge
+  distinto (propuesta: verde suave, «lista para confirmar») y un botón
+  **"Ver evidencia"**.
+- `desvio: true` (**4 de 43** hoy) → el documento trae un IBAN que no es el del
+  proveedor de su pedido. Es una **señal de fraude**: se resalta en rojo, se
+  ordena arriba y **no** se ofrece confirmar. Nunca.
+- El resto (`con_evidencia`) aporta algo pero la escalada sigue: se revisa a mano
+  como siempre.
+
+El detalle de una escalada anotada debe enseñar `segunda_lectura` **completa**
+(`campos` con lo que aportó cada lectura y `motivos` en lenguaje natural), y dejar
+claro que **no cambia el resultado**: la decisión sigue siendo `ESCALAR` hasta que
+una persona lo marque. La cabecera puede mostrar el recorte
+(`cola_segunda_lectura` de `/api/estadisticas`): «43 en cola · 4 confirmables · 4
+desvíos» — el número que justifica la pantalla.
+
+> **Dos campos que no son lo mismo.** `segunda_lectura` es lo que aporta la
+> **máquina** (sidecar, solo lectura). `revision` es el estado de revisión
+> **humana** (`PENDIENTE`/`RESUELTA`, Mongo, se escribe con
+> `PUT /api/facturas/{file_id}/revision`). La UI los pinta juntos pero no debe
+> mezclarlos: uno informa, el otro decide. Y `confirmable` **no** cierra nada por
+> sí solo — cerrar es un acto humano.
+
+### 6.5 Pestaña de métricas agregadas (`PanelMetricasAgregadas`)
 
 Vista adicional, barata de construir y con alto impacto para el tribunal:
 reproduce `run_summary.json` (distribución PAGAR/NO_PAGAR/ESCALAR,
@@ -410,5 +444,8 @@ export interface InvoicesClient {
   directo para la demo.
 - Edición manual de decisiones desde la UI (aprobar/rechazar un `ESCALAR`)
   — interesante como bonus futuro, pero no pedido; anotarlo aquí para no
-  perderlo de vista.
+  perderlo de vista. Ojo: **no** confundir con marcar una revisión como
+  `RESUELTA`, que ya existe (`PUT /api/facturas/{file_id}/revision`) y sí está en
+  alcance. Aprobar/rechazar cambia la **decisión**; resolver la revisión solo
+  cierra el trámite. Lo primero sigue fuera; lo segundo, dentro.
 - Subida de facturas en formatos distintos de PDF.

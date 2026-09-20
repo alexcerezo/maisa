@@ -49,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.settings = settings
-        app.state.traza = TrazaStore(settings.traza_path)
+        app.state.traza = TrazaStore(settings.traza_path, settings.cola_path)
         app.state.entrega = EntregaStore(settings.outcomes_path)
         app.state.mongo = MongoRepo(
             settings.mongo_uri,
