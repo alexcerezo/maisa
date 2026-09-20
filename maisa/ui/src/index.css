@@ -1,0 +1,4 @@
+/* Tailwind v4 es CSS-first: no hay `tailwind.config.js`. El tema (la paleta por
+   estado, tipografías) se declara aquí con `@theme` cuando lleguemos a los
+   badges. Por ahora basta con el reset y las utilidades. */
+@import "tailwindcss";
