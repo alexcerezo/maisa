@@ -166,6 +166,30 @@ tocar el motor. El caso del pedido repetido merece mención: pagar las dos
 facturas es pagar dos veces, y elegir una es decidir por el humano, así que
 escalan las dos y la decisión queda escrita en las dos trazas.
 
+**El único desacuerdo de riesgo alto con el oráculo externo, atribuido.**
+`scan_021.pdf` tiene el IBAN legible (`ES9368884400123588900142`, el del maestro
+del proveedor del pedido) y el NIF y la fecha ilegibles. Nosotros pagamos; el
+oráculo de `tbd_maisa` declara `acceptable = [ESCALAR, NO_PAGAR]`, así que
+`oraculo_conforme.py` lo cuenta como `FUERA_ALTO`. Lo revisamos y el desacuerdo
+es del oráculo, no nuestro:
+
+* El oráculo lo motiva con su **propia** ceguera: `N0_legible` sobre
+  `['date','supplier_nif']`, y los fallos `N1a`, `N1b` y `N2b` son cascada de
+  ese `supplier_nif: null` — `N1b` lo dice literalmente: *"no se puede comparar
+  el IBAN sin proveedor en el maestro"*.
+* Su `confidence` es `low`, `policy_dependent` es `true`, y su propio
+  `rationale` reconoce que *"un sistema con visión puede haber decidido con
+  datos"*.
+* El IBAN que el oráculo **sí** lee es el del maestro de `P011`, que es el
+  proveedor del pedido `PO-2026-0723` según su propio `N2b`: la identidad era
+  comprobable con un dato que tenía delante y no usó.
+
+Endurecer la regla (exigir además el NIF o la fecha) movería `scan_021.pdf` a
+`ESCALAR`, pero contradice el texto de la norma v3.1 —que acota la anomalía al
+IBAN— y mueve la entrega y el banco de oro. Se mantiene `PAGAR` y el desacuerdo
+queda escrito aquí: `tools/oro.py` no puede verlo porque compara nuestro
+criterio con el nuestro, y solo el oráculo externo lo saca a la luz.
+
 **Un detalle que casi nos cuesta una factura.** Una fecha como `31/02/2026` no
 es "una fecha ilegible": es una fecha **impresa y imposible**. Nuestro
 normalizador las descartaba a propósito, así que la traza decía "fecha no

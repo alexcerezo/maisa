@@ -22,8 +22,9 @@ similitud_minima_iban = 0.90
 # Umbral de calidad de la capa de texto antes de gastar vision.
 # Ojo: un escaneo no tiene capa de texto, asi que puntua 0,0 por construccion.
 # Este umbral decide si se intenta la capa nativa, NO si un escaneo es legible:
-# para eso la regla 6 mira si del documento se lee el IBAN o, si no, al menos
-# el NIF del emisor o la fecha (si_documento_no_legible).
+# para eso la regla 6 mira solo si del documento se lee el IBAN de abono
+# (si_documento_no_legible). Un NIF que no se lee se hereda del pedido del ERP
+# y no escala; la norma v3.1 acota la anomalia al IBAN.
 calidad_texto_minima = 0.60
 # Regla 6: por debajo de esta confianza en un campo clave, escalamos.
 confianza_minima_campo = 0.70

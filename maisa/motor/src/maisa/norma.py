@@ -595,9 +595,18 @@ class Decisor:
         # IBAN de abono" (docs/albertitos_plan.md), y el banco de oro congelado
         # la respeta. Se probo a exigir ademas una de las dos anclas de identidad
         # (NIF o fecha) y movia `scan_021.pdf` de PAGAR a ESCALAR: tiene el IBAN
-        # legible y el NIF y la fecha ilegibles, y el oraculo lo da por PAGAR.
-        # Endurecer la regla pide regenerar el banco y tocar la norma; no vale
-        # colarlo de paso.
+        # legible y el NIF y la fecha ilegibles.
+        #
+        # Ese es el unico desacuerdo de riesgo alto con el oraculo externo
+        # (`recon/scripts/oraculo_conforme.py`: `acceptable = [ESCALAR,
+        # NO_PAGAR]`), y esta atribuido: el oraculo lo motiva con su **propia**
+        # ceguera (`N0_legible` sobre `['date','supplier_nif']`, `confidence:
+        # low`, `policy_dependent: true`) y su `rationale` reconoce que "un
+        # sistema con vision puede haber decidido con datos". El IBAN que el
+        # oraculo si lee (`ES9368884400123588900142`) es el del maestro del
+        # proveedor del pedido, asi que la identidad era comprobable con un dato
+        # que el oraculo tenia delante y no uso. Endurecer la regla para cuadrar
+        # con el seria desviarse de la norma y mover el banco de oro a la vez.
         fechas_leidas = lectura.valores("fecha")
         if self._es_ocr(lectura) and not lectura.iban:
             hechos.append(Hecho(

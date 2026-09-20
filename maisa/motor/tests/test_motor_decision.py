@@ -305,6 +305,28 @@ def test_ocr_hereda_la_identidad_del_erp(sintetica, mundo, sin_nif, sin_iban):
         assert not algun_motivo(decision, "no legible")
 
 
+def test_el_escaneo_sin_nif_ni_fecha_paga_si_el_iban_se_lee(sintetica, mundo):
+    """El caso `scan_021.pdf`: IBAN legible, NIF y fecha ilegibles -> PAGAR.
+
+    Es el **unico** desacuerdo de riesgo alto con el oraculo externo, y esta
+    atribuido: el oraculo no admite PAGAR porque no consigue leer ni el NIF ni
+    la fecha, y lo declara con `confidence: low`. La norma v3.1 acota la
+    anomalia de ilegibilidad al IBAN, y aqui el IBAN se lee y es el del maestro
+    del proveedor del pedido, asi que no hay anomalia que escalar.
+
+    La prueba fija la regla para que endurecerla sea una decision y no un
+    descuido: si alguien la mueve a ESCALAR, el desacuerdo con el oraculo no
+    cambia (ya existe) pero si cambia la entrega y el banco de oro.
+    """
+    decision = sintetica.decide(
+        pedido=mundo.pedido_base, metodo="vision_ocr", nif=None, fecha="",
+    )
+    assert decision.campos["fecha_candidatos"] == []
+    assert decision.campos["identidad_heredada"] is True
+    assert decision.resultado == PAGAR
+    assert not algun_motivo(decision, "documento no legible")
+
+
 def test_la_herencia_exige_pedido_exacto(sintetica, mundo):
     """Con el pedido reconstruido por OCR la identidad ya no se hereda."""
     decision = sintetica.decide(pedido="PO-2028-0096",
