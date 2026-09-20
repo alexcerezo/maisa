@@ -1,13 +1,13 @@
 {
   "asientos_vigentes": 516,
-  "congelado_en": "2026-09-20T01:05:33+00:00",
-  "detalles_guardados": 500,
+  "congelado_en": "2026-09-20T03:20:32+00:00",
+  "detalles_guardados": 540,
   "entrega": {
-    "coincide_con_traza": true,
+    "coincide_con_traza": false,
     "lineas_invalidas": 0,
     "total": 500
   },
-  "facturas_en_el_listado": 500,
+  "facturas_en_el_listado": 540,
   "generado_por": "tools/descargar_fixtures.py",
   "origen": "https://82.70.78.22.sslip.io",
   "pdfs": [
@@ -19,11 +19,12 @@
     "copia_2026_0518.pdf",
     "FA-2508_consultoría.pdf",
     "2026-07-09_P010.pdf",
-    "scan_002.pdf"
+    "scan_002.pdf",
+    "e02_P002.pdf"
   ],
   "por_resultado": {
-    "ESCALAR": 43,
-    "NO_PAGAR": 9,
-    "PAGAR": 448
+    "ESCALAR": 63,
+    "NO_PAGAR": 10,
+    "PAGAR": 467
   }
 }
