@@ -143,6 +143,28 @@ def test_censo_lee_escalones_calidad_y_sospechosos() -> None:
     assert resumen["lectura"]["sospechosos"] == 1
     assert resumen["lectura"]["calidad_media"] == round((1.0 + 0.5 + 0.25) / 3, 4)
     assert resumen["lectura"]["calidad_por_resultado"] == {"ESCALAR": 0.375, "PAGAR": 1.0}
+    assert resumen["lectura"]["calidad_medidas"] == 3
+    assert resumen["lectura"]["calidad_sin_medida"] == 0
+
+
+def test_la_calidad_sin_medir_no_entra_en_la_media() -> None:
+    """Un escaneo publica `calidad_lectura: null`, que no es lo mismo que 0.0.
+
+    Contarlo como cero hundia la media del lote (0.741 con ESCALAR frente a
+    0.950 con PAGAR) y hacia parecer que las escaladas venian de leer mal,
+    cuando su lectura es indistinguible del texto embebido. La media se calcula
+    sobre lo medido y el censo declara la cobertura.
+    """
+    resumen = censo.censo([
+        fila("a.pdf", escalon="capa_texto", calidad=0.99, result="PAGAR"),
+        fila("b.pdf", escalon="cache_ocr", calidad=None, result="ESCALAR"),
+        fila("c.pdf", escalon="cache_ocr", calidad=None, result="ESCALAR"),
+    ])
+    lectura = resumen["lectura"]
+    assert lectura["calidad_media"] == 0.99
+    assert lectura["calidad_medidas"] == 1
+    assert lectura["calidad_sin_medida"] == 2
+    assert lectura["calidad_por_resultado"] == {"PAGAR": 0.99}
 
 
 def test_censo_aguanta_filas_sin_campos_ni_calidad() -> None:

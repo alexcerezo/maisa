@@ -427,10 +427,17 @@ class Decisor:
 
         base_r, iva_r = par if par else (base, iva)
         if por_total:
-            notas.append(
-                f"importe recompuesto a {euros(esperado)} (el OCR desalineo el separador "
-                f"decimal del total impreso: {euros(total)})"
-            )
+            # Solo es una reparacion si el importe cambio. `por_total` tambien es
+            # cierto cuando el OCR leyo el total bien -- basta con que cuadre con
+            # el ERP --, y en ese caso no hay nada que reconstruir: la nota salia
+            # igual, afirmando un separador decimal desalineado y repitiendo el
+            # mismo importe a los dos lados de los dos puntos. Eso inflaba el
+            # censo de error de extraccion (19 de 25 notas eran de este tipo).
+            if cuantiza(total) != esperado:
+                notas.append(
+                    f"importe recompuesto a {euros(esperado)} (el OCR desalineo el separador "
+                    f"decimal del total impreso: {euros(total)})"
+                )
         elif par is not None:
             notas.append(
                 f"total ilegible o ruidoso ({euros(total)}) confirmado por la aritmetica "

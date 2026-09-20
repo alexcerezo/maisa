@@ -89,6 +89,24 @@ def marca_pedidos_repetidos(
             decisor.marca_pedido_repetido(pedido, *sorted(ficheros))
 
 
+def _calidad_medida(doc: lectura.Documento) -> float | None:
+    """Calidad de la lectura adoptada, o ``None`` si no hay ninguna medida.
+
+    ``lectura.calidad_texto`` mide la **capa de texto** del PDF (basura,
+    proporcion de letras), no el texto que se acabo usando. Cuando el documento
+    no trae capa util el motor cae al OCR, y ahi ``doc.calidad`` es el 0.0 de la
+    capa que se descarto, no la calidad de lo que se leyo: publicarlo hacia
+    parecer que los 29 escaneos se leen fatal cuando en realidad su OCR es
+    indistinguible del texto embebido (0.9933 frente a 0.9903).
+
+    No se sustituye por la calidad del texto OCR porque ``calidad_texto`` mide
+    "esto son letras imprimibles", que es justo lo que un OCR garantiza: daria
+    1.0 hasta en un documento destrozado. Sin una medida de verdad, la traza
+    publica ``None`` y la media se calcula sobre las facturas que si la tienen.
+    """
+    return round(doc.calidad, 4) if doc.escalon == "capa_texto" else None
+
+
 def procesa(
     facturas: Path,
     xlsx: Path,
@@ -140,7 +158,7 @@ def procesa(
             lote=lote,
             sha256=doc.sha256,
             escalon_lectura=doc.escalon,
-            calidad_lectura=round(doc.calidad, 4),
+            calidad_lectura=_calidad_medida(doc),
             segundos_lectura=round(doc.segundos, 3),
             sospechosos=doc.lectura.sospechosos,
             sospechosos_meta=doc.lectura.sospechosos_meta,
@@ -151,7 +169,7 @@ def procesa(
             file_id = doc.lectura.file_id
             registro.anota(
                 trace.TIPO_LECTURA, file_id, sha256=doc.sha256, escalon=doc.escalon,
-                cache=doc.cache, calidad=round(doc.calidad, 4),
+                cache=doc.cache, calidad=_calidad_medida(doc),
                 segundos=round(doc.segundos, 3), metodo_lectura=dec.metodo_lectura,
                 sospechosos=doc.lectura.sospechosos,
                 sospechosos_meta=doc.lectura.sospechosos_meta,

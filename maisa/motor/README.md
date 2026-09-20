@@ -100,10 +100,17 @@ existe en el maestro, así que no hay nada que leer).
 PYTHONPATH=motor/src python motor/tools/censo_extraccion.py --verbose
 ```
 
-Salida del lote de 500: 29 facturas (5.8%) con 39 reparaciones —32 de importe, 4
+Salida del lote de 500: 16 facturas (3.2%) con 20 reparaciones —13 de importe, 4
 de pedido y 3 de NIF— y 15 (3.0%) con hueco —10 IBAN ajenos al maestro, 3
 pedidos inexistentes en el ERP y 2 NIF desconocidos. Es una medida, no un
 umbral: no bloquea la entrega.
+
+El censo solo cuenta reparaciones de verdad. Una nota de «importe recompuesto»
+que repita el mismo importe a los dos lados de los dos puntos no es una
+reparación, y un escaneo que el lector no supo medir no vale 0.0: la media de
+`calidad_lectura` se calcula sobre las 471 facturas con capa de texto y el censo
+declara cuántas quedan fuera, para que 0.9903 no se lea como «y los escaneos,
+vete a saber».
 
 ## Determinismo: la única invariante que no se negocia
 

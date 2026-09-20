@@ -17,7 +17,12 @@ solo PDF ni necesita el servicio de vision:
                             aritmetica del documento
                             (``norma.Decisor._repara_importes_ocr``).
 * ``escalon_lectura``       por donde se leyo cada factura.
-* ``calidad_lectura``       la confianza que el lector se da a si mismo.
+* ``calidad_lectura``       la confianza que el lector se da a si mismo. Solo
+                            la traen las facturas leidas de la capa de texto
+                            (las demas publican ``null``: no hay medida, ver
+                            ``procesa._calidad_medida``), asi que la media se
+                            calcula sobre las medidas y el censo dice cuantas
+                            son.
 * ``sospechosos``           campos que el lector marca como dudosos.
 
 Las notas se separan en dos familias, porque no significan lo mismo:
@@ -123,6 +128,7 @@ def censo(filas: list[dict[str, Any]]) -> dict[str, Any]:
     escalones: Counter[str] = Counter()
     sin_clasificar: Counter[str] = Counter()
     calidad: dict[str, list[float]] = {}
+    sin_calidad = 0
     sospechosos = 0
     detalle: list[dict[str, str]] = []
 
@@ -134,6 +140,8 @@ def censo(filas: list[dict[str, Any]]) -> dict[str, Any]:
         valor = fila.get("calidad_lectura")
         if isinstance(valor, (int, float)):
             calidad.setdefault(str(fila.get("result", "?")), []).append(float(valor))
+        else:
+            sin_calidad += 1
 
         campos = fila.get("campos") or {}
         notas = list(campos.get("notas") or []) + list(campos.get("notas_importe") or [])
@@ -160,6 +168,8 @@ def censo(filas: list[dict[str, Any]]) -> dict[str, Any]:
         "lectura": {
             "sospechosos": sospechosos,
             "calidad_media": round(sum(todas) / len(todas), 4) if todas else None,
+            "calidad_medidas": len(todas),
+            "calidad_sin_medida": sin_calidad,
             "calidad_por_resultado": {
                 resultado: round(sum(valores) / len(valores), 4)
                 for resultado, valores in sorted(calidad.items())
@@ -192,7 +202,9 @@ def imprime(resumen: dict[str, Any], verbose: bool = False) -> None:
     escalones = "  ".join(f"{k}={v}" for k, v in resumen["escalones"].items())
     print(f"  escalon de lectura   : {escalones}")
     lectura = resumen["lectura"]
-    print(f"  calidad_lectura media: {lectura['calidad_media']}")
+    medidas, sin_medida = lectura["calidad_medidas"], lectura["calidad_sin_medida"]
+    print(f"  calidad_lectura media: {lectura['calidad_media']} "
+          f"({medidas}/{total} facturas medidas; {sin_medida} sin capa de texto)")
     por_resultado = "  ".join(
         f"{k}={v}" for k, v in lectura["calidad_por_resultado"].items()
     )
