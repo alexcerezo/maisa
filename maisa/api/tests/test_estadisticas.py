@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.deps import get_mongo, get_ocr
 from app.main import create_app
-from app.traza import TrazaStore, motivo_principal
+from app.traza import TrazaStore, divisa_principal, motivo_principal
 
 from .conftest import FakeMongo, FakeOcr
 
@@ -124,3 +124,29 @@ def test_motivo_principal_prioriza_motivos_y_luego_hechos():
     )
     assert motivo_principal({"motivos": [], "hechos": []}) is None
     assert motivo_principal({"motivos": [""], "hechos": [{"ok": True}]}) is None
+
+
+def test_divisa_principal_elige_la_que_no_es_la_del_erp():
+    """De las divisas declaradas manda la que discrepa, porque es la que escala."""
+    # Sin declarar nada se asume la del ERP: el silencio no es una duda.
+    assert divisa_principal({}) == "EUR"
+    assert divisa_principal({"divisa_documento": [], "divisa_erp": "EUR"}) == "EUR"
+    # Declarar la del ERP tampoco cambia nada.
+    assert divisa_principal({"divisa_documento": ["EUR"], "divisa_erp": "EUR"}) == "EUR"
+    # La que discrepa es la que hay que enseñar, aunque venga detras.
+    assert divisa_principal({"divisa_documento": ["EUR", "USD"], "divisa_erp": "EUR"}) == "USD"
+    assert divisa_principal({"divisa_documento": ["USD"], "divisa_erp": "EUR"}) == "USD"
+    # Si el ERP no fuese euros, la del documento seguiria siendo la que discrepa.
+    assert divisa_principal({"divisa_documento": ["USD"], "divisa_erp": "GBP"}) == "USD"
+    # Dos divisas raras y ninguna del ERP: la primera, que es el orden del motor.
+    assert divisa_principal({"divisa_documento": ["USD", "GBP"], "divisa_erp": "EUR"}) == "USD"
+
+
+def test_divisa_principal_normaliza_lo_que_viene_de_la_traza():
+    """La traza es texto libre de un motor en Python: no se le supone la forma."""
+    # Una sola divisa puede llegar como cadena en vez de como lista.
+    assert divisa_principal({"divisa_documento": "USD"}) == "USD"
+    # Y en minusculas o con espacios, que es como la escribe un OCR.
+    assert divisa_principal({"divisa_documento": [" usd "], "divisa_erp": "eur"}) == "USD"
+    # Una entrada vacia no es una divisa declarada.
+    assert divisa_principal({"divisa_documento": ["", "  "], "divisa_erp": "EUR"}) == "EUR"

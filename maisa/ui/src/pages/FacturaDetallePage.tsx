@@ -267,11 +267,17 @@ export default function FacturaDetallePage() {
                     </Seccion>
 
                     <Seccion id="seccion-porque" titulo="Por qué se decidió esto">
-                        <PanelHechos hechos={factura.hechos} />
+                        <PanelHechos
+                            hechos={factura.hechos}
+                            divisa={factura.resumen.divisa}
+                        />
                     </Seccion>
 
                     <Seccion id="seccion-lectura" titulo="Lectura del documento">
-                        <CamposCrudos campos={factura.campos} />
+                        <CamposCrudos
+                            campos={factura.campos}
+                            divisa={factura.resumen.divisa}
+                        />
                     </Seccion>
 
                     {/*

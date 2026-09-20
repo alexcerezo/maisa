@@ -18,6 +18,11 @@
  *    motor no pudo decir de quien es la factura, y entonces el proveedor, el NIF
  *    y el importe son `null` o heredados. Ensenarlos sin mas seria dar por buenos
  *    unos datos que el propio motor marca como poco fiables.
+ *
+ * 3. **Un importe sin su divisa es otro importe.** En cuatro facturas del lote 2
+ *    el documento factura en USD, JPY o GBP, y el motor escala (R7) en vez de
+ *    convertir, porque no hay tipo de cambio en ningun sitio. Pintarlas en euros
+ *    con `euros()` seria ensenar una cifra que el proveedor no ha impreso.
  */
 
 import { BadgeCheck, CircleAlert } from "lucide-react";
@@ -31,6 +36,7 @@ import {
     eurosConSigno,
     fecha,
     entero,
+    importeEn,
     latencia,
     porcentaje,
     SIN_DATO,
@@ -91,7 +97,10 @@ export function ResumenFactura({ detalle }: { detalle: FacturaDetalle }) {
                         <Dato etiqueta="Pedido" valor={texto(resumen.pedido)} mono />
                         <Dato etiqueta="Asiento" valor={texto(resumen.asiento)} mono />
                         <Dato etiqueta="Estado en el ERP" valor={texto(resumen.estado_erp)} />
-                        <Dato etiqueta="Total de la factura" valor={euros(resumen.total)} />
+                        <Dato
+                            etiqueta="Total de la factura"
+                            valor={importeEn(resumen.total, resumen.divisa)}
+                        />
                         <Dato etiqueta="Importe del asiento" valor={euros(resumen.importe_erp)} />
                         <Dato
                             etiqueta="Desvío"
@@ -108,6 +117,22 @@ export function ResumenFactura({ detalle }: { detalle: FacturaDetalle }) {
             </Card>
 
             <PanelSegundaLectura segunda={detalle.segunda_lectura} />
+
+            {divisaExtranjera(resumen.divisa) ? (
+                <Alert className="border-amber-600/40 bg-amber-500/5 dark:border-amber-400/40 dark:bg-amber-400/5">
+                    <CircleAlert className="text-amber-700 dark:text-amber-300" />
+                    <AlertTitle className="text-amber-800 dark:text-amber-200">
+                        La factura viene en {resumen.divisa}, no en euros
+                    </AlertTitle>
+                    <AlertDescription className="text-amber-800/80 dark:text-amber-200/70">
+                        El importe de arriba está tal y como lo imprime el documento, en{" "}
+                        {resumen.divisa}. El motor no lo convierte: no hay tipo de cambio ni en
+                        el ERP ni en el maestro, así que un importe en otra divisa no se puede
+                        cotejar contra el asiento y el expediente se escala. El asiento del ERP
+                        sí va en euros, de ahí que las dos cifras no cuadren.
+                    </AlertDescription>
+                </Alert>
+            ) : null}
 
             {!detalle.identificacion_fiable ? (
                 <Alert className="border-amber-600/40 bg-amber-500/5 dark:border-amber-400/40 dark:bg-amber-400/5">
@@ -233,6 +258,16 @@ function Motivos({ motivos }: { motivos: readonly string[] }) {
             </ul>
         </div>
     );
+}
+
+/**
+ * Si la divisa del documento obliga a avisar. `EUR` y la ausencia de divisa no
+ * avisan: el motor trata el silencio como euros, asi que avisar de lo normal
+ * seria ruido en las 536 facturas que no lo necesitan.
+ */
+function divisaExtranjera(divisa: string | null | undefined): boolean {
+    const codigo = divisa?.trim().toUpperCase();
+    return Boolean(codigo) && codigo !== "EUR";
 }
 
 function Dato({

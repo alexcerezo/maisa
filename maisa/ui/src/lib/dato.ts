@@ -14,13 +14,24 @@
  * factura. Es una heuristica, y por eso esta escrita en un solo sitio y con la
  * lista a la vista: el dia que aparezca una clave nueva que sea dinero, se anade
  * aqui y aparece formateada en las dos pantallas a la vez.
+ *
+ * El tercer argumento, `divisa`, es opcional y solo lo pasan las pantallas del
+ * expediente, que son las que saben en que moneda viene el documento. Sin el, todo
+ * se pinta en euros, que es lo que hacia antes de que existiera R7.
  */
 
-import { euros, porcentaje, valorLegible } from "./formato";
+import { importeEn, porcentaje, valorLegible } from "./formato";
 
-/** Claves cuyo valor son euros, en `campos` y en `hechos.datos`. */
+/**
+ * Claves cuyo valor son importes, en `campos` y en `hechos.datos`.
+ *
+ * `total_impreso` es la cifra tal y como la imprime el documento, que es justo lo
+ * que R7 compara: sin ella en la lista se veria `"2254.00"` en crudo, con el punto
+ * decimal ingles, en las cuatro facturas donde el importe es la cuestion.
+ */
 const CLAVES_DINERO = [
     "total",
+    "total_impreso",
     "base",
     "importe",
     "importe_erp",
@@ -64,8 +75,10 @@ function porCiento(valor: number): string {
  * 2. El sufijo `_pct` y las claves de `CLAVES_TANTO` **no son la misma unidad**
  *    (por ciento contra tanto por uno), asi que se comprueban por separado y con
  *    formateadores distintos. Ver `porCiento()`.
+ * 3. La divisa no la decide la clave sino el expediente, y dentro de un mismo
+ *    `campos` no es la misma para todos los importes. Ver `divisaDeClave()`.
  */
-export function valorDeDato(clave: string, valor: unknown): string {
+export function valorDeDato(clave: string, valor: unknown, divisa?: string): string {
     if (valor === null || valor === undefined || valor === "") return valorLegible(valor);
 
     const limpia = clave.toLowerCase();
@@ -82,10 +95,25 @@ export function valorDeDato(clave: string, valor: unknown): string {
 
     if (esDeClave(limpia, CLAVES_DINERO)) {
         const convertido = numero(valor);
-        if (convertido !== null) return euros(convertido);
+        if (convertido !== null) return importeEn(convertido, divisaDeClave(limpia, divisa));
     }
 
     return valorLegible(valor);
+}
+
+/**
+ * En que divisa va un importe, segun la clave que lo trae.
+ *
+ * La distincion no es cosmetica: en una misma factura conviven `campos.total` y
+ * `campos.importe_erp`, y cuando el documento factura en dolares el primero va en
+ * USD y el segundo en euros. Ponerles la misma divisa a los dos seria cambiar un
+ * error por otro.
+ */
+function divisaDeClave(clave: string, divisa: string | undefined): string | undefined {
+    // Todo lo que sale del ERP va en euros: el puente exporta siete columnas y
+    // ninguna es la divisa, asi que el ERP no puede estar en otra cosa.
+    if (clave.endsWith("_erp")) return undefined;
+    return divisa;
 }
 
 /** El numero de un valor que puede venir como texto (`"3012.89"`) o como numero. */

@@ -40,6 +40,8 @@ def test_listado_basico(client):
     assert primera["lote"] == 1
     assert primera["metodo_lectura"] == "texto_determinista"
     assert primera["asiento"] == "AS-00096"
+    # Ninguna de las cuatro declara divisa, asi que la del documento es la del ERP.
+    assert primera["divisa"] == "EUR"
 
 
 def test_motivo_principal_derivado_de_los_hechos(client):

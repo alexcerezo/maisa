@@ -10,13 +10,13 @@
  * Tres decisiones que vienen de `severidad.ts` y no se repiten aqui:
  *
  * 1. **Se ordenan por gravedad** (`ordenarHechos`), no por numero de regla. Lo
- *    que bloquea el pago va arriba. Ordenados por `R1..R6`, el hecho que importa
- *    cae en medio de cinco que dicen "Cumple".
+ *    que bloquea el pago va arriba. Ordenados por `R1..R7`, el hecho que importa
+ *    cae en medio de seis que dicen "Cumple".
  *
- * 2. **`ok` no llama la atencion.** 448 de las 500 facturas cumplen las seis
+ * 2. **`ok` no llama la atencion.** Casi todas las facturas cumplen las siete
  *    reglas. Pintar cada "Cumple" en verde fuerte llenaria la pantalla de color y
  *    el ojo dejaria de ir a lo que falla. Los que cumplen van en gris y ademas se
- *    pueden plegar, porque en una factura limpia son los seis.
+ *    pueden plegar, porque en una factura limpia son las siete.
  *
  * 3. **`bloquea` y `anomalia` no son lo mismo.** Solo R5 produce `duro: true`, y
  *    solo eso significa "no se paga". Una anomalia (`ok: false` y nada mas) se
@@ -40,7 +40,14 @@ import { cn } from "@/lib/utils";
 /** A partir de aqui un valor ocupa su propia linea en vez de ir en una ficha. */
 const LARGO_DE_FICHA = 48;
 
-export function PanelHechos({ hechos }: { hechos: readonly Hecho[] }) {
+export function PanelHechos({
+    hechos,
+    divisa,
+}: {
+    hechos: readonly Hecho[];
+    /** La divisa del documento, para los importes que traen los hechos. */
+    divisa?: string;
+}) {
     const [verCumplen, setVerCumplen] = useState(false);
 
     const ordenados = ordenarHechos(hechos);
@@ -84,7 +91,9 @@ export function PanelHechos({ hechos }: { hechos: readonly Hecho[] }) {
                         esta factura.
                     </p>
                 ) : (
-                    pendientes.map((hecho) => <FilaHecho key={hecho.regla} hecho={hecho} />)
+                    pendientes.map((hecho) => (
+                        <FilaHecho key={hecho.regla} hecho={hecho} divisa={divisa} />
+                    ))
                 )}
 
                 {cumplen.length > 0 && pendientes.length > 0 ? (
@@ -105,7 +114,9 @@ export function PanelHechos({ hechos }: { hechos: readonly Hecho[] }) {
                         </Button>
 
                         {verCumplen
-                            ? cumplen.map((hecho) => <FilaHecho key={hecho.regla} hecho={hecho} />)
+                            ? cumplen.map((hecho) => (
+                                  <FilaHecho key={hecho.regla} hecho={hecho} divisa={divisa} />
+                              ))
                             : null}
                     </div>
                 ) : null}
@@ -150,11 +161,15 @@ function resumen(pendientes: readonly Hecho[], cumplen: number): string {
  * un `<div>` de adorno para que no exista en el arbol de accesibilidad — el
  * color no es informacion, la etiqueta de severidad si.
  */
-function FilaHecho({ hecho }: { hecho: Hecho }) {
+function FilaHecho({ hecho, divisa }: { hecho: Hecho; divisa?: string }) {
     const severidad = severidadHecho(hecho);
     const datos = Object.entries(hecho.datos ?? {});
-    const cortos = datos.filter(([clave, valor]) => valorDeDato(clave, valor).length <= LARGO_DE_FICHA);
-    const largos = datos.filter(([clave, valor]) => valorDeDato(clave, valor).length > LARGO_DE_FICHA);
+    const cortos = datos.filter(
+        ([clave, valor]) => valorDeDato(clave, valor, divisa).length <= LARGO_DE_FICHA,
+    );
+    const largos = datos.filter(
+        ([clave, valor]) => valorDeDato(clave, valor, divisa).length > LARGO_DE_FICHA,
+    );
 
     return (
         <article
@@ -185,7 +200,9 @@ function FilaHecho({ hecho }: { hecho: Hecho }) {
                             className="flex items-baseline gap-1.5 rounded-md bg-muted/60 px-2 py-1 text-xs"
                         >
                             <dt className="text-muted-foreground">{claveLegible(clave)}</dt>
-                            <dd className="font-medium break-all">{valorDeDato(clave, valor)}</dd>
+                            <dd className="font-medium break-all">
+                                {valorDeDato(clave, valor, divisa)}
+                            </dd>
                         </div>
                     ))}
                 </dl>
@@ -196,7 +213,9 @@ function FilaHecho({ hecho }: { hecho: Hecho }) {
                     {largos.map(([clave, valor]) => (
                         <div key={clave} className="rounded-md bg-muted/60 px-2 py-1.5 text-xs">
                             <dt className="text-muted-foreground">{claveLegible(clave)}</dt>
-                            <dd className="mt-0.5 break-words">{valorDeDato(clave, valor)}</dd>
+                            <dd className="mt-0.5 break-words">
+                                {valorDeDato(clave, valor, divisa)}
+                            </dd>
                         </div>
                     ))}
                 </dl>

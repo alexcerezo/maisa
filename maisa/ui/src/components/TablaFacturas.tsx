@@ -4,7 +4,7 @@
  * Es la pantalla que se mira de verdad: 500 filas y una pregunta — "cuales hay
  * que mirar". Todo lo de aqui esta puesto para responderla rapido.
  *
- * Cuatro decisiones que no son de gusto:
+ * Seis decisiones que no son de gusto:
  *
  * 1. **La columna que manda es la decision, y va primera.** Ordenadas por
  *    `file_id` (que es como las devuelve el motor, y asi lo dice `filtros.ts`),
@@ -31,6 +31,12 @@
  *    sitio es ese y no una columna nueva: la traen 9 filas de 540, y una columna
  *    propia seria una franja vacia en el 98 % de la tabla. Debajo de la etiqueta
  *    de decision, el hueco ya existe.
+ *
+ * 6. **El importe se pinta en la divisa del documento, y el del ERP en euros.**
+ *    Cuatro facturas del lote 2 vienen en USD, JPY o GBP. El motor no las
+ *    convierte (no hay tipo de cambio) y las escala, asi que aqui el importe del
+ *    documento sale en su divisa y el del asiento en euros: que las dos cifras
+ *    no se lean igual es exactamente el motivo del escalado.
  */
 
 import { ChevronRight } from "lucide-react";
@@ -52,6 +58,7 @@ import {
     euros,
     eurosConSigno,
     fecha,
+    importeEn,
     latencia,
     porcentaje,
     SIN_DATO,
@@ -220,7 +227,9 @@ function FilaFactura({
             </TableCell>
 
             <TableCell className="text-right tabular-nums">
-                <span className="block font-medium">{euros(factura.total)}</span>
+                <span className="block font-medium">
+                    {importeEn(factura.total, factura.divisa)}
+                </span>
                 {factura.importe_erp !== null ? (
                     <span className="block text-xs text-muted-foreground">
                         ERP {euros(factura.importe_erp)}

@@ -28,7 +28,14 @@
 export const RESULTADOS = ["PAGAR", "NO_PAGAR", "ESCALAR"] as const;
 export type Resultado = (typeof RESULTADOS)[number];
 
-/** Las seis reglas de la norma. Cada factura trae un `hecho` por regla evaluada. */
+/**
+ * Las siete reglas de la norma. Cada factura trae un `hecho` por regla evaluada.
+ *
+ * `R7_divisa` es la unica que **no** compara dos datos del mismo sistema: mira si
+ * el documento declara el importe en una divisa distinta de la del ERP. Callar
+ * no escala —el silencio se lee como la divisa del ERP—, pero declarar otra si:
+ * sin tipo de cambio en ningun sitio, convertir seria inventarse la cifra.
+ */
 export const REGLAS = [
     "R1_identidad",
     "R2_pedido",
@@ -36,6 +43,7 @@ export const REGLAS = [
     "R4_fecha",
     "R5_estado",
     "R6_anomalia",
+    "R7_divisa",
 ] as const;
 export type Regla = (typeof REGLAS)[number];
 
@@ -73,10 +81,18 @@ export interface FacturaResumen {
     pedido: string | null;
     /** Fecha de la factura, `YYYY-MM-DD`. */
     fecha: string | null;
-    /** Total leido del documento, en euros. */
+    /** Total leido del documento. Va en `divisa`, no siempre en euros. */
     total: number | null;
     /** Total que dice el ERP para ese asiento. */
     importe_erp: number | null;
+    /**
+     * La divisa en la que esta el `total`, en ISO-4217. Casi siempre `"EUR"`.
+     *
+     * Se resuelve en el servidor (`traza.divisa_principal`) y no aqui: de las
+     * divisas que declara el documento manda la que no es la del ERP, y esa
+     * regla tiene que dar lo mismo en el listado y en el detalle.
+     */
+    divisa: string;
     /** `total - importe_erp`. `null` si falta cualquiera de los dos. */
     desvio_importe: number | null;
     /** Estado del pedido en el ERP. Visto: `PENDIENTE` (488) y `PAGADA` (9). */
@@ -305,6 +321,14 @@ export interface CamposFactura {
     total?: string;
     iva_pct?: string;
     desvio_importe?: string;
+    /**
+     * Divisas declaradas junto al importe que se coteja (ISO-4217), sin
+     * duplicados. `[]` cuando el documento no marca ninguna, que es lo normal:
+     * el silencio se lee como la divisa del ERP y no como una duda.
+     */
+    divisa_documento?: string[];
+    /** La divisa en la que viene el importe del ERP. Hoy siempre `"EUR"`. */
+    divisa_erp?: string;
     fecha?: string;
     /** Avisos del motor durante la lectura (`"pedido PO-9999 no existe en el ERP"`). */
     notas?: string[];

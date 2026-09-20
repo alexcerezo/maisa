@@ -51,6 +51,8 @@ const ORDEN_CAMPOS = [
     "iva_pct",
     "total",
     "importe_erp",
+    "divisa_documento",
+    "divisa_erp",
     "desvio_importe",
 ];
 
@@ -71,11 +73,21 @@ function ordenarClaves(campos: CamposFactura): string[] {
     return claves.sort((a, b) => prioridad(a) - prioridad(b));
 }
 
-export function CamposCrudos({ campos }: { campos: CamposFactura }) {
+export function CamposCrudos({
+    campos,
+    divisa,
+}: {
+    campos: CamposFactura;
+    /** La divisa del documento, para pintar sus importes como se imprimieron. */
+    divisa?: string;
+}) {
     const claves = ordenarClaves(campos);
     const nota = typeof campos.nota_documento === "string" ? campos.nota_documento.trim() : "";
 
-    const celdas = claves.map((clave) => ({ clave, texto: valorDeDato(clave, campos[clave]) }));
+    const celdas = claves.map((clave) => ({
+        clave,
+        texto: valorDeDato(clave, campos[clave], divisa),
+    }));
     const cortas = celdas.filter((celda) => celda.texto.length <= LARGO_DE_CELDA);
     const largas = celdas.filter((celda) => celda.texto.length > LARGO_DE_CELDA);
 

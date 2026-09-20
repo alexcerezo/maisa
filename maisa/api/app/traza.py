@@ -55,6 +55,26 @@ def _texto(valor: Any) -> str | None:
     return texto or None
 
 
+def divisa_principal(campos: dict) -> str:
+    """La divisa con la que hay que leer los importes de una factura.
+
+    De las divisas que declara el documento manda la que **no** es la del ERP: es
+    la que dispara R7 y la unica que cambia como se lee la cifra. Sin declaracion
+    ninguna se asume la del ERP, que es lo que hace el motor al no escalar: el
+    silencio se lee como euros, no como una duda.
+
+    Se resuelve aqui y no en el cliente porque el listado y el detalle tienen que
+    decir lo mismo, y porque el dia que el motor anada una divisa el visor no
+    tiene que saber cual gana.
+    """
+    aceptada = _texto(campos.get("divisa_erp")) or "EUR"
+    declaradas = campos.get("divisa_documento") or []
+    if isinstance(declaradas, str):
+        declaradas = [declaradas]
+    limpias = [str(d).strip().upper() for d in declaradas if _texto(d)]
+    return next((d for d in limpias if d != aceptada), limpias[0] if limpias else aceptada)
+
+
 def motivo_principal(registro: dict) -> str | None:
     """Motivo que resume la decision, para la columna del visor.
 
@@ -147,6 +167,9 @@ def resumir(registro: dict) -> dict:
         "importe_erp": _num(campos.get("importe_erp")),
         "desvio_importe": _num(campos.get("desvio_importe")),
         "estado_erp": _texto(campos.get("estado_erp")),
+        # En que divisa viene el `total`. Casi siempre `"EUR"`, y entonces la
+        # tabla no lo pinta: el aviso solo tiene que saltar cuando no lo es.
+        "divisa": divisa_principal(campos),
         "lote": registro.get("lote"),
         "metodo_lectura": registro.get("metodo_lectura"),
         "escalon_lectura": registro.get("escalon_lectura"),

@@ -40,6 +40,50 @@ export function euros(valor: number | null | undefined): string {
 }
 
 /**
+ * Los formateadores por divisa, memoizados.
+ *
+ * `Intl.NumberFormat` es caro de construir y la tabla lo pediria una vez por fila.
+ * La clave es el codigo ya normalizado, asi que el mapa no puede crecer sin
+ * limite: las divisas que declara el corpus son cuatro.
+ */
+const FORMATOS_DIVISA = new Map<string, Intl.NumberFormat | null>();
+
+function formatoDeDivisa(codigo: string): Intl.NumberFormat | null {
+    const cacheado = FORMATOS_DIVISA.get(codigo);
+    if (cacheado !== undefined) return cacheado;
+    let formato: Intl.NumberFormat | null;
+    try {
+        formato = new Intl.NumberFormat("es-ES", { style: "currency", currency: codigo });
+    } catch {
+        // Un codigo que `Intl` no reconoce no puede tumbar el panel: se cae al
+        // formato en euros con el codigo detras, que se lee igual de bien.
+        formato = null;
+    }
+    FORMATOS_DIVISA.set(codigo, formato);
+    return formato;
+}
+
+/**
+ * `1234.5` en la divisa que se le diga: `1.234,50 US$`.
+ *
+ * `euros()` fija `EUR` y por eso no sirve para las cuatro facturas del lote 2 que
+ * vienen en USD, JPY o GBP: ensenar `1.560,00 €` un importe impreso en dolares es
+ * la misma clase de error que pintar `0,00 €` donde no hay dato. Un `null` sigue
+ * siendo una raya, y sin divisa se asume euros, que es lo que hace el motor
+ * cuando el documento no declara ninguna.
+ */
+export function importeEn(
+    valor: number | null | undefined,
+    divisa: string | null | undefined,
+): string {
+    if (valor === null || valor === undefined || !Number.isFinite(valor)) return SIN_DATO;
+    const codigo = divisa?.trim().toUpperCase();
+    if (!codigo) return EUROS.format(valor);
+    const formato = formatoDeDivisa(codigo);
+    return formato ? formato.format(valor) : `${EUROS.format(valor)} ${codigo}`;
+}
+
+/**
  * El desvio con el signo delante, incluido el `+`.
  *
  * `Intl` no pone el `+` en los positivos, y sin el, una columna de desvios se
@@ -88,6 +132,47 @@ export function porcentaje(valor: number | null | undefined): string {
 export function entero(valor: number | null | undefined): string {
     if (valor === null || valor === undefined || !Number.isFinite(valor)) return SIN_DATO;
     return ENTERO.format(valor);
+}
+
+/**
+ * Un numero con decimales fijos y coma de es-ES. `3.69` -> `3,69`.
+ *
+ * Existe para las cifras de tiempo del banco de medidas, que no son importes ni
+ * contadores: `entero()` las redondearia a `4` y perderia justo lo que se esta
+ * midiendo (3,69 s contra 3,78 s es la diferencia entre dos configuraciones).
+ */
+export function decimal(valor: number | null | undefined, decimales: number = 2): string {
+    if (valor === null || valor === undefined || !Number.isFinite(valor)) return SIN_DATO;
+    return new Intl.NumberFormat("es-ES", {
+        minimumFractionDigits: decimales,
+        maximumFractionDigits: decimales,
+    }).format(valor);
+}
+
+/**
+ * Una duracion en segundos, ya legible.
+ *
+ * Los escenarios de la extrapolacion llegan a 3 964 865 s, y eso en segundos no
+ * se lee: hay que convertirlo mentalmente a 46 dias. Por eso a partir de una hora
+ * se parte en horas y minutos, y de ahi para abajo se dan segundos con dos
+ * decimales (que es la precision con la que se midio).
+ *
+ * `0` se deja como `0 s` y no como `0 h 0 min`: el cero es un dato, no un hueco, y
+ * aqui significa "no cuesta nada".
+ */
+export function duracion(valorSegundos: number | null | undefined): string {
+    if (valorSegundos === null || valorSegundos === undefined || !Number.isFinite(valorSegundos)) {
+        return SIN_DATO;
+    }
+    if (valorSegundos >= 3600) {
+        const horas = Math.floor(valorSegundos / 3600);
+        const minutos = Math.round((valorSegundos % 3600) / 60);
+        // Redondear los minutos puede dar 60: se sube a la hora siguiente en vez
+        // de enseñar "1 h 60 min".
+        if (minutos === 60) return `${horas + 1} h`;
+        return minutos === 0 ? `${horas} h` : `${horas} h ${minutos} min`;
+    }
+    return `${decimal(valorSegundos, valorSegundos < 10 ? 2 : 0)} s`;
 }
 
 /** Un texto vacio o ausente es una raya, igual que un nulo numerico. */

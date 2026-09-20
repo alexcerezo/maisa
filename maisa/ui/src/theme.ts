@@ -77,6 +77,7 @@ export const ETIQUETA_REGLA: Record<Regla, string> = {
     R4_fecha: "Fecha",
     R5_estado: "Estado del pedido",
     R6_anomalia: "Anomalías",
+    R7_divisa: "Divisa",
 };
 
 /**
@@ -93,6 +94,8 @@ export const EXPLICACION_REGLA: Record<Regla, string> = {
     R4_fecha: "Que la fecha de la factura sea coherente con el pedido y el asiento.",
     R5_estado: "Que el pedido del ERP no esté ya pagado. Es la única regla que bloquea el pago.",
     R6_anomalia: "Pagos duplicados, documentos repetidos y otras señales de alarma.",
+    R7_divisa:
+        "Que el importe esté en la divisa del ERP. Si el documento factura en otra, se escala sin convertir: no hay tipo de cambio en ningún sitio.",
 };
 
 /** Como se leyo el documento, en castellano. */
