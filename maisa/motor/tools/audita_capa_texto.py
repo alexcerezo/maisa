@@ -47,13 +47,10 @@ import json
 import random
 import sys
 from collections import Counter
-from decimal import Decimal
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ / "src"))
-
-import requests  # noqa: E402
 
 from maisa.lectura import _paginas_respuesta, _peticion_ocr, capa_texto  # noqa: E402
 from maisa.normaliza import a_decimal  # noqa: E402
