@@ -123,6 +123,15 @@ Se para en el primer peldaño que da texto y se devuelve también de qué pelda�
 salió (`source`), porque el coste y la fiabilidad de la clasificación dependen
 de ello.
 
+El peldaño 1 se devuelve como `cache` o como **`cache-nube`**: la caché guarda
+qué motor leyó cada entrada (`proveedor` / `escalon` / prefijo `nube:` de `motor`)
+y `procedenciaDeCacheOcr()` lo separa. Importa porque las dos calidades no son
+comparables — la nube alucina y no da score, el local es trazable — y una
+evaluación sobre un corpus mixto no sirve para decidir nada si no se pueden
+separar. En el corpus antiguo el `motor` decía `local:` **aunque el texto viniera
+de la nube**, así que la procedencia se deduce por prioridad y no del prefijo solo.
+Ver la política de motores en `ocr_service/README.md`.
+
 El `state` no es el documento entero: son 12 líneas de cabecera, el cuerpo
 recortado a 2.500 caracteres y 6 líneas de pie. En una factura el emisor, el
 número y la fecha viven arriba, el NIF del cliente y las condiciones abajo, y
@@ -250,6 +259,18 @@ valida **al cargar**, no a mitad de un lote de 500 facturas.
   imprime la distribución de tipos, la cola de revisión y el coste, pero **no
   el acierto**. Para medirlo hace falta un jsonl con
   `{"file": "...", "page": 1, "tipo": "factura"}` pasado con `--golden`.
+
+> **La caché de `_scratch/jev-eval/ocr/` es de procedencia desconocida.** Sus
+> entradas son anteriores al arreglo, así que el `motor` que llevan dentro no es
+> de fiar y no se puede afirmar de qué motor salió cada texto. Para clasificar da
+> igual —Jev ve texto y devuelve un tipo, y le importa poco quién lo leyó—, pero
+> **cualquier comparación de motores sobre esa caché no vale**: nube y local
+> fallan distinto (ver la política de motores en `ocr_service/README.md`). Para
+> una línea base limpia hay que regenerarla forzando el motor:
+>
+> ```bash
+> npm run precalentar -- --cache ../_scratch/jev-eval/ocr --engine local --forzar
+> ```
 
 ## Qué se trae del original y qué no
 

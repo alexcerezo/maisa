@@ -39,8 +39,10 @@ from rapidocr import EngineType, ModelType, OCRVersion, RapidOCR
 
 try:  # ejecutado como paquete (`uvicorn app.server:app`)
     from .cloud import CloudConfig, CloudError, CloudOCR
+    from .importes import a_convencion_es
 except ImportError:  # ejecutado como script (`python app/server.py`)
     from cloud import CloudConfig, CloudError, CloudOCR  # type: ignore[no-redef]
+    from importes import a_convencion_es  # type: ignore[no-redef]
 
 # --------------------------------------------------------------------------- #
 # Configuracion (variables de entorno)
@@ -599,6 +601,29 @@ def _public(entry: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
+def _normaliza_importes(payload: dict[str, Any]) -> dict[str, Any]:
+    """Reescribe los importes del payload a convencion espanola, in situ.
+
+    Es el unico punto donde se toca el texto de los DOS motores, para que salgan
+    del servicio con el mismo formato numerico. `a_convencion_es` es idempotente,
+    asi que da igual que un numero se visite dos veces (el texto de pagina y el
+    de su lista de lineas son el mismo objeto).
+    """
+    for clave in ("text", "text_clean"):
+        if isinstance(payload.get(clave), str):
+            payload[clave] = a_convencion_es(payload[clave])
+    for clave in ("lines", "results"):
+        for entrada in payload.get(clave) or []:
+            if not isinstance(entrada, dict):
+                continue
+            if isinstance(entrada.get("text"), str):
+                entrada["text"] = a_convencion_es(entrada["text"])
+            for linea in entrada.get("lines") or []:
+                if isinstance(linea, dict) and isinstance(linea.get("text"), str):
+                    linea["text"] = a_convencion_es(linea["text"])
+    return payload
+
+
 def _iter_local(
     source: _Source,
     include_boxes: bool,
@@ -642,7 +667,7 @@ def _local_document(
     if single_lines is not None:
         payload["lines"] = single_lines
         payload["text"] = pages[0]["text"]
-    return payload
+    return _normaliza_importes(payload)
 
 
 # --------------------------------------------------------------------------- #
@@ -671,7 +696,7 @@ def _cloud_document(
         page = document.pages[0]
         payload["lines"] = [b.as_dict() for b in page.blocks]
         payload["text"] = page.text
-    return payload
+    return _normaliza_importes(payload)
 
 
 def _cloud_stats(document: Any) -> dict[str, Any]:

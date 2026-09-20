@@ -118,6 +118,31 @@ export function lineasDeCacheOcr(cacheDir: string, sha256: string, page = 1): st
   return typeof datos.texto === 'string' ? (page === 1 ? linesOf(datos.texto) : undefined) : undefined
 }
 
+/**
+ * De que motor salio el texto de una entrada de cache: `nube`, `local`, o
+ * `undefined` si la entrada es antigua y no lo dice.
+ *
+ * Mira `proveedor` (lo que escriben el motor y `precalentar-ocr.ts` desde el
+ * arreglo), luego `escalon` (`vision_nube`) y por ultimo el prefijo `nube:` de
+ * `motor`. El orden importa: en las entradas contaminadas el `motor` decia
+ * `local:...` aunque el texto viniera de la nube, asi que no se puede confiar
+ * en el prefijo por si solo.
+ */
+export function procedenciaDeCacheOcr(cacheDir: string, sha256: string): 'nube' | 'local' | undefined {
+  const ruta = join(cacheDir, `${sha256}.json`)
+  if (!existsSync(ruta)) return undefined
+  try {
+    const d = JSON.parse(readFileSync(ruta, 'utf8')) as Record<string, unknown>
+    if (d.proveedor === 'nube') return 'nube'
+    if (d.proveedor === 'local') return 'local'
+    if (d.escalon === 'vision_nube') return 'nube'
+    if (typeof d.motor === 'string' && d.motor.startsWith('nube:')) return 'nube'
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** sha256 del fichero: la misma llave que usa el cache del motor. */
 export function sha256DeFichero(file: string): string {
   return createHash('sha256').update(readFileSync(file)).digest('hex')
@@ -131,7 +156,15 @@ export async function lineasDePdf(file: string, page: number): Promise<string[]>
   return linesOf(stdout)
 }
 
-export type FuenteTexto = 'cache' | 'pdf' | 'ocr'
+/**
+ * Peldano de la escalera del que salio el texto.
+ *
+ * `cache-nube` distingue el texto cacheado que leyo la nube del que leyo el
+ * motor local: son calidades y riesgos distintos (la nube alucina y no da
+ * score; el local es trazable) y una evaluacion sobre un corpus mixto no vale
+ * para decidir nada si no se puede separar.
+ */
+export type FuenteTexto = 'cache' | 'cache-nube' | 'pdf' | 'ocr'
 
 export type OpcionesTexto = {
   /** Base del servicio de OCR de maisa, p.ej. `http://127.0.0.1:8866`. */
@@ -163,8 +196,11 @@ export async function lineasDeDocumento(
   const page = opts.page ?? 1
 
   if (opts.cacheDir) {
-    const cached = lineasDeCacheOcr(opts.cacheDir, sha256DeFichero(file), page)
-    if (cached?.length) return { lines: cached, source: 'cache' }
+    const sha = sha256DeFichero(file)
+    const cached = lineasDeCacheOcr(opts.cacheDir, sha, page)
+    if (cached?.length) {
+      return { lines: cached, source: procedenciaDeCacheOcr(opts.cacheDir, sha) === 'nube' ? 'cache-nube' : 'cache' }
+    }
   }
 
   try {

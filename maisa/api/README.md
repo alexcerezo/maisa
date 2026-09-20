@@ -54,6 +54,10 @@ Todo esto lo produce el motor; la API solo lo transporta. Los nombres de la izqu
 |---|---|
 | **traza** | `maisa/outputs/outcomes_traza.jsonl`: una línea por factura con **todo** (decisión, motivos, hechos, campos leídos, metadatos de lectura). Es la fuente de `/api/facturas*`. |
 | **entrega** (*outcomes*) | `maisa/outputs/outcomes.jsonl`: el fichero que se entrega, con **solo dos claves**, `file_id` y `result`. Los motivos **no** van aquí; viven en la traza. `/api/estadisticas` comprueba que los dos ficheros cuadran (`entrega.coincide_con_traza`). |
+| **cola de revisión** | Las facturas que la norma manda a `ESCALAR` y que una persona tiene que mirar. Su estado (`PENDIENTE`/`RESUELTA`) lo guarda Mongo en la colección `revisiones` y se escribe con `PUT /api/facturas/{file_id}/revision`. `/api/estadisticas` cuenta las que siguen abiertas en `pendientes_revision`. |
+| **anotación de segunda lectura** | `maisa/outputs/outcomes_cola.jsonl`: **opcional** y **no es una entrega**. Es una línea por factura escalada que el OCR sí pudo leer, con la evidencia de lo que una segunda lectura (la nube) aporta. La escribe `motor/tools/cola_revision.py` y la API la sirve como `segunda_lectura`. **Nunca cambia `resultado`.** |
+| `segunda_lectura` | La anotación de arriba, ya en JSON: `{confirmable, desvio, campos, motivos}` en el detalle y `{confirmable, desvio}` en el listado. `confirmable: true` = la segunda lectura resuelve el identificador que faltaba, el maestro lo confirma y **la escalada desaparece**: se puede cerrar la incidencia con la evidencia delante. `desvio: true` = el documento trae un IBAN ajeno al proveedor del pedido: es una **señal de fraude** y no se recorta nunca. `null` = no hay anotación para esa factura. |
+| `revision` | El estado de revisión **humana** de una factura escalada: `{estado, revisor, comentario, actualizado_en}` o `null`. **No confundir con `segunda_lectura`**: esto lo decide una persona y vive en Mongo; aquello lo aporta la máquina y vive en un sidecar. Los dos conviven en el detalle. |
 | `file_id` | El nombre del PDF **y la clave primaria de todo el sistema** (`2026-01-08_P001.pdf`). Con él se pide el detalle, el PDF, y se cruzan las decisiones. |
 | `resultado` · `result` | La decisión, y solo puede ser `PAGAR`, `NO_PAGAR` o `ESCALAR`. Es el mismo dato con dos nombres: `result` en el fichero de entrega, `resultado` en la API. |
 | `motivos` | Lista de motivos **en lenguaje natural**, pensados para que los lea un humano. `[]` (lista vacía) en un `PAGAR` limpio: **eso es lo bueno**, no un fallo. |
@@ -510,6 +514,13 @@ mismo `ETag` y sin cuerpo, y se ahorra filtrar y paginar. La comparación es dé
 una lista separada por comas, `*` y un `W/` delante del valor. Un `If-None-Match: *` **no** tapa un
 `503`: si la traza desaparece, el cliente se entera.
 
+**La anotación de segunda lectura también entra en la firma.** El listado expone `segunda_lectura`,
+así que si el sidecar cambia, la respuesta cambia aunque la traza siga igual: la firma es el sha256
+de la traza **combinado con** el del sidecar. Sin sidecar la firma es la de siempre (solo la traza),
+de modo que un despliegue sin cola no ve alterado su `ETag`. Regenerar la cola (o borrarla)
+invalida el listado y fuerza un `200` donde antes había `304`; es correcto, porque la anotación es
+parte de lo que el listado sirve.
+
 **`GET /api/asientos`** — `vigente` (bool), `q` (busca en `asiento_id`, `nif` y `pedido`),
 `limit`, `offset`.
 **`GET /api/asientos/{asiento_id}`** — el `asiento_id` debe casar con `^AS-[0-9]{5}$`.
@@ -717,10 +728,20 @@ $ curl -s http://127.0.0.1:8010/api/estadisticas
  "resultados_desconocidos": 0,
  "por_lote": {"1": 500},
  "por_metodo_lectura": {"texto_determinista": 471, "vision_ocr": 29},
+ "cola_segunda_lectura": {"anotadas": 9, "confirmables": 4, "desvios": 4, "con_evidencia": 1},
  "asientos_vigentes": 516,
+ "pendientes_revision": 43,
  "mongo": {"ok": true, "error": null},
  "entrega": {"total": 500, "lineas_invalidas": 0, "coincide_con_traza": true}}
 ```
+
+`cola_segunda_lectura` mide el **recorte de la cola** y siempre va a cero si no hay sidecar
+(despliegue sin cola). `anotadas` son las escaladas que el OCR sí pudo leer y para las que hay
+anotación; `confirmables` son las que se pueden cerrar sin abrir el PDF (aquí **4**, así que la
+cola baja de 43 a 39); `desvios` son las que traen un IBAN ajeno y **jamás** se recortan;
+`con_evidencia` es lo que queda (aporta algo pero no resuelve). `pendientes_revision` no cambia:
+sigue contando lo que una persona no ha marcado como `RESUELTA`, porque **la máquina no cierra
+revisiones humanas**.
 
 ```console
 $ curl -s http://127.0.0.1:8010/api/meta
@@ -734,7 +755,8 @@ $ curl -s http://127.0.0.1:8010/api/meta
                    "erp": {"url": "http://host.docker.internal:8009",
                            "nota": "solo informativo: la API no consulta el ERP"},
                    "datos": {"outputs_dir": "/datos/outputs", "facturas_dir": "/datos/facturas",
-                             "traza_existe": true, "entrega_existe": true},
+                             "traza_existe": true, "entrega_existe": true,
+                             "cola_existe": true},
                    "ui": {"dir": "/datos/ui", "index_html": "/datos/ui/index.html",
                           "disponible": false},
                    "api": {"puerto": 8010, "api_key_requerida": false,

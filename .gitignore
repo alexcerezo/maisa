@@ -22,6 +22,11 @@ maisa/outputs/outcomes_ejemplo.jsonl
 # lleva marca de tiempo, así que versionarla ensuciaría el repo en cada run.
 maisa/outputs/*_traza.jsonl
 
+# Anotación de la segunda lectura para la cola de revisión: derivada, se
+# regenera con `motor/tools/cola_revision.py` y **no** es una entrega. La
+# entrega es `outcomes.jsonl` y no la toca.
+maisa/outputs/outcomes_cola.jsonl
+
 
 # Restos de Python (el descargador del ERP y validate_jsonl.py son stdlib)
 __pycache__/

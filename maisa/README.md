@@ -35,7 +35,10 @@ el plazo, pero su análisis de dominio es el que fijó la semántica de los esta
     (`alberto_erp.py`, `MANUAL_ERP_2009.md`, `Makefile`, spec). Es lo que hace
     reproducible el arranque del ERP sin depender de la wifi del evento.
 - `traces/` — una carpeta por factura con OCR, evidencia y decisión (trazabilidad).
-- `outputs/` — `outcomes.jsonl` y `outcomes_lote2.jsonl` (entregables).
+- `outputs/` — `outcomes.jsonl` y `outcomes_lote2.jsonl` (entregables). Además,
+  `outcomes_traza.jsonl` (auditoría, se regenera) y `outcomes_cola.jsonl`
+  (opcional: la evidencia de la segunda lectura para recortar la cola de revisión,
+  **no** es una entrega; ver `motor/README.md`).
 - `ocr_service/` — servicio OCR real (FastAPI + RapidOCR/ONNX, endpoints
   `/ocr`, `/ocr/text`, `/ocr/stream`, `/health`, `/cloud`): `app/` (servidor y
   cliente de nube), `Dockerfile`, `docker-compose.yml` (`ocr-api` en el 8866),

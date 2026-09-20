@@ -112,6 +112,90 @@ reparación, y un escaneo que el lector no supo medir no vale 0.0: la media de
 declara cuántas quedan fuera, para que 0.9903 no se lea como «y los escaneos,
 vete a saber».
 
+### El único contraste que mira desde fuera
+
+`oro.py` y `valida_entrega.py` comparan nuestro criterio con el nuestro. El
+contraste externo se hace con una referencia que **no se versiona**: se pasa como
+dato de entrada y la herramienta dice si cada decisión cae en el conjunto de
+resultados que esa referencia admite. Acepta el envoltorio de un `oracle.json`
+ajeno (`verdict.acceptable`, `verdict.primary`, `findings`) o un JSONL plano de
+decisiones, autodetectados por estructura.
+
+```bash
+PYTHONPATH=motor/src python motor/tools/conformidad.py \
+    --outcomes outputs/outcomes.jsonl --referencia <referencia.json|referencia.jsonl>
+```
+
+Sobre el lote de 500 y la referencia externa que usamos: 489/500 coinciden con su
+resultado preferido, 499/500 caen dentro de lo admisible (99.8%) y queda **un**
+`FUERA_ALTO` — el escaneo del que no se lee ni NIF ni fecha y del que la
+referencia solo admite `ESCALAR`/`NO_PAGAR`. Ese desacuerdo está atribuido en
+`docs/albertitos_plan.md`. Como es una medida y no una puerta, su exit 1 es
+esperado: no se puede colgar de CI sin lista blanca.
+
+### Recortar la cola de revisión sin decidir ningún pago
+
+El motor manda 43 de las 500 facturas a `ESCALAR`: esas son la **cola de revisión
+humana**. De las 43, solo 11 las leyó el OCR (el resto trae capa de texto y la
+norma escala por otras causas), y de esas 11 hay un grupo que no hace falta abrir
+a mano: el motor local no supo leer un identificador, la segunda lectura (la
+nube) lo aporta, el maestro lo confirma y **la escalada desaparece**.
+
+```bash
+cd maisa/motor && PYTHONPATH=src ../../.venv/bin/python tools/cola_revision.py
+```
+
+```
+  escaladas por la norma:            43
+    de ellas, leidas por OCR:        11
+      confirmables sin abrir:        4
+      desvio de pago (NO recortar):  4
+      aporta pero sigue escalando:   1
+      sin evidencia que aportar:    2
+      la nube no respondio:          0
+
+  cola a revisar a mano: 43 -> 39
+```
+
+Lo escribe en `maisa/outputs/outcomes_cola.jsonl`, un **sidecar**: un fichero
+aparte, **no** una entrega. La entrega (`outcomes.jsonl`) tiene exactamente dos
+claves (`file_id`, `result`) y la CI reproduce el lote dos veces exigiendo el
+mismo `md5` y comprueba con `cmp` que el fichero versionado es idéntico al que
+produce el motor; la evidencia no cabe ahí y **no debe caber**. La API lo lee si
+existe y lo sirve como `segunda_lectura` (ver `api/README.md`); si no existe, todo
+se revisa a mano como siempre.
+
+Cuatro reglas sostienen el recorte, y las cuatro son conjuntas:
+
+1. **El local no resolvió** el identificador (si lo resolvió, no hay nada que
+   aportar).
+2. **La segunda lectura lo aporta** y el maestro lo confirma: el pedido se
+   resuelve contra el vocabulario del maestro (con reparación de confusiones de
+   OCR, nunca dígito a dígito); el NIF y el IBAN exigen coincidencia **exacta**.
+3. **La escalada desaparece**: el lote híbrido se decide entero con un decisor
+   propio y se exige `resultado != "ESCALAR"`. Sin esto se cuela un recorte
+   falso: una factura que escala por cinco motivos y a la que la nube solo le
+   resuelve el pedido **sigue escalando**, y marcar eso como confirmable sería
+   mentir. (Pasó con `fax_2026_0411`, y por eso el gate es del motor de reglas y
+   no una heurística sobre los motivos.)
+4. **El IBAN no se tapa nunca** si el local leyó uno, aunque sea distinto del
+   maestro: ese IBAN ajeno es la **única señal de fraude** del sistema, y borrarla
+   para «arreglar» el campo sería el peor de los errores posibles. El importe,
+   igual: **nunca** sale de la nube.
+
+El resultado son 4 confirmables (`scan_002`, `scan_011`, `scan_017`, `scan_022`) y
+4 desvíos intocables (`reimpresion_0712`, `scan_016`, `scan_018`, `scan_029`, los
+cuatro con IBAN ajeno al maestro). La cola baja de 43 a 39. **Ninguna decisión
+cambia**: `outcomes.jsonl` y la traza quedan byte a byte igual.
+
+> Esto **anota**, no decide ni cierra. La revisión humana sigue siendo humana: el
+> estado `PENDIENTE`/`RESUELTA` lo marca una persona en Mongo y el motor no lo
+> toca. Y **la nube todavía no puede decidir un pago**: se midió sobre 29
+> facturas, y de las 4 que solo la nube resuelve no hay muestra suficiente para
+> saber con qué frecuencia acierta un identificador coherente pero falso. Mientras
+> eso siga sin medirse, la segunda lectura solo rellena huecos que el maestro
+> confirma y el importe lo sigue poniendo el local.
+
 ## Determinismo: la única invariante que no se negocia
 
 Un motor de pagos que cambia de opinión entre ejecuciones no es un motor, es una
@@ -125,11 +209,16 @@ falla.
 ```
 motor/
 ├── config/reglas.toml   la norma v3 como datos
-├── src/maisa/           el motor (10 módulos)
+├── src/maisa/           el motor (11 módulos)
 ├── tests/               suite + banco de oro (tests/oro/)
-├── tools/               oro.py, valida_entrega.py, censo_extraccion.py, md_a_pdf.py, bench.py, evidencia_resiliencia.py
+├── tools/               oro.py, valida_entrega.py, conformidad.py, censo_extraccion.py,
+│                        cola_revision.py, bench_motores.py, md_a_pdf.py, bench.py,
+│                        evidencia_resiliencia.py
 ├── docs/                arquitectura, capacidad, resiliencia, lote 2, simulador
-└── .cache/ocr/          texto de los 29 escaneados, indexado por sha256
+├── .cache/ocr/          texto de los 29 escaneados, indexado por sha256
+├── .cache/motores/      lecturas de local y nube de esos 29, para medir sin repetir
+└── .cache/segunda/      lecturas de nube de la cola (se crea al usarlo; antes
+                         reutiliza .cache/motores/ si la lectura ya se pagó)
 ```
 
 | Módulo | Responsabilidad |
@@ -142,4 +231,5 @@ motor/
 | `norma.py` | **el núcleo**: las seis reglas, los hechos y la precedencia |
 | `trace.py` | linaje de eventos encadenado por hash |
 | `emit.py` | validación y escritura del JSONL |
+| `segunda_lectura.py` | la guarda asimétrica del IBAN y el gate de «confirmable»: una sola implementación para la medición y la producción |
 | `procesa.py` | orquestación y CLI |

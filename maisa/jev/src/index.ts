@@ -17,6 +17,7 @@ export {
   lineasDePdf,
   linesOf,
   paginasDePayloadOcr,
+  procedenciaDeCacheOcr,
   sha256DeFichero,
 } from './estado.js'
 export type { FuenteTexto, OpcionesTexto, PageState } from './estado.js'

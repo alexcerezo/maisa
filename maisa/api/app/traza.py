@@ -74,6 +74,62 @@ def motivo_principal(registro: dict) -> str | None:
     return None
 
 
+def carga_cola(ruta: Path) -> dict[str, dict]:
+    """Lee el sidecar de la cola de revision, indexado por `file_id`.
+
+    Lo escribe `motor/tools/cola_revision.py` y es **opcional**: sin el fichero
+    la cola no tiene anotaciones y todo se revisa a mano, que es el
+    comportamiento de siempre. Un sidecar ilegible tampoco puede tumbar la API:
+    se ignora linea a linea, como la traza.
+
+    Cada linea trae `{"file_id": ..., "segunda_lectura": {...}}`. Solo se usa
+    `segunda_lectura`: el resto de la linea (motivos de la norma, escalon,
+    resultado hibrido) es para leer el fichero a mano.
+    """
+    cola: dict[str, dict] = {}
+    if not ruta.is_file():
+        return cola
+    try:
+        with ruta.open("r", encoding="utf-8") as fichero:
+            for numero, linea in enumerate(fichero, start=1):
+                linea = linea.strip()
+                if not linea:
+                    continue
+                try:
+                    registro = json.loads(linea)
+                except json.JSONDecodeError:
+                    logger.warning("Cola: linea %s ilegible, se ignora.", numero)
+                    continue
+                file_id = _texto(registro.get("file_id"))
+                anotacion = registro.get("segunda_lectura")
+                if file_id and isinstance(anotacion, dict):
+                    cola[file_id] = anotacion
+    except OSError as exc:
+        logger.warning("Cola: no se pudo leer %s (%s).", ruta, exc)
+        return {}
+    return cola
+
+
+def segunda_lectura_resumen(anotacion: dict | None) -> dict | None:
+    """La parte de la anotacion que necesita el listado de la cola.
+
+    `confirmable` es lo que permite cerrar la incidencia sin abrirla; `desvio`
+    es lo contrario y no puede viajar sin la evidencia completa, que va en el
+    detalle.
+
+    El campo se llama `segunda_lectura` y no `revision` a proposito: `revision`
+    ya es el estado de revision **humana** (`PENDIENTE`/`RESUELTA`) que guarda
+    Mongo y expone `PUT /api/facturas/{file_id}/revision`. Son cosas distintas:
+    esto es lo que la maquina aporta, aquello lo que decide la persona.
+    """
+    if not anotacion:
+        return None
+    return {
+        "confirmable": bool(anotacion.get("confirmable")),
+        "desvio": bool(anotacion.get("desvio")),
+    }
+
+
 def resumir(registro: dict) -> dict:
     """Fila compacta para el listado del visor."""
     campos = registro.get("campos") or {}
@@ -98,6 +154,7 @@ def resumir(registro: dict) -> dict:
         "segundos_lectura": _num(registro.get("segundos_lectura")),
         "identificacion_fiable": registro.get("identificacion_fiable"),
         "version_norma": registro.get("version_norma"),
+        "segunda_lectura": segunda_lectura_resumen(registro.get("segunda_lectura")),
     }
 
 
@@ -123,6 +180,7 @@ def detallar(registro: dict) -> dict:
         "identificacion_fiable": registro.get("identificacion_fiable"),
         "version_norma": registro.get("version_norma"),
         "nota_documento": registro.get("nota_documento"),
+        "segunda_lectura": registro.get("segunda_lectura"),
         "resumen": resumir(registro),
     }
 
@@ -156,13 +214,22 @@ def _sha256_fichero(ruta: Path) -> str | None:
 
 
 class TrazaStore:
-    """Traza del motor en memoria, con recarga automatica si cambia el fichero."""
+    """Traza del motor en memoria, con recarga automatica si cambia el fichero.
 
-    def __init__(self, ruta: Path) -> None:
+    `cola` es la ruta opcional del sidecar de la cola de revision
+    (`outcomes_cola.jsonl`). Si existe, su anotacion se engancha a cada registro
+    al cargar, de forma que el listado y el detalle la ven sin saber de donde
+    viene.
+    """
+
+    def __init__(self, ruta: Path, cola: Path | None = None) -> None:
         self.ruta = ruta
+        self.cola = cola
         self._lock = threading.Lock()
         self._firma: _Firma | None = None
+        self._firma_cola: _Firma | None = None
         self._hash: str | None = None
+        self._hash_cola: str | None = None
         self._registros: list[dict] = []
         self._resumenes: list[dict] = []
         self._indice: dict[str, int] = {}
@@ -179,16 +246,26 @@ class TrazaStore:
         cada consulta.
         """
         firma = _Firma.de(self.ruta)
+        firma_cola = _Firma.de(self.cola) if self.cola is not None else None
         with self._lock:
-            if not forzar and firma is not None and firma == self._firma:
+            if (
+                not forzar
+                and firma is not None
+                and firma == self._firma
+                and firma_cola == self._firma_cola
+            ):
                 return
+            cola = carga_cola(self.cola) if self.cola is not None else {}
             registros: list[dict] = []
             resumenes: list[dict] = []
             indice: dict[str, int] = {}
             invalidas = 0
             hash_contenido: str | None = None
+            hash_cola: str | None = None
             if firma is not None:
                 hash_contenido = _sha256_fichero(self.ruta)
+                if firma_cola is not None:
+                    hash_cola = _sha256_fichero(self.cola)
                 with self.ruta.open("r", encoding="utf-8") as fichero:
                     for numero, linea in enumerate(fichero, start=1):
                         linea = linea.strip()
@@ -205,11 +282,16 @@ class TrazaStore:
                             invalidas += 1
                             logger.warning("Traza: linea %s sin file_id, se ignora.", numero)
                             continue
+                        anotacion = cola.get(file_id)
+                        if anotacion is not None:
+                            registro["segunda_lectura"] = anotacion
                         indice.setdefault(file_id, len(registros))
                         registros.append(registro)
                         resumenes.append(resumir(registro))
             self._firma = firma
+            self._firma_cola = firma_cola
             self._hash = hash_contenido
+            self._hash_cola = hash_cola
             self._registros = registros
             self._resumenes = resumenes
             self._indice = indice
@@ -241,15 +323,24 @@ class TrazaStore:
         return self._lineas_invalidas
 
     def firma(self) -> str:
-        """Firma estable del contenido cargado (sha256 del fichero de traza).
+        """Firma estable del contenido cargado (sha256 de lo que sirve el listado).
 
         Es la identidad de la traza para quien cachea: dos lecturas con la misma
         firma describen exactamente el mismo contenido, y la firma cambia cuando
         el motor reescribe el fichero. Sin traza legible devuelve
         `FIRMA_SIN_TRAZA`, que tambien es estable.
+
+        La cola de revision entra en la firma porque el listado la expone: si el
+        sidecar cambia, la respuesta cambia aunque la traza siga igual. Sin
+        sidecar la firma es la de siempre (solo la traza), de modo que un
+        despliegue sin cola no ve alterado su ETag.
         """
         self._asegurar()
-        return self._hash or FIRMA_SIN_TRAZA
+        if not self._hash:
+            return FIRMA_SIN_TRAZA
+        if not self._hash_cola:
+            return self._hash
+        return hashlib.sha256(f"{self._hash}|{self._hash_cola}".encode()).hexdigest()
 
     def obtener(self, file_id: str) -> dict | None:
         self._asegurar()
@@ -297,6 +388,7 @@ class TrazaStore:
         por_lote: dict[str, int] = {}
         por_metodo: dict[str, int] = {}
         otros = 0
+        cola = {"anotadas": 0, "confirmables": 0, "desvios": 0, "con_evidencia": 0}
         for fila in self._resumenes:
             resultado = fila.get("resultado")
             if resultado in por_resultado:
@@ -308,12 +400,21 @@ class TrazaStore:
             por_lote[clave] = por_lote.get(clave, 0) + 1
             metodo = fila.get("metodo_lectura") or "desconocido"
             por_metodo[metodo] = por_metodo.get(metodo, 0) + 1
+            anotacion = fila.get("segunda_lectura")
+            if anotacion:
+                cola["anotadas"] += 1
+                if anotacion.get("confirmable"):
+                    cola["confirmables"] += 1
+                if anotacion.get("desvio"):
+                    cola["desvios"] += 1
+        cola["con_evidencia"] = cola["anotadas"] - cola["confirmables"] - cola["desvios"]
         return {
             "total": len(self._resumenes),
             "por_resultado": por_resultado,
             "resultados_desconocidos": otros,
             "por_lote": dict(sorted(por_lote.items())),
             "por_metodo_lectura": dict(sorted(por_metodo.items())),
+            "cola_segunda_lectura": cola,
         }
 
     def file_ids(self) -> list[str]:
