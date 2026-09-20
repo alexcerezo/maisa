@@ -149,3 +149,31 @@ export function humano(valor: string | null | undefined): string {
     const conEspacios = valor.replace(/_/g, " ").toLowerCase();
     return conEspacios.charAt(0).toUpperCase() + conEspacios.slice(1);
 }
+
+const SEGUNDO = new Intl.NumberFormat("es-ES", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+});
+
+/**
+ * Cuanto tardo el motor en leer el documento. `0.0435` -> `43 ms`.
+ *
+ * En segundos con un decimal, mas de la mitad del corpus salia `0,0 s`: 302 de
+ * las 540 facturas. Eso no es un dato, parece que no se midio, y la latencia es
+ * una de las cosas que la rubrica pide enseñar expresamente. La mediana esta en
+ * 43 ms, asi que por debajo del segundo se dan milisegundos enteros y de ahi
+ * para arriba segundos con un decimal. El corte no es cosmetico: sin el, la
+ * cifra que distingue una lectura de texto (4 ms) de una de OCR (299 ms)
+ * desaparecia.
+ *
+ * El nulo sigue siendo una raya. `0 ms` no se llega a pintar: una lectura
+ * siempre cuesta algo, asi que el redondeo que daria cero se dice `<1 ms`.
+ */
+export function latencia(segundos: number | null | undefined): string {
+    if (segundos === null || segundos === undefined || !Number.isFinite(segundos)) {
+        return SIN_DATO;
+    }
+    if (segundos >= 1) return `${SEGUNDO.format(segundos)} s`;
+    const milisegundos = Math.round(segundos * 1000);
+    return milisegundos === 0 ? "<1 ms" : `${ENTERO.format(milisegundos)} ms`;
+}

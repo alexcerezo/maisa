@@ -48,7 +48,15 @@ import {
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FacturaResumen } from "@/api/types";
-import { euros, eurosConSigno, fecha, porcentaje, SIN_DATO, texto } from "@/lib/formato";
+import {
+    euros,
+    eurosConSigno,
+    fecha,
+    latencia,
+    porcentaje,
+    SIN_DATO,
+    texto,
+} from "@/lib/formato";
 import { claseDesvio, EXPLICACION_COLA, estadoCola, ICONO_ESCALON } from "@/theme";
 import { cn } from "@/lib/utils";
 
@@ -256,7 +264,7 @@ function FilaFactura({
                                 ? "El texto salió de la caché de OCR."
                                 : "El texto salió de la capa de texto del PDF."}{" "}
                             Confianza de la lectura {porcentaje(factura.calidad_lectura)} en{" "}
-                            {factura.segundos_lectura.toFixed(1)} s. Es la confianza en lo que se
+                            {latencia(factura.segundos_lectura)}. Es la confianza en lo que se
                             leyó, no en la decisión.
                         </p>
                         {!factura.identificacion_fiable ? (

@@ -31,6 +31,7 @@ import {
     eurosConSigno,
     fecha,
     entero,
+    latencia,
     porcentaje,
     SIN_DATO,
     texto,
@@ -76,7 +77,7 @@ export function ResumenFactura({ detalle }: { detalle: FacturaDetalle }) {
                         ({ETIQUETA_ESCALON[detalle.lectura.escalon_lectura] ??
                             detalle.lectura.escalon_lectura}
                         ) con una confianza de {porcentaje(detalle.lectura.calidad_lectura)} en{" "}
-                        {detalle.lectura.segundos_lectura.toFixed(1)} s
+                        {latencia(detalle.lectura.segundos_lectura)}
                     </p>
                 </CardHeader>
 
