@@ -151,6 +151,105 @@ _RE_CAMPO_NUM = re.compile(r"^[^a-z]{0,60}?[\d][\d.,]*\s*(?:EUR|€)?\s*$")
 # como texto pero no en el calendario (31/02/2026) y poder motivarla aparte.
 _RE_FORMA_FECHA = re.compile(r"\b\d{1,4}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{2,4}\b")
 
+# ------------------------------------------------------------------- divisa
+# El motor compara el importe impreso contra el importe del ERP, que esta en la
+# divisa de la empresa. Un TOTAL marcado en otra divisa no es "un importe
+# parecido": es un importe que **no se puede comparar**, y el tipo de cambio
+# del dia no es un dato que este motor tenga ni deba inventarse.
+#
+# La marca se lee del TEXTO porque al normalizar el importe se pierde:
+# `normaliza._limpia_importe` borra "EUR", "USD" y los simbolos para quedarse
+# con el numero. Y se lee **pegada al importe que se coteja** (base, IVA o
+# total), no en el documento entero: una nota que mencione otra divisa no
+# cambia la divisa en que se emitio la factura, y escalar por eso seria un
+# falso positivo sobre una factura correcta.
+_DIVISA_CODIGOS = ("EUR", "USD", "GBP", "CHF", "JPY", "MXN", "BRL", "SEK",
+                   "NOK", "DKK", "PLN", "CNY", "CAD", "AUD", "INR")
+# De palabra solo las que no se confunden con castellano corriente. "real",
+# "reales" o "pesos" quedan fuera a proposito: como marca suelta dan falsos
+# positivos ("importe real", "precios reales") y esas divisas llegan como
+# codigo ISO o simbolo. Si una factura en reales no lo marca, sus digitos se
+# comparan contra el ERP igual que hoy: esta regla no puede empeorarlo.
+_DIVISA_PALABRAS = {
+    "euro": "EUR", "euros": "EUR",
+    "dolar": "USD", "dolares": "USD",
+    "libra": "GBP", "libras": "GBP",
+    "franco": "CHF", "francos": "CHF",
+    "yen": "JPY", "yenes": "JPY",
+}
+_DIVISA_SIMBOLOS = {"\u20ac": "EUR", "$": "USD", "\u00a3": "GBP",
+                    "\u00a5": "JPY", "\u20b9": "INR"}
+
+# Mismas etiquetas que `_PATRONES` para base/IVA/total: la divisa que importa
+# es la del importe que se coteja contra el ERP.
+_RE_ETIQUETA_IMPORTE = (
+    r"(?:IMPORTE\s+TOTAL|TOTAL\s+A\s+PAGAR|TOTAL\s+FACTURA|TOTAL|"
+    r"BASE\s+IMPONIBLE|IMPORTE\s+BASE|SUBTOTAL|BASE)"
+)
+# Limites de palabra por letras, no `\b`: el OCR pega etiqueta, importe y a
+# veces divisa ("TOTAL2.480,50EUR"), y ahi `\b` no ve frontera porque a los dos
+# lados hay caracteres de palabra. Lo que hay que descartar es que la marca sea
+# trozo de una palabra ("NEURONA"), no que toque un digito.
+_MARCA_CODIGO = (r"(?<![A-Za-z])(?:" + "|".join(_DIVISA_CODIGOS) + r")(?![A-Za-z])")
+_MARCA_PALABRA = (r"(?<![A-Za-z])(?:" + "|".join(_DIVISA_PALABRAS) + r")(?![A-Za-z])")
+_MARCA_SIMBOLO = r"[" + "".join(_DIVISA_SIMBOLOS) + r"]"
+_RE_MARCA_DIVISA = (r"(?:" + _MARCA_CODIGO + r"|" + _MARCA_PALABRA + r"|"
+                    + _MARCA_SIMBOLO + r")")
+_RE_DIVISA_EN_IMPORTE = re.compile(
+    # "TOTAL: USD 1.000,00" o "TOTAL € 500,00": la marca precede al importe y
+    # va en la misma linea, porque un prefijo de divisa no se parte.
+    _RE_ETIQUETA_IMPORTE + r"[ .:]{0,30}?" + _RE_MARCA_DIVISA
+    # "TOTAL: 1.000,00 USD" o "TOTAL2.480,50EUR": la marca sigue al importe.
+    # Aqui si se admite el salto de linea: el OCR parte etiqueta y numero
+    # ("TOTAL\n774,40 EUR") y sin eso la marca quedaria fuera de la ventana.
+    + r"|" + _RE_ETIQUETA_IMPORTE + r"[ .:\n]{0,30}?\d[\d.,]*[ ]{0,4}"
+    + _RE_MARCA_DIVISA,
+    re.IGNORECASE,
+)
+# Localiza la marca dentro del fragmento ya casado (etiqueta incluida). Separada
+# de `_RE_MARCA_DIVISA` para poder nombrar los grupos y leer el token.
+_RE_MARCA_SUELTA = re.compile(
+    r"(?P<codigo>" + _MARCA_CODIGO + r")"
+    r"|(?P<palabra>" + _MARCA_PALABRA + r")"
+    r"|(?P<simbolo>" + _MARCA_SIMBOLO + r")",
+    re.IGNORECASE,
+)
+
+
+def _iso_de_marca(marca: str) -> str | None:
+    """Normaliza una marca de divisa (codigo, palabra o simbolo) a ISO-4217.
+
+    No pasa por `normaliza.repara_ocr`: ese traductor repara el OCR de digitos y
+    letras (O->0, D->0, S->5), asi que convertiria "USO" en "USD" y fabricaria
+    una divisa que el documento no dice.
+    """
+    limpio = _sin_acentos(marca.strip().lower())
+    iso = _DIVISA_SIMBOLOS.get(marca.strip()) or _DIVISA_PALABRAS.get(limpio)
+    if iso:
+        return iso
+    mayus = marca.strip().upper()
+    return mayus if mayus in _DIVISA_CODIGOS else None
+
+
+def divisas_declaradas(texto: str) -> list[str]:
+    """Divisas (ISO-4217) con las que el documento marca el importe que se coteja.
+
+    Se lee del texto crudo, no del `Decimal`: normalizar el importe borra la
+    marca. Devuelve los codigos sin repetir y en orden de aparicion.
+
+    Una lista vacia **no** significa euros: significa que el documento no declara
+    divisa. Distinguir "no lo dice" de "dice que no es la nuestra" es lo que
+    permite escalar solo cuando hay un dato en contra y no por una ausencia.
+    """
+    plano = _normaliza_espacios(texto)
+    vistas: list[str] = []
+    for trozo in _RE_DIVISA_EN_IMPORTE.finditer(plano):
+        for marca in _RE_MARCA_SUELTA.finditer(trozo.group(0)):
+            iso = _iso_de_marca(marca.group(0))
+            if iso and iso not in vistas:
+                vistas.append(iso)
+    return vistas
+
 
 def nota_documento(texto: str) -> str:
     """Parrafo libre de la factura, si lo trae (normalizado y recortado).
