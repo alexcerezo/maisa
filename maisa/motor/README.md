@@ -89,6 +89,29 @@ La traza es un encadenado de eventos con hash: identifica **esta ejecución**
 (contiene marca de tiempo), no el lote. Los `outcomes.jsonl` sí son
 byte-idénticos entre ejecuciones, y eso es lo que la CI comprueba.
 
+### Cómo de bien lee el motor
+
+La misma traza sirve para medir la lectura sin volver a tocar los PDF: cada nota
+de la norma es o bien una **reparación** (el escaneo venía mal y el motor lo
+ancló en el ERP o en la aritmética del documento) o bien un **hueco** (el dato no
+existe en el maestro, así que no hay nada que leer).
+
+```bash
+PYTHONPATH=motor/src python motor/tools/censo_extraccion.py --verbose
+```
+
+Salida del lote de 500: 16 facturas (3.2%) con 20 reparaciones —13 de importe, 4
+de pedido y 3 de NIF— y 15 (3.0%) con hueco —10 IBAN ajenos al maestro, 3
+pedidos inexistentes en el ERP y 2 NIF desconocidos. Es una medida, no un
+umbral: no bloquea la entrega.
+
+El censo solo cuenta reparaciones de verdad. Una nota de «importe recompuesto»
+que repita el mismo importe a los dos lados de los dos puntos no es una
+reparación, y un escaneo que el lector no supo medir no vale 0.0: la media de
+`calidad_lectura` se calcula sobre las 471 facturas con capa de texto y el censo
+declara cuántas quedan fuera, para que 0.9903 no se lea como «y los escaneos,
+vete a saber».
+
 ## Determinismo: la única invariante que no se negocia
 
 Un motor de pagos que cambia de opinión entre ejecuciones no es un motor, es una
@@ -104,7 +127,7 @@ motor/
 ├── config/reglas.toml   la norma v3 como datos
 ├── src/maisa/           el motor (10 módulos)
 ├── tests/               suite + banco de oro (tests/oro/)
-├── tools/               oro.py, valida_entrega.py, md_a_pdf.py, bench.py, evidencia_resiliencia.py
+├── tools/               oro.py, valida_entrega.py, censo_extraccion.py, md_a_pdf.py, bench.py, evidencia_resiliencia.py
 ├── docs/                arquitectura, capacidad, resiliencia, lote 2, simulador
 └── .cache/ocr/          texto de los 29 escaneados, indexado por sha256
 ```

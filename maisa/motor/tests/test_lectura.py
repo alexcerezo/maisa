@@ -581,6 +581,49 @@ def test_documento_conserva_los_campos_de_siempre() -> None:
     assert lectura._ocr_url().startswith("http")
 
 
+# ------------------------------------------- la calidad que viaja en la traza
+def _doc(escalon: str, calidad: float) -> lectura.Documento:
+    return lectura.Documento(
+        lectura=texto.extrae("FACTURA", "x.pdf", 1, "texto_determinista", ""),
+        sha256="0" * 64, escalon=escalon, cache=False, segundos=0.1, calidad=calidad,
+    )
+
+
+def test_la_calidad_de_la_traza_solo_sale_de_la_capa_de_texto() -> None:
+    """`calidad_texto` mide la capa de texto, no el texto que se acabo usando.
+
+    En un escaneo el motor cae al OCR y `doc.calidad` es el 0.0 de la capa que
+    se descarto, no la calidad de lo que se leyo. Publicarlo en la traza hacia
+    parecer que los escaneos se leen fatal (media 0.741 en ESCALAR frente a
+    0.950 en PAGAR) cuando su OCR es indistinguible del texto embebido (0.9933
+    frente a 0.9903). Sin medida, la traza publica `None` en vez de un cero que
+    nadie ha medido.
+    """
+    assert procesa._calidad_medida(_doc("capa_texto", 0.123456)) == 0.1235
+    for escalon in ("cache_ocr", "vision_ocr", "vision_nube", "degradado"):
+        assert procesa._calidad_medida(_doc(escalon, 0.0)) is None
+
+
+def test_no_se_usa_la_calidad_del_texto_ocr_como_sustituto() -> None:
+    """El sustituto evidente miente al alza y no arregla la metrica.
+
+    `calidad_texto` responde "esto son letras imprimibles y hay un total", que
+    es justo lo que garantiza un OCR: devuelve 1.0 con un documento destrozado.
+    Cambiar un 0.0 falso por un 1.0 falso no es medir, asi que la traza declara
+    que no hay medida en vez de rellenarla con esto.
+    """
+    destrozado = "\n".join([
+        "FACTURA 2026/11604",
+        "Suministros Levante S.L. NIF:B9023341",
+        "CuentdeabOno (BAN En1 Sro0 015",
+        "Pedido PO-206-0724  Fecha 05/01/2026",
+        "Base 2489.99  IVA (21%) 522.90  TOTAL 3012.89",
+        "Cliente Banco Miralmar S.A. CIF A58231074",
+    ])
+    assert lectura.calidad_texto(destrozado, 1) == 1.0
+    assert procesa._calidad_medida(_doc("cache_ocr", 0.0)) is None
+
+
 # ------------------------------------------------------------------- lento
 @pytest.mark.lento
 def test_escalera_sobre_el_corpus_real(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -62,7 +62,7 @@ Todo esto lo produce el motor; la API solo lo transporta. Los nombres de la izqu
 | `duro` | `true` = incumplimiento que **bloquea el pago**. Hoy solo lo usa `R5_estado`/`pago_duplicado`, que da `NO_PAGAR`. |
 | `informativo` | `true` = **aviso que no bloquea** (p. ej. `R6_anomalia` cuando el documento trae texto dirigido al sistema: se marca y se sigue). Un hecho con `ok: false` puede no ser ni `duro` ni `informativo`: es una anomalía que se refleja pero no decide. |
 | `campos` | Todo lo que el motor extrajo: `nif`, `iban`, `pedido`, `base`, `iva`, `total`, `fecha`… más los **candidatos** (`*_candidatos`, lo que aparecía en el texto) y lo que había en el maestro del ERP (`*_maestro`, `importe_erp`, `estado_erp`). **No siempre tiene las mismas claves**: entre 23 y 25 según el documento. |
-| `lectura` | Cómo se leyó el documento: `metodo_lectura` (`texto_determinista` o `vision_ocr`), `escalon_lectura` (`capa_texto` o `cache_ocr`), `calidad_lectura` (0–1), `segundos_lectura`, `sospechosos` y `sospechosos_meta`. |
+| `lectura` | Cómo se leyó el documento: `metodo_lectura` (`texto_determinista` o `vision_ocr`), `escalon_lectura` (`capa_texto` o `cache_ocr`), `calidad_lectura` (0–1, o `null` si la factura no venía de la capa de texto y por tanto no hay medida), `segundos_lectura`, `sospechosos` y `sospechosos_meta`. |
 | `lote` | Agrupación del motor. Hoy todo va en el lote `1`. |
 | `asiento` · `asiento_id` | Una línea del ERP simulado, con id `AS-00096`. El catálogo completo vive en Mongo y se consulta con `/api/asientos`. |
 | `snapshot` | Una descarga completa del ERP (`snap-2026-09-19T08-25-58Z`), con `total_asientos`, `paginas`, `duracion_ms` y `reintentos`. |

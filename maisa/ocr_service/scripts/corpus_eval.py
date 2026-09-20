@@ -34,6 +34,19 @@ puntuacion ni saltos: medir eso seria medir el ruido de formato, no el modelo.
 Las diferencias de puntuacion que SI importan (un importe fusionado) las coge
 la comprobacion por campos.
 
+Recall, precision y F1 por campo
+--------------------------------
+- `recall`    : de los campos que habia de verdad, cuantos se encontraron.
+- `precision` : de los campos que se leyeron, cuantos existian de verdad.
+- `f1`        : media armonica de los dos.
+
+El recall solo era una medida a medias: un lector que inventa numeros saca
+recall perfecto. La precision cierra ese agujero. Un valor producido cuenta
+como inventado (`spurious`) solo si no se parece a ningun valor real
+(`UMBRAL_PARECIDO`), porque la capa de texto y el OCR reparten las lineas de
+otra manera y una diferencia de conjuntos a pelo marcaria como falso todo lo
+que el OCR haya reordenado.
+
 La nube solo en los fallos
 --------------------------
 Pasar 471 documentos por la API costaria horas y dinero. Y no hace falta: solo
@@ -52,6 +65,7 @@ Uso (DENTRO del contenedor, que es donde viven pypdfium2 y RapidOCR):
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -59,14 +73,30 @@ import time
 from pathlib import Path
 from typing import Any
 
-import pypdfium2 as pdfium
 
-# El servicio vive en /app cuando corre en el contenedor.
-for candidate in ("/app", str(Path(__file__).resolve().parent)):
-    if candidate not in sys.path:
-        sys.path.insert(0, candidate)
+def _pdfium():
+    """`pypdfium2` solo existe dentro del contenedor de OCR.
 
-from app.server import _Source, _run_local_page  # noqa: E402
+    Se importa al usarlo y no al cargar el modulo para que `content_metrics` y
+    `compare_fields` (que son pura logica) se puedan probar en un `pytest`
+    normal, sin el contenedor. `inspect_doc.py` reutiliza esas funciones y
+    arrastraba la dependencia sin necesitarla.
+    """
+    import pypdfium2
+
+    return pypdfium2
+
+
+def _servicio():
+    """El motor local del servicio (`_Source`, `_run_local_page`)."""
+    # El servicio vive en /app cuando corre en el contenedor.
+    for candidate in ("/app", str(Path(__file__).resolve().parent)):
+        if candidate not in sys.path:
+            sys.path.insert(0, candidate)
+
+    from app.server import _Source, _run_local_page
+
+    return _Source, _run_local_page
 
 # Reutilizar la extraccion de importes del comparador: las dos herramientas
 # deben entender "1.025,49" igual, o los resultados no son comparables.
@@ -163,6 +193,12 @@ _NIF = re.compile(r"\b(?:[0-9]{8}[A-Za-z]|[A-Za-z][0-9]{7}[0-9A-Za-z])\b")
 _IBAN = re.compile(r"\bES[0-9]{2}(?:[ ]?[0-9]{4}){5}\b")
 _DATE = re.compile(r"\b[0-9]{2}/[0-9]{2}/[0-9]{4}\b")
 
+#: Parecido minimo para dar por bueno un valor producido que no coincide
+#: literalmente con ninguno real. Alto a proposito: un NIF con un glifo bailado
+#: ("B4610233I" por "B46102331") es un fallo de lectura, no un campo inventado,
+#: y quien lo penaliza es el recall. Por debajo de esto se cuenta como inventado.
+UMBRAL_PARECIDO = 0.8
+
 
 def fields_of(text: str) -> dict[str, set[str]]:
     """Conjuntos normalizados de los campos que se comparan."""
@@ -177,22 +213,78 @@ def fields_of(text: str) -> dict[str, set[str]]:
     }
 
 
+def _clave(valor: str) -> str:
+    """Valor de campo reducido a alfanumericos: quita separadores de formato."""
+    return normalize(valor)
+
+
+def _parecido(a: str, b: str) -> float:
+    """Parecido entre dos valores de campo, de 0 a 1 (1 = identicos)."""
+    if a == b:
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def _coincide(valor: str, reales: set[str]) -> bool:
+    """¿El valor que produjo el lector corresponde a algun valor real?"""
+    if valor in reales:
+        return True
+    clave = _clave(valor)
+    return any(_parecido(clave, _clave(real)) >= UMBRAL_PARECIDO for real in reales)
+
+
+def _f1(recall: float | None, precision: float | None) -> float | None:
+    """Media armonica de recall y precision; ``None`` solo si falta un lado.
+
+    Un recall de 0 es una medida (no se encontro nada), no un dato ausente: la
+    F1 vale 0, no ``None``. Confundir los dos casos haria que el informe
+    promediase solo los documentos que salieron bien.
+    """
+    if recall is None or precision is None:
+        return None
+    if recall + precision == 0:
+        return 0.0
+    return round(2 * recall * precision / (recall + precision), 4)
+
+
 def compare_fields(truth: str, guess: str) -> dict[str, Any]:
-    """Recall por campo: de lo que habia de verdad, cuanto encontro el OCR."""
+    """Recall, precision y F1 por campo (NIF, IBAN, fechas, importes).
+
+    El recall dice cuanto de lo que habia se encontro; la precision, cuanto de
+    lo que se leyo existia de verdad. Hacia falta la segunda: un lector que
+    ademas de leer lo que hay se inventa numeros (ruido que parece un importe,
+    un NIF de otro documento) saca recall perfecto y el informe no lo veia.
+
+    Un valor producido solo cuenta como inventado si no se parece a NINGUN
+    valor real (`UMBRAL_PARECIDO`). La comparacion a pelo de conjuntos marcaria
+    como falso todo lo que el OCR haya reordenado o leido con un glifo de mas,
+    y eso ya lo mide el recall.
+    """
     real = fields_of(truth)
     got = fields_of(guess)
-    out: dict[str, Any] = {"missing": {}, "wrong": {}}
-    total = hit = 0
+    out: dict[str, Any] = {"missing": {}, "spurious": {}, "produced": {}}
+    total = hit = producidos = legitimos = 0
     for name, values in real.items():
         if not values:
             continue
         total += len(values)
-        found = values & got[name]
-        hit += len(found)
+        hit += len(values & got[name])
         if values - got[name]:
             out["missing"][name] = sorted(values - got[name])
+
+        inventados = sorted(v for v in got[name] if not _coincide(v, values))
+        out["produced"][name] = len(got[name])
+        producidos += len(got[name])
+        legitimos += len(got[name]) - len(inventados)
+        if inventados:
+            out["spurious"][name] = inventados
+
     out["recall"] = round(hit / total, 4) if total else None
+    out["precision"] = round(legitimos / producidos, 4) if producidos else None
+    out["f1"] = _f1(out["recall"], out["precision"])
     out["checked"] = total
+    out["produced_total"] = producidos
+    out["legitimos"] = legitimos
     out["malformed"] = malformed_in(guess)
     return out
 
@@ -204,7 +296,7 @@ def compare_fields(truth: str, guess: str) -> dict[str, Any]:
 
 def truth_pages(path: Path) -> list[str]:
     """Texto embebido, una entrada por pagina."""
-    doc = pdfium.PdfDocument(str(path))
+    doc = _pdfium().PdfDocument(str(path))
     try:
         pages = []
         for i in range(len(doc)):
@@ -234,6 +326,7 @@ def evaluate(path: Path, scales: list[float] | None = None) -> dict[str, Any] | 
         return None  # escaneo: sin verdad, no evaluable
 
     started = time.perf_counter()
+    _Source, _run_local_page = _servicio()
     source = _Source(path)
     try:
         guess_pages = [
@@ -268,11 +361,19 @@ def evaluate(path: Path, scales: list[float] | None = None) -> dict[str, Any] | 
         round(p["fields"]["recall"] * p["fields"]["checked"]) for p in per_page
         if p["fields"]["recall"] is not None
     )
+    producidos = sum(p["fields"]["produced_total"] for p in per_page)
+    legitimos = sum(p["fields"]["legitimos"] for p in per_page)
     missing: dict[str, list[str]] = {}
+    spurious: dict[str, list[str]] = {}
     for page in per_page:
         for name, values in page["fields"]["missing"].items():
             missing.setdefault(name, []).extend(values)
+        for name, values in page["fields"]["spurious"].items():
+            spurious.setdefault(name, []).extend(values)
     malformed = [v for page in per_page for v in page["fields"]["malformed"]]
+
+    recall = round(hits / checked, 4) if checked else None
+    precision = round(legitimos / producidos, 4) if producidos else None
 
     return {
         "file": path.name,
@@ -281,9 +382,13 @@ def evaluate(path: Path, scales: list[float] | None = None) -> dict[str, Any] | 
         "cer": round(cer, 4),
         "cer_sorted": round(cer_sorted, 4),
         "chars": weight,
-        "field_recall": round(hits / checked, 4) if checked else None,
+        "field_recall": recall,
+        "field_precision": precision,
+        "field_f1": _f1(recall, precision),
         "fields_checked": checked,
+        "fields_produced": producidos,
         "missing": {k: sorted(set(v))[:6] for k, v in missing.items()},
+        "spurious": {k: sorted(set(v))[:6] for k, v in spurious.items()},
         "malformed": sorted(set(malformed))[:6],
         "detail": per_page,
     }
@@ -318,6 +423,8 @@ def report(rows: list[dict[str, Any]], skipped: int) -> None:
     perfect = sum(1 for r in rows if r["cer"] == 0)
     casi = sum(1 for r in rows if r["cer"] <= 0.01)
     recalls = [r["field_recall"] for r in rows if r["field_recall"] is not None]
+    precisions = [r["field_precision"] for r in rows if r["field_precision"] is not None]
+    f1s = [r["field_f1"] for r in rows if r["field_f1"] is not None]
 
     print()
     print("  CER (caracteres en orden)")
@@ -330,7 +437,14 @@ def report(rows: list[dict[str, Any]], skipped: int) -> None:
     print(f"  documentos PERFECTOS (cer=0)     : {perfect}/{total}  ({100 * perfect / total:.1f}%)")
     print(f"  documentos casi perfectos (<=1%) : {casi}/{total}  ({100 * casi / total:.1f}%)")
     if recalls:
-        print(f"  recall de campos (NIF/IBAN/fecha/importe): {sum(recalls) / len(recalls):.4f}")
+        print(f"  recall de campos (NIF/IBAN/fecha/importe)   : {sum(recalls) / len(recalls):.4f}")
+    if precisions:
+        print(f"  precision de campos (cuanto de lo leido existe): "
+              f"{sum(precisions) / len(precisions):.4f}")
+    if f1s:
+        print(f"  F1 de campos (media de recall y precision)   : {sum(f1s) / len(f1s):.4f}")
+    inventados = [r for r in rows if r["spurious"]]
+    print(f"  documentos con campos inventados (falsos positivos): {len(inventados)}")
     print(f"  tiempo medio por documento       : {sum(r['elapsed'] for r in rows) / total:.2f}s")
 
     # La diferencia entre los dos CER dice si el fallo es de orden o de glifo.
@@ -345,11 +459,15 @@ def report(rows: list[dict[str, Any]], skipped: int) -> None:
     print("  PEORES 15 DOCUMENTOS")
     for r in sorted(rows, key=lambda r: -r["cer"])[:15]:
         rec = "n/a" if r["field_recall"] is None else f"{r['field_recall']:.2f}"
+        pre = "n/a" if r["field_precision"] is None else f"{r['field_precision']:.2f}"
         print(f"    {r['file']:34s} cer={r['cer']:.3f} ord={r['cer_sorted']:.3f} "
-              f"campos={rec:>4s} chars={r['chars']:5d} {r['elapsed']:5.2f}s")
+              f"campos={rec:>4s} prec={pre:>4s} chars={r['chars']:5d} {r['elapsed']:5.2f}s")
         if r["missing"]:
             for name, values in sorted(r["missing"].items()):
                 print(f"        falta {name:9s}: {values}")
+        if r["spurious"]:
+            for name, values in sorted(r["spurious"].items()):
+                print(f"        inventa {name:9s}: {values}")
         if r["malformed"]:
             print(f"        mal formados   : {r['malformed']}")
 
@@ -361,6 +479,16 @@ def report(rows: list[dict[str, Any]], skipped: int) -> None:
     for r in sorted(graves, key=lambda r: -r["cer"])[:10]:
         print(f"    {r['file']:34s} cer={r['cer']:.3f} "
               f"campos={'n/a' if r['field_recall'] is None else r['field_recall']}")
+
+    # Un lector puede leer TODO lo que habia y ademas inventarse cosas: el
+    # recall solo no lo ve, asi que se listan aparte.
+    print()
+    print(f"  DOCUMENTOS CON CAMPOS INVENTADOS (recall alto, precision baja): {len(inventados)}")
+    for r in sorted(inventados, key=lambda r: r["field_precision"] or 0)[:10]:
+        print(f"    {r['file']:34s} recall={r['field_recall']} "
+              f"precision={r['field_precision']} f1={r['field_f1']}")
+        for name, values in sorted(r["spurious"].items()):
+            print(f"        inventa {name:9s}: {values}")
 
 
 def main() -> int:

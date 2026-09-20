@@ -147,6 +147,36 @@ def test_total_ilegible_escala(sintetica, mundo):
     assert algun_motivo(decision, "total de factura no legible")
 
 
+def test_el_total_bien_leido_no_se_anota_como_recompuesto(sintetica, mundo):
+    """Un escaneo cuyo total ya cuadra con el ERP no tiene nada que reconstruir.
+
+    `_repara_importes_ocr` acepta el importe por la via `por_total` tambien
+    cuando el OCR lo leyo **bien** (basta con que cuadre con el ERP), y en ese
+    caso anotaba una reparacion que no existia: el mismo importe a los dos lados
+    de los dos puntos. Inflaba el censo de error de extraccion -- 19 de las 25
+    notas de "importe recompuesto" del lote eran de este tipo -- y ademas
+    acusaba al OCR de desalinear un separador que habia leido correctamente.
+    """
+    decision = sintetica.decide(metodo="vision_local")
+    assert decision.resultado == PAGAR
+    assert decision.campos["total"] == str(mundo.importe(mundo.pedido_base))
+    assert [n for n in decision.campos["notas_importe"] if "recompuesto" in n] == []
+
+
+def test_el_total_con_el_separador_desalineado_si_deja_nota(sintetica, mundo):
+    """El caso que la nota describe de verdad: `3.012,89` leido `3.012.89`.
+
+    La reparacion (y por tanto la nota) sigue viva: lo que cambia es que ahora
+    solo se anota cuando el importe cambia.
+    """
+    cuerpo = sintetica.texto().replace("3.012,89", "3.012.89")
+    decision = mundo.decisor.decide(lee_texto(cuerpo, metodo="vision_local"))
+    assert decision.resultado == PAGAR
+    assert decision.campos["total"] == str(mundo.importe(mundo.pedido_base))
+    notas = decision.campos["notas_importe"]
+    assert any(n.startswith("importe recompuesto a 3012.89") for n in notas)
+
+
 # ------------------------------------------------------- 5. fecha
 def test_fecha_futura_escala(sintetica, mundo, politica):
     assert politica.hoy == "2026-09-19"
@@ -195,16 +225,37 @@ def test_una_letra_mal_en_el_iban_se_corrige(sintetica, mundo):
     assert decision.campos["iban_candidatos"] == [iban]
 
 
-@pytest.mark.xfail(
-    reason="BUG: norma._resuelve_nif/_resuelve_iban devuelven notas de correccion "
-    "(lineas 443-444 de norma.py) que nunca se vuelcan en campos['notas']; la "
-    "correccion difusa es invisible en la traza",
-    strict=True,
-)
 def test_la_correccion_difusa_de_iban_deja_nota(sintetica, mundo):
     iban = mundo.iban(mundo.pedido_base)
     decision = sintetica.decide(pedido=mundo.pedido_base, iban=iban[:14] + "9" + iban[15:])
     assert any("corregido a" in n for n in decision.campos["notas"])
+
+
+def test_la_correccion_de_un_nif_tambien_deja_nota(sintetica, mundo):
+    """El censo de error de extraccion cuenta las reparaciones por `campos['notas']`.
+
+    Si R1 vuelve a calcular sus notas y tirarlas, el censo diria que no hubo
+    ninguna correccion de NIF: una metrica que miente por lo bajo.
+    """
+    nif = mundo.nif(mundo.pedido_base)
+    decision = sintetica.decide(pedido=mundo.pedido_base, nif=nif[:-1] + "I")
+    assert decision.resultado == PAGAR
+    assert any("NIF" in n and "corregido a" in n for n in decision.campos["notas"])
+
+
+def test_las_notas_de_r1_no_pisan_las_del_pedido(sintetica, mundo):
+    """`campos['notas']` acumula: la nota del NIF no puede borrar la del pedido."""
+    nif = mundo.nif(mundo.pedido_base)
+    decision = sintetica.decide(
+        metodo="vision_local",
+        pedido="PO-2028-0096",  # anio que no existe; el cuerpo (0096) lo identifica
+        total=mundo.importe(mundo.pedido_base),
+        nif=nif[:-1] + "I",
+        iban=mundo.iban(mundo.pedido_base),
+    )
+    notas = decision.campos["notas"]
+    assert any(n.startswith("pedido") and "reparado" in n for n in notas)
+    assert any("NIF" in n and "corregido a" in n for n in notas)
 
 
 # ------------------------------------------------------- 7. NIF ajeno

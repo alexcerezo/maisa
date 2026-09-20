@@ -427,10 +427,17 @@ class Decisor:
 
         base_r, iva_r = par if par else (base, iva)
         if por_total:
-            notas.append(
-                f"importe recompuesto a {euros(esperado)} (el OCR desalineo el separador "
-                f"decimal del total impreso: {euros(total)})"
-            )
+            # Solo es una reparacion si el importe cambio. `por_total` tambien es
+            # cierto cuando el OCR leyo el total bien -- basta con que cuadre con
+            # el ERP --, y en ese caso no hay nada que reconstruir: la nota salia
+            # igual, afirmando un separador decimal desalineado y repitiendo el
+            # mismo importe a los dos lados de los dos puntos. Eso inflaba el
+            # censo de error de extraccion (19 de 25 notas eran de este tipo).
+            if cuantiza(total) != esperado:
+                notas.append(
+                    f"importe recompuesto a {euros(esperado)} (el OCR desalineo el separador "
+                    f"decimal del total impreso: {euros(total)})"
+                )
         elif par is not None:
             notas.append(
                 f"total ilegible o ruidoso ({euros(total)}) confirmado por la aritmetica "
@@ -568,6 +575,12 @@ class Decisor:
         campos["nif_maestro"] = proveedor.nif
         campos["iban_maestro"] = proveedor.iban
         campos["nif_asiento"] = asiento.nif
+        # Las notas de R1 se suman a las del pedido. Se calculaban y se tiraban,
+        # asi que corregir un NIF o un IBAN mal leidos era invisible: ni el
+        # informe de la traza ni el censo de error de extraccion podian contar
+        # esas reparaciones. `campos` es diagnostico: no entra en la decision ni
+        # en la entrega, solo en la traza.
+        campos["notas"] += notas_nif + notas_iban
 
         # --- R6: el escaneo no da para comprobar la cuenta de abono -----------
         # Punto 1 de la Norma: el IBAN de la factura debe coincidir con el del
