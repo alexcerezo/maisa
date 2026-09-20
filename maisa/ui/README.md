@@ -6,12 +6,19 @@ expediente y PDF original), es donde se marca la cola de revisión, y lleva una 
 del motor. **React 19 + Vite 8 + TypeScript + Tailwind v4**, con `react-router-dom` v7 y los
 componentes de shadcn/ui.
 
-No es un servicio: es un **build estático** (`dist/`) que se sirve desde **Vercel**. La API vive
-en otro origen (`https://82.70.78.22.sslip.io`), así que aquí hay CORS de por medio.
+No es un servicio con proceso propio: es un **build estático** (`dist/`) y quien lo sirve es
+**la API**. No hay nada que arrancar en marcha para verlo —ni un servidor de desarrollo, ni
+`npm run preview`—: `albertitos-api` monta esta carpeta entera como `/datos/ui:ro`, sirve
+`/datos/ui/dist` en `/` y lo decide **en cada petición**, así que recompilar basta (§3.1).
+
+Que lo sirva la API no es un detalle de comodidad: el panel queda en el **mismo origen** que los
+datos, y eso quita el CORS de la ecuación. Vercel queda como vía alternativa para repartir el panel
+desde fuera de la máquina, y ahí sí hay CORS de por medio (§3.2).
 
 - Cómo se consume la API y qué sorpresas tiene: `src/api/cliente.ts`.
 - Qué es cada endpoint: `maisa/api/README.md` §3.
 - Cómo se levanta el sistema entero (Mongo, API, OCR, TLS): `maisa/docs/arranque_servicios.md`.
+  El paso del panel es su §3.8.
 
 ---
 
@@ -42,8 +49,13 @@ ficheros, `?api=https://otra` en la barra de direcciones. El orden completo (con
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run build        # tsc --noEmit && vite build  ->  dist/
-npm run preview      # sirve dist/ para mirarlo antes de desplegar
+npm run preview      # sirve dist/ en el 4173 para mirarlo en local
 ```
+
+`npm run preview` es solo para mirar el build **en local**, sin depender de Docker: no forma parte
+del despliegue y no hace falta para ver el panel, porque el que lo sirve es el contenedor de la API
+(§3.1). Si lo arrancas, acuérdate de pararlo: ocupa el 4173 y no aporta nada que no dé
+`http://127.0.0.1:8010`.
 
 `npm run build` **ya** hace el typecheck, así que no hay que llamarlo antes por separado. Vercel
 tampoco lo duplica: el `buildCommand` es `npm run build`.
@@ -56,7 +68,50 @@ python3 tools/generar_escalabilidad.py          # reescribe public/data/escalabi
 python3 tools/generar_escalabilidad.py --check  # falla si el JSON versionado está desfasado
 ```
 
-## 3. Despliegue en Vercel
+## 3. Despliegue
+
+### 3.1 En nuestra máquina: el panel lo sirve la API (la vía canónica)
+
+El panel **no se despliega aparte**: vive dentro del contenedor de la API. El único paso es
+construirlo en el anfitrión, porque `UI_DIR` apunta al `dist` del host y no a un volumen de Docker:
+
+```bash
+cd maisa/ui
+npm ci && npm run build          # deja dist/
+```
+
+Y ya está: **no hay que reiniciar ni recrear el contenedor**. `_montar_ui()`
+(`maisa/api/app/main.py`) decide en cada petición si existe `UI_DIR/index.html`, así que un
+`albertitos-api` que llevaba horas arriba empieza a servir el build nuevo en la petición siguiente;
+y si el `dist` desaparece, `/` vuelve al JSON informativo en vez de dar un 404
+(`maisa/docs/arranque_servicios.md` §7.11).
+
+| Desde | URL |
+|---|---|
+| La propia máquina | `http://127.0.0.1:8010/` — y `/facturas`, `/trazabilidad`, `/escalabilidad` |
+| Internet (HTTPS) | `https://82.70.78.22.sslip.io/` — Caddy → `albertitos-api:8000` |
+
+Dos consecuencias que conviene tener presentes:
+
+- **El `dist` no se versiona y no va dentro de la imagen.** El compose monta `../ui` entera
+  (`:ro`) y no solo su `dist` a propósito: así un build nuevo no obliga a reconstruir la imagen. Un
+  clon recién bajado **no tiene panel** hasta que se construye: `GET /` devuelve el JSON
+  informativo y `/api/meta` lo dice con `configuracion.ui.disponible: false`. No es un fallo.
+- **En el mismo origen no hay CORS.** `CORS_ORIGINS` solo importa para la vía de Vercel (§3.2) y
+  para `npm run dev` en el 5173. Servido por la API, el navegador ve un solo origen.
+
+Para comprobar que el contenedor sirve **el build que crees**, compara hashes:
+
+```bash
+curl -s http://127.0.0.1:8010/api/meta | python3 -c 'import json,sys; print(json.load(sys.stdin)["configuracion"]["ui"])'
+curl -s http://127.0.0.1:8010/trazabilidad | grep -o 'index-[A-Za-z0-9]*\.js'   # lo que sirve
+ls dist/assets/index-*.js                                                      # lo que hay en disco
+```
+
+Si no coinciden, el contenedor está sirviendo otro `dist`: mira que el build haya terminado en
+`maisa/ui/dist` y no en otro directorio.
+
+### 3.2 En Vercel (alternativa, para repartir desde fuera)
 
 **Root Directory = `maisa/ui`.** Es el ajuste que más tiempo cuesta encontrar: `vercel.json` vive
 dentro de `maisa/ui/`, y Vercel solo lee el `vercel.json` de la raíz del proyecto. Si se deja la
@@ -97,8 +152,8 @@ Lo decide `src/api/fuente.ts` en tiempo de ejecución, y la pantalla dice de cu�
    `GET /api/estadisticas` con 5 s de tiempo máximo. A propósito **no** se usa `/health/ready`:
    depende del OCR y devuelve 503 cuando está caído, pero el listado se lee de fichero y funciona
    igual.
-2. **Congelado** — los ficheros de `public/data/`: `facturas.json` (500 facturas),
-   `estadisticas.json`, `manifiesto.json`, `facturas/*.json` (500 expedientes), `salud.json`,
+2. **Congelado** — los ficheros de `public/data/`: `facturas.json` (540 facturas),
+   `estadisticas.json`, `manifiesto.json`, `facturas/*.json` (540 expedientes), `salud.json`,
    `meta.json` y `pdfs/`. Se fuerza con **`?fuente=congelado`** en la barra de direcciones, y es lo
    que se enseña cuando la API no contesta.
 

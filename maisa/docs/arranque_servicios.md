@@ -7,10 +7,10 @@ se usa el DNS interno de `albertitos_net` entre contenedores. Está escrito para
 de arriba abajo, sin preguntar nada: cada paso lleva el comando literal y el motivo por el
 que va ahí.
 
-> **La vía de reparto es HTTPS.** El visor vive en un hosting con HTTPS (Framer/Vercel) y
-> el navegador bloquea por *mixed content* cualquier llamada a una API `http://`. La URL
-> que se reparte es `https://82.70.78.22.sslip.io` (§3.8). El `8010` en claro sigue
-> abierto, pero es para diagnóstico y para el smoke test, no para el frontend.
+> **La vía de reparto es HTTPS.** Todo se reparte por `https://82.70.78.22.sslip.io` (§3.6).
+> El panel no se aloja aparte: lo sirve **la propia API** en el mismo origen (§3.8), así que no
+> hay CORS ni *mixed content* que resolver. El `8010` en claro sigue abierto, pero es para
+> diagnóstico y para el smoke test, no para el frontend.
 
 Decisiones de arquitectura que sostienen este runbook: `maisa/docs/ADR-0001-middleware-bff.md`.
 Detalle de la API: `maisa/api/README.md`. Detalle del OCR: `maisa/ocr_service/README.md`.
@@ -202,14 +202,35 @@ curl -s http://127.0.0.1:8009/erp/estado # o: make erp-status
 
 ### 3.8 Visor
 
-Colocar el frontend en `maisa/ui/` (está montado en el contenedor como `/datos/ui:ro`). Si
-el directorio no tiene contenido, `GET /` devuelve un mensaje informativo en vez de un 404.
-En cuanto haya un `index.html`, se sirve en `/` y el navegador habla con la API **en el mismo
-origen**: sin CORS y sin credenciales.
+El panel **ya está en el repo** (`maisa/ui/`), así que este paso no es traerlo sino **construirlo**.
+No hay ningún servidor de desarrollo en el despliegue: quien sirve el panel es la propia API.
 
-La decisión se toma **en cada petición** (`maisa/api/app/main.py` → `_montar_ui()`), así que
-basta con dejar o quitar el `index.html`: no hay que reiniciar ni recrear el contenedor
-(ver §7.11).
+```bash
+cd maisa/ui
+npm ci && npm run build          # deja maisa/ui/dist
+```
+
+`maisa/ui` está montado en el contenedor como `/datos/ui:ro` y `UI_DIR` apunta a
+`/datos/ui/dist`, que es lo que Vite deja. Con `dist/index.html` presente, `GET /` sirve el panel y
+el navegador habla con la API **en el mismo origen**: sin CORS y sin credenciales. Se ve en
+`http://127.0.0.1:8010/` y, por HTTPS, en `https://82.70.78.22.sslip.io/`; las rutas del panel
+(`/facturas`, `/trazabilidad`, `/escalabilidad`) también.
+
+**No hay que reiniciar nada.** La decisión se toma **en cada petición**
+(`maisa/api/app/main.py` → `_montar_ui()`): basta con que aparezca o desaparezca el `index.html`,
+sin recrear el contenedor (ver §7.11). Y si no hay build —un clon recién bajado, o un `dist`
+borrado— `GET /` devuelve un mensaje informativo en vez de un 404, y
+`GET /api/meta` → `configuracion.ui.disponible: false` lo dice. Eso es degradación, no un fallo.
+
+Para saber si el contenedor sirve **el build que crees**, compara el hash del bundle que responde
+con el del disco:
+
+```bash
+curl -s http://127.0.0.1:8010/trazabilidad | grep -o 'index-[A-Za-z0-9]*\.js'
+ls maisa/ui/dist/assets/index-*.js
+```
+
+Detalle del panel: `maisa/ui/README.md` §3.1.
 
 ---
 
@@ -226,7 +247,7 @@ basta con dejar o quitar el `index.html`: no hay que reiniciar ni recrear el con
 | API viva | `curl -s http://127.0.0.1:8010/health` | `"estado": "ok"` y `mongo.ok`/`ocr.ok`/`escritura.ok` a `true` |
 | API lista | `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8010/health/ready` | `200` (503 si falta una dependencia crítica: `mongo,ocr`) |
 | API desde Internet (HTTPS) | `curl -s https://82.70.78.22.sslip.io/health` | mismo JSON que por `127.0.0.1`. **Es la vía de reparto real** |
-| API desde Internet (claro) | `curl -s http://82.70.78.22:8010/health` | el mismo JSON. Sigue abierta para diagnóstico, pero un visor en HTTPS **no** puede usarla |
+| API desde Internet (claro) | `curl -s http://82.70.78.22:8010/health` | el mismo JSON. Sigue abierta para diagnóstico; el panel **no** la usa: se sirve por HTTPS desde la propia API (§3.8) |
 | Certificado TLS | `curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://82.70.78.22.sslip.io/health` | `200 0` (`0` = certificado válido y verificado) |
 | Redirección http → https | `curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://82.70.78.22.sslip.io/api/meta` | `308 https://82.70.78.22.sslip.io/api/meta` |
 | Proxy del OCR | `curl -s -X POST 'http://127.0.0.1:8010/api/ocr' -F file=@maisa/data/facturas/2026-01-08_P001.pdf` | `200` en 1–5 s según el motor elegido (reenvía a `ocr-api:8866`) |
@@ -487,14 +508,14 @@ existe `UI_DIR/index.html` devuelve el fichero y, si no, el mensaje informativo 
 `StaticFiles` montado en `/` queda solo como red de seguridad para el resto de ficheros del visor
 (`app.js`, `style.css`…).
 
-Antes la decisión se tomaba **al arrancar**, lo que producía dos comportamientos confusos (dejarlos
-en `maisa/ui/` o quitarlos no se notaba hasta recrear el contenedor, y `GET /` podía quedarse en
-`404` con el `index.html` ya borrado). Eso está corregido; ahora:
+Antes la decisión se tomaba **al arrancar**, lo que producía dos comportamientos confusos (crear o
+borrar el `dist/` no se notaba hasta recrear el contenedor, y `GET /` podía quedarse en `404` con el
+`index.html` ya borrado). Eso está corregido; ahora:
 
 | Estado de `UI_DIR` | `GET /` |
 |---|---|
-| tiene `index.html` | `200 text/html` con el visor. |
-| solo `.gitkeep` / vacío / no existe | `200 application/json` con el mensaje informativo. |
+| tiene `index.html` (hay build) | `200 text/html` con el panel. |
+| sin `dist/`, o sin `index.html` dentro | `200 application/json` con el mensaje informativo. |
 
 `GET /api/meta` → `configuracion.ui.disponible` refleja exactamente esa misma condición
 (`(ui_dir / "index.html").is_file()`), así que ya no puede decir `true` mientras `/` devuelve el
@@ -514,8 +535,8 @@ histórico: la LAN **no** se prueba, porque no es una vía de consumo (ver `mais
 §2.1). Las bases se pasan con `--publico` (necesita `PUBLIC_IP`) o con `--base <URL>` (repetible), y
 `--subir` añade el ciclo de escritura (`201`, `200 duplicado`, expediente y PDF desde GridFS) y
 deja **14** comprobaciones. La comprobación de `/` da por
-bueno **cualquiera de los dos** casos de §7.11: `text/html` (hay visor) o `application/json` (no lo
-hay). Antes exigía `text/html` y fallaba legítimamente con `maisa/ui/` vacío. El resto de la salida
+bueno **cualquiera de los dos** casos de §7.11: `text/html` (hay build) o `application/json` (no lo
+hay). Antes exigía `text/html` y fallaba legítimamente sin build. El resto de la salida
 es la mejor comprobación de una pasada que hay en el repo.
 
 ### 7.13 El proxy salía `(unhealthy)` aunque el HTTPS funcionaba
@@ -546,10 +567,10 @@ depender del certificado (que tarda unos segundos en emitirse) ni de la API.
 
 | Pendiente | Estado real |
 |---|---|
-| **Frontend/visor completo** (`maisa/ui/`) | En curso. El montaje está hecho y probado: en cuanto haya un `index.html` en `maisa/ui/`, la API lo sirve en `/` (en caliente, sin reiniciar). Hoy el directorio está vacío (solo `.gitkeep`), así que `/` devuelve el mensaje informativo en JSON. Lo que falta es el visor, no la tubería. |
+| ~~**Frontend/visor completo** (`maisa/ui/`)~~ | **Resuelto.** El panel está en el repo y lo sirve la API en `/` (`UI_DIR=/datos/ui/dist`, montado como `/datos/ui:ro`). No hay proceso que arrancar: el único paso es construirlo (`npm ci && npm run build` en `maisa/ui`, §3.8) y el contenedor lo sirve en la petición siguiente, sin reiniciar (§7.11). Se ve en `http://127.0.0.1:8010/` y en `https://82.70.78.22.sslip.io/`, con las rutas del panel (`/facturas`, `/trazabilidad`, `/escalabilidad`). Sin build, `/` sigue devolviendo el mensaje informativo y `ui.disponible` es `false`. |
 | **Persistencia en Mongo de `expedientes` y `eventos`** | **Parcial.** `POST /api/facturas` ya escribe expedientes y eventos (subidas por la API). Lo que sigue sin escribir es el **motor**: las decisiones viven solo en `outputs/outcomes_traza.jsonl`, y `ejecuciones` y `excel_filas` están **vacías** (`TRASPASO.md` §1: «Persistencia Mongo (`expedientes`…) — a hacer»). Cuando el motor escriba ahí, `GET /api/facturas` debería preferir Mongo. |
 | **Autenticación real** | Hoy `API_KEY` es una **clave compartida**, no usuarios ni roles. El usuario que usa la API (`albertitos_app`) tiene `readWrite` sobre `albertitos` (lo necesita para `POST /api/facturas`). |
-| ~~TLS~~ | **Resuelto.** La API se reparte por `https://82.70.78.22.sslip.io` con certificado de Let's Encrypt (`maisa/proxy/`, §3.6). El `8010` en claro sigue publicado a propósito, para diagnóstico. Lo que **falta** de este frente es cerrar el `8010` al público cuando ya nadie lo necesite, y fijar el origen del visor en `CORS_ORIGINS` en vez del `*` actual (`maisa/api/.env`). |
+| ~~TLS~~ | **Resuelto.** La API se reparte por `https://82.70.78.22.sslip.io` con certificado de Let's Encrypt (`maisa/proxy/`, §3.6). El `8010` en claro sigue publicado a propósito, para diagnóstico. Lo único que **falta** de este frente es cerrar el `8010` al público cuando ya nadie lo necesite. (El otro punto que quedaba —fijar el origen del visor en `CORS_ORIGINS`— quedó sin objeto: el panel lo sirve la API en el mismo origen, §3.8.) |
 | **Cierre del `8866` del OCR** | Sigue publicado en `0.0.0.0:8866` por su propio compose, ahora que el frontend entra por `/api/ocr`. Decisión pendiente (ADR-0001 §5). |
 | **`GET /api/asientos/{asiento_id}` no filtra por `vigente`** | Con un solo snapshot es equivalente; con varios habrá que decidir cuál devolver. |
 | **Caché/ETag en el listado** | Con 500 facturas la traza cabe en memoria; si el volumen crece, tocará paginar desde Mongo y cachear. |
@@ -559,8 +580,9 @@ depender del certificado (que tarda unos segundos en emitirse) ni de la API.
 ## 9. Estado verificado
 
 **2026-09-19, 17:20–17:45 UTC** (arranque completo) y **2026-09-20, 00:40–01:00 UTC** (proxy TLS).
-Todo en verde. El visor (`maisa/ui/`) sigue vacío (solo `.gitkeep`), así que `/` devuelve el
-JSON informativo: es una respuesta **correcta** y el smoke la da por buena (§7.11 y §7.12):
+Todo en verde. En aquel momento el panel todavía no se había construido, así que `/` devolvía el
+JSON informativo: es una respuesta **correcta** y el smoke la da por buena (§7.11 y §7.12). El panel
+ya construido y servido por el contenedor se verificó aparte, el 2026-09-20 (§9.1):
 
 | Pieza | Verificación | Resultado |
 |---|---|---|
@@ -597,11 +619,40 @@ comprobación pasa.
 **Lo que sigue sin verificar**: que el motor de nube del OCR esté *siempre* disponible — aquí
 respondió por la nube, pero si su cuota o su token fallan el OCR debe caer al motor local, y
 ese camino no se ha forzado a propósito. Tampoco se ha probado la API con `API_KEY` definida
-(hoy corre en modo abierto, ver §8). Y el visor no se ha abierto en un navegador real: solo se
-ha comprobado que `/` responde (con `maisa/ui/` vacío, el mensaje informativo en JSON).
+(hoy corre en modo abierto, ver §8). Y del panel, en aquella prueba solo se comprobó que `/`
+respondía con el mensaje informativo en JSON, porque todavía no había build (§9.1).
 
 Del lado del HTTPS, lo comprobado es la **tubería** (certificado verificado, `308` en el 80,
 smoke de 10 comprobaciones por Caddy), no la integración con el visor: falta abrir el visor en
 Vercel contra `https://82.70.78.22.sslip.io` y, en esa prueba, fijar su origen exacto en
 `CORS_ORIGINS` en lugar del `*` que hoy tiene `maisa/api/.env`. Con `*`, un fallo de CORS no
 saldría aquí: aparecería solo en la consola del navegador.
+
+Esa última reserva quedó sin objeto cuando el panel pasó a servirse **desde la propia API**
+(§9.1): en el mismo origen no hay CORS que fijar, ni visor en Vercel que probar. Lo que sigue en
+pie es la parte del OCR y la de `API_KEY`.
+
+### 9.1 El panel, servido por el contenedor (2026-09-20, 07:15 UTC)
+
+Esta es la verificación que cierra el §8 para el panel. No se arrancó ningún servidor de
+desarrollo: el panel lo sirve `albertitos-api` desde `/datos/ui/dist`.
+
+| Comprobación | Cómo | Resultado |
+|---|---|---|
+| Build | `cd maisa/ui && npm run typecheck && npm run build` | `tsc` limpio; `✓ built`, `dist/assets/index-CTpyT83I.js` (1.029.498 B; el log de Vite dice 1.029,10 kB / 312,73 kB gzip) |
+| Paridad del corpus | `node tools/verificar_paridad.ts` | `Todo cuadra.` |
+| Panel por el contenedor | `GET http://127.0.0.1:8010/trazabilidad` | `200`, sirviendo el bundle recién construido |
+| Panel por HTTPS | `GET https://82.70.78.22.sslip.io/trazabilidad` | `200` (por Caddy, sin tocar la API) |
+| La API sabe que hay panel | `GET /api/meta` | `configuracion.ui.disponible: true` |
+| El panel **funciona**, no solo responde | render *headless* de `/trazabilidad` contra `127.0.0.1:8010` | **0 errores de JavaScript**; «API viva» y el selector con las 540 facturas |
+| Sin reiniciar | el contenedor arrancó a las 06:49 UTC y sirvió un `dist` escrito a las 07:07 (18 min después) | servido en caliente, como dice §7.11 |
+| Varias formas de expediente | 6 renders: `P006`, catering, `P001`, `FA-5590`, `scan_002`, `F26-7728` | 0 errores en los seis; los tres casos de prosa (instrucción marcada, solo anomalía de regla, sin señal) salen como deben |
+
+Dos consecuencias que conviene tener presentes:
+
+- **`dist` no está versionado ni viaja en la imagen.** Un clon recién bajado no tiene panel: hay
+  que construirlo (§3.8). Mientras no lo haya, `/` responde el JSON informativo y `ui.disponible`
+  es `false` — degradación, no fallo.
+- **No hay proceso que arrancar ni que parar.** El `npm run preview` del puerto 4173 es solo una
+  lupa local para mirar `dist/` sin contenedor; no forma parte del despliegue y, si se usa, hay
+  que acordarse de pararlo porque ocupa el puerto.
