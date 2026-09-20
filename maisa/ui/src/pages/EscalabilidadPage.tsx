@@ -478,11 +478,15 @@ function Capacidad({ datos }: { datos: Escalabilidad }) {
                         valor={`${entero(capacidad.ocr.facturas_por_hora_por_ranura)}/h`}
                         pie="facturas escaneadas por hora y ranura"
                     />
+                    {/* Solapar no es ganar caudal: el contenedor sí pisa las dos
+                        inferencias (lo dice el `idle` de `/health`), pero el caudal
+                        baja porque no sobran núcleos. Por eso el dato de arriba es
+                        el solape y el de abajo, el caudal. */}
                     <Metrica
                         icono={Cpu}
-                        etiqueta="¿Paraleliza?"
-                        valor={capacidad.ocr.paraleliza_el_contenedor ? "Sí" : "No"}
-                        pie={`×${decimal(capacidad.ocr.speedup_1_a_4_hilos, 2)} al pasar de 1 a 4 hilos`}
+                        etiqueta="¿Solapa peticiones?"
+                        valor={capacidad.ocr.solapa_peticiones ? "Sí" : "No"}
+                        pie={`×${decimal(capacidad.ocr.speedup_caudal_1_a_2, 2)} de caudal con 2 en vuelo · ${entero(capacidad.ocr.motores)} motores`}
                     />
                     <Metrica
                         icono={HardDrive}
