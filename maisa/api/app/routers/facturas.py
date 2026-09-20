@@ -22,6 +22,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Header, Path as PathParam, Query, Response, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from ..almacen import (
     PATRON_FILE_ID,
@@ -36,6 +37,7 @@ from ..config import Settings
 from ..deps import (
     Paginacion,
     get_almacen,
+    get_mongo,
     get_ocr,
     get_settings,
     get_traza,
@@ -43,7 +45,7 @@ from ..deps import (
     texto_busqueda,
 )
 from ..errors import ApiError
-from ..mongo_repo import MongoNoDisponible
+from ..mongo_repo import ESTADOS_REVISION, MongoNoDisponible, MongoRepo
 from ..ocr_client import OcrClient, leer_con_tope
 from ..traza import RESULTADOS, TrazaStore, detallar
 from .ocr import MOTORES as MOTORES_OCR
@@ -201,12 +203,54 @@ async def detalle(
     file_id: str = PathParam(..., pattern=PATRON_FILE_ID.pattern),
     traza: TrazaStore = Depends(get_traza),
     settings: Settings = Depends(get_settings),
+    mongo: MongoRepo = Depends(get_mongo),
 ) -> dict:
     _traza_o_503(traza, settings)
     registro = traza.obtener(file_id)
     if registro is None:
         raise ApiError(404, "factura_no_encontrada", f"No hay ninguna factura con file_id '{file_id}'.")
-    return detallar(registro)
+    datos = detallar(registro)
+    try:
+        datos["revision"] = await mongo.obtener_revision(file_id)
+    except MongoNoDisponible:
+        datos["revision"] = None
+    return datos
+
+
+class RevisionEntrada(BaseModel):
+    estado: str = Field(..., description="PENDIENTE o RESUELTA")
+    revisor: str | None = Field(None, max_length=120)
+    comentario: str | None = Field(None, max_length=2000)
+
+
+@router.put("/{file_id}/revision", summary="Marca una factura como pendiente o resuelta de revision humana")
+async def marcar_revision(
+    entrada: RevisionEntrada,
+    file_id: str = PathParam(..., pattern=PATRON_FILE_ID),
+    traza: TrazaStore = Depends(get_traza),
+    settings: Settings = Depends(get_settings),
+    mongo: MongoRepo = Depends(get_mongo),
+) -> dict:
+    _traza_o_503(traza, settings)
+    if not traza.contiene(file_id):
+        raise ApiError(404, "factura_no_encontrada", f"No hay ninguna factura con file_id '{file_id}'.")
+    if entrada.estado not in ESTADOS_REVISION:
+        raise ApiError(
+            400,
+            "estado_invalido",
+            f"`estado` debe ser uno de: {', '.join(ESTADOS_REVISION)}.",
+        )
+    try:
+        return await mongo.marcar_revision(
+            file_id, estado=entrada.estado, revisor=entrada.revisor, comentario=entrada.comentario
+        )
+    except MongoNoDisponible as exc:
+        raise ApiError(
+            503,
+            "mongo_no_disponible",
+            "No se pudo guardar la revision: Mongo no responde.",
+            {"detalle": str(exc)},
+        ) from None
 
 
 @router.get("/{file_id}/pdf", summary="PDF original, en modo inline")

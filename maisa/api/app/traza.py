@@ -320,6 +320,10 @@ class TrazaStore:
         self._asegurar()
         return [fila["file_id"] for fila in self._resumenes if fila.get("file_id")]
 
+    def file_ids_por_resultado(self, resultado: str) -> list[str]:
+        self._asegurar()
+        return [fila["file_id"] for fila in self._resumenes if fila.get("resultado") == resultado]
+
     def versiones_norma(self) -> dict[str, int]:
         self._asegurar()
         versiones: dict[str, int] = {}

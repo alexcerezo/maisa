@@ -48,7 +48,22 @@ SNAPSHOT_POR_DEFECTO = _primero(*(d / "erp_snapshot.json" for d in _CORPUS),
 SALIDA_POR_DEFECTO = _primero(RAIZ.parent / "outputs", Path("/tmp/out")) / "outcomes.jsonl"
 
 
-def construye_decisor(xlsx: Path, config: Path, snapshot: Path | None, erp_url: str | None):
+def _percentiles_ms(segundos: list[float]) -> dict:
+    """p50/p95 en milisegundos por rango mas cercano (sin dependencias extra)."""
+    if not segundos:
+        return {"p50": 0.0, "p95": 0.0}
+    ordenados = sorted(segundos)
+    ultimo = len(ordenados) - 1
+    return {
+        "p50": round(ordenados[round(0.50 * ultimo)] * 1000, 1),
+        "p95": round(ordenados[round(0.95 * ultimo)] * 1000, 1),
+    }
+
+
+def construye_decisor(
+    xlsx: Path, config: Path, snapshot: Path | None, erp_url: str | None,
+    metricas_erp: dict | None = None,
+):
     # La norma se valida lo primero, antes de leer el maestro y antes de tocar la
     # red: una config invalida tiene que costar milisegundos, no un Excel abierto
     # ni un login al ERP que luego se tira a la basura.
@@ -62,6 +77,8 @@ def construye_decisor(xlsx: Path, config: Path, snapshot: Path | None, erp_url: 
         cliente = ERP(base=erp_url or "http://127.0.0.1:8009")
         cliente.login()
         asientos = {a.pedido: a for a in cliente.asientos()}
+        if metricas_erp is not None:
+            metricas_erp.update(cliente.metricas.como_dict())
     return norma.Decisor(maestro, asientos, pol), maestro, asientos
 
 
@@ -100,7 +117,8 @@ def procesa(
     lote: int,
     traza_hash: bool = False,
 ) -> list[dict]:
-    decisor, maestro, asientos = construye_decisor(xlsx, config, snapshot, erp_url)
+    metricas_erp: dict = {}
+    decisor, maestro, asientos = construye_decisor(xlsx, config, snapshot, erp_url, metricas_erp)
     # Orden explicito por nombre y no `sorted(...)` sobre `Path`: `PurePath`
     # pliega mayusculas en Windows y no en POSIX, lo que reordenaba la entrega
     # segun el sistema. Ver `emit.clave_orden`.
@@ -128,8 +146,11 @@ def procesa(
     traza: list[dict] = []
     contador: collections.Counter = collections.Counter()
     escalones: collections.Counter = collections.Counter()
+    latencias_decision: list[float] = []
     for doc in docs:
+        inicio_decision = time.perf_counter()
         dec = decisor.decide(doc.lectura)
+        latencias_decision.append(time.perf_counter() - inicio_decision)
         # La entrega lleva solo file_id + result; los motivos y los hechos van
         # a la traza (abajo), que es donde se explica la decision.
         filas.append(emit.linea(doc.lectura.file_id, dec.resultado))
@@ -168,6 +189,9 @@ def procesa(
         registro.anota(
             trace.TIPO_FIN, resultados=dict(contador), escalones=dict(escalones),
             segundos=round(time.monotonic() - t0, 3), sello_previo=registro.sello(),
+            erp=metricas_erp or None,
+            latencia_lectura_ms=_percentiles_ms([doc.segundos for doc in docs]),
+            latencia_decision_ms=_percentiles_ms(latencias_decision),
         )
         registro.cierra()
         problemas_traza = trace.verifica(ruta_traza)
@@ -179,10 +203,16 @@ def procesa(
     print(f"resultado  : {dict(contador)}")
     print(f"lectura    : {dict(escalones)}")
     print(f"maestro    : {len(maestro.proveedores)} proveedores, {len(maestro.pedidos)} pedidos")
-    print(f"erp        : {len(asientos)} asientos")
+    print(f"erp        : {len(asientos)} asientos" + (f", metricas {metricas_erp}" if metricas_erp else ""))
     repetidos = decisor.pedidos_repetidos()
     print(f"duplicados : {len(repetidos)} pedidos en mas de una factura del lote"
           + (f" ({', '.join(repetidos)})" if repetidos else ""))
+    lat_lectura = _percentiles_ms([doc.segundos for doc in docs])
+    lat_decision = _percentiles_ms(latencias_decision)
+    print(
+        f"latencia   : lectura p50={lat_lectura['p50']}ms p95={lat_lectura['p95']}ms"
+        f" | decision p50={lat_decision['p50']}ms p95={lat_decision['p95']}ms"
+    )
     print(f"salida     : {ruta}  (+ {ruta_traza.name})")
     print(f"validacion : {'OK' if not problemas else problemas}")
     if registro is not None:

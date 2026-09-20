@@ -22,6 +22,30 @@ def test_estadisticas_con_mongo_disponible(cliente_con_fakes):
     assert datos["asientos_vigentes"] == 2
     assert datos["mongo"] == {"ok": True, "error": None}
     assert datos["entrega"] == {"total": 4, "lineas_invalidas": 0, "coincide_con_traza": True}
+    # Una sola factura ESCALAR ("2026-02-01_P002.pdf") y ninguna revisada todavia.
+    assert datos["pendientes_revision"] == 1
+
+
+def test_pendientes_revision_baja_al_marcar_resuelta(cliente_con_fakes, fake_mongo):
+    file_id = "2026-02-01_P002.pdf"
+    assert cliente_con_fakes.get("/api/estadisticas").json()["pendientes_revision"] == 1
+
+    respuesta = cliente_con_fakes.put(f"/api/facturas/{file_id}/revision", json={"estado": "RESUELTA"})
+    assert respuesta.status_code == 200
+    assert respuesta.json()["estado"] == "RESUELTA"
+
+    assert cliente_con_fakes.get("/api/estadisticas").json()["pendientes_revision"] == 0
+
+
+def test_pendientes_revision_null_si_mongo_cae(settings, fake_ocr):
+    app = create_app(settings)
+    app.dependency_overrides[get_mongo] = lambda: FakeMongo(error="no hay conexion")
+    app.dependency_overrides[get_ocr] = lambda: fake_ocr
+    with TestClient(app) as cliente:
+        datos = cliente.get("/api/estadisticas").json()
+    app.dependency_overrides.clear()
+
+    assert datos["pendientes_revision"] is None
 
 
 def test_estadisticas_sobreviven_a_mongo_caido(settings, fake_ocr):

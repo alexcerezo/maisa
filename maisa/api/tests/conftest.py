@@ -293,6 +293,7 @@ class FakeMongo:
         self,
         asientos: list[dict] | None = None,
         snapshots: list[dict] | None = None,
+        revisiones: dict[str, dict] | None = None,
         *,
         error: str | None = None,
     ) -> None:
@@ -300,6 +301,7 @@ class FakeMongo:
         self._error = error
         self.asientos = asientos if asientos is not None else ASIENTOS
         self.snapshots = snapshots if snapshots is not None else SNAPSHOTS
+        self.revisiones: dict[str, dict] = revisiones if revisiones is not None else {}
 
     def _comprobar(self) -> None:
         if self._error:
@@ -344,6 +346,23 @@ class FakeMongo:
     async def contar_asientos_vigentes(self) -> int:
         self._comprobar()
         return sum(1 for fila in self.asientos if fila.get("vigente"))
+
+    async def listar_revisiones(self, file_ids: list[str]) -> dict[str, dict]:
+        self._comprobar()
+        return {file_id: self.revisiones[file_id] for file_id in file_ids if file_id in self.revisiones}
+
+    async def obtener_revision(self, file_id: str) -> dict | None:
+        self._comprobar()
+        return self.revisiones.get(file_id)
+
+    async def marcar_revision(
+        self, file_id: str, *, estado: str, revisor: str | None = None, comentario: str | None = None
+    ) -> dict:
+        self._comprobar()
+        doc = {"_id": file_id, "estado": estado, "revisor": revisor, "comentario": comentario,
+               "actualizado_en": "2026-01-01T00:00:00"}
+        self.revisiones[file_id] = doc
+        return doc
 
 
 class FakeOcr:
